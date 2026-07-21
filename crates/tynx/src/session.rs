@@ -2,10 +2,11 @@
 
 use std::path::Path;
 
+use burn::tensor::Device;
 use onnx_ir::OnnxGraphBuilder;
 use onnx_ir::ir::{Argument, OnnxGraph};
 
-use crate::error::Result;
+use crate::{Env, Result, TynxError, execute};
 
 /// A parsed ONNX model.
 #[derive(Debug, Clone)]
@@ -56,11 +57,44 @@ impl Session {
     pub fn outputs(&self) -> &[Argument] {
         &self.graph.outputs
     }
+
+    /// Run inference and return the graph outputs by name.
+    pub fn run(&self, device: &Device, mut env: Env) -> Result<Env> {
+        for node in &self.graph.nodes {
+            let values = execute(node, &env, device)?;
+            if values.len() != node.outputs().len() {
+                return Err(TynxError::Shape(format!(
+                    "node '{}' returned {} values for {} outputs",
+                    node.name(),
+                    values.len(),
+                    node.outputs().len()
+                )));
+            }
+
+            for (output, value) in node.outputs().iter().zip(values) {
+                env.insert(output.name.clone(), value);
+            }
+        }
+
+        self.graph
+            .outputs
+            .iter()
+            .map(|output| {
+                let value = env
+                    .get(&output.name)
+                    .cloned()
+                    .ok_or_else(|| TynxError::MissingValue(output.name.clone()))?;
+                Ok((output.name.clone(), value))
+            })
+            .collect()
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::TynxError;
+    use onnx_ir::{DType, Node, node::identity::IdentityNodeBuilder};
+
+    use crate::{Scalar, TynxError, Value};
 
     use super::*;
 
@@ -69,5 +103,27 @@ mod tests {
         let error = Session::from_bytes(b"not an ONNX model").unwrap_err();
 
         assert!(matches!(error, TynxError::Parse(_)));
+    }
+
+    #[test]
+    fn runs_an_identity_graph() {
+        let identity = IdentityNodeBuilder::new("identity")
+            .input_scalar("x", DType::I64)
+            .output_scalar("y", DType::I64)
+            .build();
+        let mut graph = OnnxGraph::default();
+        graph.inputs = identity.inputs.clone();
+        graph.outputs = identity.outputs.clone();
+        graph.nodes.push(Node::Identity(identity));
+        let session = Session { graph };
+        let mut inputs = Env::new();
+        inputs.insert("x".to_string(), Value::Scalar(Scalar::I64(42)));
+
+        let outputs = session.run(&Device::default(), inputs).unwrap();
+
+        assert!(matches!(
+            outputs.get("y"),
+            Some(Value::Scalar(Scalar::I64(42)))
+        ));
     }
 }

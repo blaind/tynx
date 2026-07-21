@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 
+use burn::tensor::Device;
 use onnx_ir::ir::{Argument, Node};
 
 use crate::{Result, TynxError, Value};
@@ -10,7 +11,7 @@ use crate::{Result, TynxError, Value};
 pub type Env = HashMap<String, Value>;
 
 /// Execute one ONNX node using values from the runtime environment.
-pub fn execute(node: &Node, env: &Env) -> Result<Vec<Value>> {
+pub fn execute(node: &Node, env: &Env, _device: &Device) -> Result<Vec<Value>> {
     match node {
         Node::Identity(_) => Ok(vec![lookup(env, first_input(node)?)?.clone()]),
         _ => Err(TynxError::UnsupportedOp(format!("node '{}'", node.name()))),
@@ -46,7 +47,7 @@ mod tests {
         let mut env = Env::new();
         env.insert("x".to_string(), Value::Scalar(Scalar::I64(42)));
 
-        let outputs = execute(&node, &env).unwrap();
+        let outputs = execute(&node, &env, &Device::default()).unwrap();
 
         assert!(matches!(
             outputs.as_slice(),
@@ -63,7 +64,7 @@ mod tests {
                 .build(),
         );
 
-        let error = execute(&node, &Env::new()).unwrap_err();
+        let error = execute(&node, &Env::new(), &Device::default()).unwrap_err();
 
         assert_eq!(error, TynxError::MissingValue("missing".to_string()));
     }
