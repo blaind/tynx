@@ -233,6 +233,11 @@ impl DynTensor {
     pub fn abs(self) -> Self {
         map_float!(self, |tensor| tensor.abs())
     }
+
+    /// Negate each tensor element.
+    pub fn negated(self) -> Self {
+        map_float!(self, |tensor| tensor.neg())
+    }
 }
 
 #[cfg(test)]
