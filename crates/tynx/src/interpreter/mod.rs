@@ -19,6 +19,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
     match node {
         Node::Add(node) => binary::add(node, env, device),
         Node::Div(node) => binary::div(node, env, device),
+        Node::Exp(node) => unary::exp(node, env, device),
         Node::Identity(node) => Ok(vec![resolve::first(env, &node.name, &node.inputs, device)?]),
         Node::Mul(node) => binary::mul(node, env, device),
         Node::Relu(node) => unary::relu(node, env, device),
@@ -41,7 +42,7 @@ fn operator_kind(node: &Node) -> String {
 mod tests {
     use onnx_ir::{
         DType, Node,
-        node::{exp::ExpNodeBuilder, identity::IdentityNodeBuilder},
+        node::{identity::IdentityNodeBuilder, log::LogNodeBuilder},
     };
 
     use super::*;
@@ -68,8 +69,8 @@ mod tests {
 
     #[test]
     fn unsupported_errors_name_the_operator() {
-        let node = Node::Exp(
-            ExpNodeBuilder::new("")
+        let node = Node::Log(
+            LogNodeBuilder::new("")
                 .input_tensor("x", 1, DType::F32)
                 .output_tensor("y", 1, DType::F32)
                 .build(),
@@ -77,6 +78,6 @@ mod tests {
 
         let error = execute(&node, &Env::new(), &Device::default()).unwrap_err();
 
-        assert_eq!(error, TynxError::UnsupportedOp("Exp".to_string()));
+        assert_eq!(error, TynxError::UnsupportedOp("Log".to_string()));
     }
 }

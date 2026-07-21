@@ -41,14 +41,14 @@ pub enum DynBool {
 }
 
 macro_rules! map_float {
-    ($tensor:expr, $operation:expr) => {
+    ($tensor:expr, |$value:ident| $body:expr) => {
         match $tensor {
-            DynTensor::R1(tensor) => DynTensor::R1(($operation)(tensor)),
-            DynTensor::R2(tensor) => DynTensor::R2(($operation)(tensor)),
-            DynTensor::R3(tensor) => DynTensor::R3(($operation)(tensor)),
-            DynTensor::R4(tensor) => DynTensor::R4(($operation)(tensor)),
-            DynTensor::R5(tensor) => DynTensor::R5(($operation)(tensor)),
-            DynTensor::R6(tensor) => DynTensor::R6(($operation)(tensor)),
+            DynTensor::R1($value) => DynTensor::R1($body),
+            DynTensor::R2($value) => DynTensor::R2($body),
+            DynTensor::R3($value) => DynTensor::R3($body),
+            DynTensor::R4($value) => DynTensor::R4($body),
+            DynTensor::R5($value) => DynTensor::R5($body),
+            DynTensor::R6($value) => DynTensor::R6($body),
         }
     };
 }
@@ -201,17 +201,22 @@ impl DynTensor {
 
     /// Apply rectified linear unit element-wise.
     pub fn relu(self) -> Self {
-        map_float!(self, activation::relu)
+        map_float!(self, |tensor| activation::relu(tensor))
     }
 
     /// Apply the sigmoid function element-wise.
     pub fn sigmoid(self) -> Self {
-        map_float!(self, activation::sigmoid)
+        map_float!(self, |tensor| activation::sigmoid(tensor))
     }
 
     /// Apply the hyperbolic tangent function element-wise.
     pub fn tanh(self) -> Self {
-        map_float!(self, activation::tanh)
+        map_float!(self, |tensor| activation::tanh(tensor))
+    }
+
+    /// Apply the exponential function element-wise.
+    pub fn exp(self) -> Self {
+        map_float!(self, |tensor| tensor.exp())
     }
 }
 
