@@ -8,5 +8,15 @@ repository.workspace = true
 readme.workspace = true
 keywords = ["machine-learning", "neural-network", "onnx", "inference", "webgpu"]
 
+[dependencies]
+burn = { version = "0.21", default-features = false, features = ["std"] }
+log = "0.4"
+onnx-ir = "0.21"
+thiserror = "2"
+
+[features]
+default = ["flex"]
+flex = ["burn/flex"]
+
 [lints]
 workspace = true
