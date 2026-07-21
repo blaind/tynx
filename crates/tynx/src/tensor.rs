@@ -344,6 +344,11 @@ impl DynTensor {
         map_float!(self, |tensor| activation::elu(tensor, alpha)
             .mul_scalar(gamma))
     }
+
+    /// Apply the softsign function element-wise.
+    pub fn softsign(self) -> Self {
+        map_float!(self, |tensor| activation::softsign(tensor))
+    }
 }
 
 #[cfg(test)]

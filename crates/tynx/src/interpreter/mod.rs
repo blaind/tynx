@@ -47,6 +47,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Sin(node) => unary::sin(node, env, device),
         Node::Sinh(node) => unary::sinh(node, env, device),
         Node::Softplus(node) => unary::softplus(node, env, device),
+        Node::Softsign(node) => unary::softsign(node, env, device),
         Node::Sqrt(node) => unary::sqrt(node, env, device),
         Node::Sub(node) => binary::sub(node, env, device),
         Node::Tan(node) => unary::tan(node, env, device),
@@ -67,7 +68,10 @@ fn operator_kind(node: &Node) -> String {
 mod tests {
     use onnx_ir::{
         DType, Node,
-        node::{identity::IdentityNodeBuilder, softsign::SoftsignNodeBuilder},
+        node::{
+            hard_sigmoid::{HardSigmoidConfig, HardSigmoidNodeBuilder},
+            identity::IdentityNodeBuilder,
+        },
     };
 
     use super::*;
@@ -94,15 +98,16 @@ mod tests {
 
     #[test]
     fn unsupported_errors_name_the_operator() {
-        let node = Node::Softsign(
-            SoftsignNodeBuilder::new("")
+        let node = Node::HardSigmoid(
+            HardSigmoidNodeBuilder::new("")
                 .input_tensor("x", 1, DType::F32)
                 .output_tensor("y", 1, DType::F32)
+                .config(HardSigmoidConfig::new(0.2, 0.5))
                 .build(),
         );
 
         let error = execute(&node, &Env::new(), &Device::default()).unwrap_err();
 
-        assert_eq!(error, TynxError::UnsupportedOp("Softsign".to_string()));
+        assert_eq!(error, TynxError::UnsupportedOp("HardSigmoid".to_string()));
     }
 }
