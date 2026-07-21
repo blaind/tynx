@@ -238,6 +238,11 @@ impl DynTensor {
     pub fn negated(self) -> Self {
         map_float!(self, |tensor| tensor.neg())
     }
+
+    /// Apply the sine function element-wise.
+    pub fn sin(self) -> Self {
+        map_float!(self, |tensor| tensor.sin())
+    }
 }
 
 #[cfg(test)]
