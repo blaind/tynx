@@ -8,7 +8,7 @@ import tynx
 
 def test_module_metadata() -> None:
     assert tynx.__version__
-    assert tynx.Session
+    assert callable(tynx.Session)
 
 
 def test_missing_model_raises_os_error(tmp_path: Path) -> None:
