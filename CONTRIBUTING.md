@@ -23,8 +23,9 @@ cd crates/tynx-python
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install "maturin>=1.9,<2"
-maturin develop --locked --group test
+maturin develop --locked --group test,typecheck
 pytest -n auto --maxprocesses 4
+python -m mypy.stubtest --ignore-disjoint-bases tynx
 ```
 
 Run the Python linters without building the extension:
@@ -35,4 +36,10 @@ python -m pip install --group lint
 ruff check python tests
 ruff format --check python tests
 mypy
+```
+
+Build the Rust API documentation with the same warning policy as CI:
+
+```sh
+RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --all-features --no-deps
 ```

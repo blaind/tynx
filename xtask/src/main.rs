@@ -76,6 +76,7 @@ fn run() -> Result<(), String> {
         .current_dir(&root)
         .args([
             "test",
+            "--locked",
             "-p",
             "tynx",
             "--test",

@@ -4,12 +4,17 @@ on:
   push:
   pull_request:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
 jobs:
   conformance:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - name: Read corpus revision
@@ -34,7 +39,7 @@ jobs:
         with:
           shared-key: conformance
       - name: Run ONNX conformance tests
-        run: cargo xtask conformance
+        run: cargo run --locked --package xtask -- conformance
       - name: Add conformance to job summary
         if: always() && hashFiles('target/conformance-report.json') != ''
         run: |
@@ -50,6 +55,7 @@ jobs:
 
   coverage:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       RUST_COVERAGE_THRESHOLD: 65
     steps:
@@ -58,13 +64,13 @@ jobs:
       - uses: taiki-e/install-action@cargo-llvm-cov
       - uses: Swatinem/rust-cache@v2
       - name: Run coverage tests
-        run: cargo llvm-cov --workspace --all-features --no-report
+        run: cargo llvm-cov --locked --workspace --all-features --no-report
       - name: Generate LCOV report
-        run: cargo llvm-cov report --lcov --output-path lcov.info
+        run: cargo llvm-cov report --locked --lcov --output-path lcov.info
       - name: Check coverage threshold
         run: |
           set -o pipefail
-          cargo llvm-cov report --fail-under-lines "$RUST_COVERAGE_THRESHOLD" | tee coverage-summary.txt
+          cargo llvm-cov report --locked --fail-under-lines "$RUST_COVERAGE_THRESHOLD" | tee coverage-summary.txt
       - name: Add coverage to job summary
         if: always()
         run: |
@@ -84,6 +90,7 @@ jobs:
 
   deny:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: EmbarkStudios/cargo-deny-action@v2
@@ -92,6 +99,7 @@ jobs:
 
   python:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
@@ -111,16 +119,23 @@ jobs:
         env:
           VIRTUAL_ENV: ${{ github.workspace }}/.venv
         run: |
-          "$VIRTUAL_ENV/bin/maturin" develop --locked --group test
+          "$VIRTUAL_ENV/bin/maturin" develop --locked --group test,typecheck
       - name: Run Python tests
         working-directory: crates/tynx-python
         env:
           VIRTUAL_ENV: ${{ github.workspace }}/.venv
         run: |
           "$VIRTUAL_ENV/bin/python" -m pytest -n auto --maxprocesses 4
+      - name: Check Python stubs
+        working-directory: crates/tynx-python
+        env:
+          VIRTUAL_ENV: ${{ github.workspace }}/.venv
+        run: |
+          "$VIRTUAL_ENV/bin/python" -m mypy.stubtest --ignore-disjoint-bases tynx
 
   python-lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
@@ -151,6 +166,7 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -158,5 +174,8 @@ jobs:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
-      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-      - run: cargo test --workspace --all-features
+      - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --locked --workspace --all-features
+      - run: cargo doc --locked --workspace --all-features --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings

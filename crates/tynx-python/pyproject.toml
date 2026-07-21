@@ -11,9 +11,10 @@ license = "MIT OR Apache-2.0"
 
 [dependency-groups]
 test = ["pytest>=8,<9", "pytest-xdist>=3,<4"]
+typecheck = ["mypy>=1.15,<2"]
 lint = [
     { include-group = "test" },
-    "mypy>=1.15,<2",
+    { include-group = "typecheck" },
     "ruff>=0.12,<1",
 ]
 
