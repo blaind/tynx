@@ -248,6 +248,11 @@ impl DynTensor {
     pub fn cos(self) -> Self {
         map_float!(self, |tensor| tensor.cos())
     }
+
+    /// Apply the tangent function element-wise.
+    pub fn tan(self) -> Self {
+        map_float!(self, |tensor| tensor.tan())
+    }
 }
 
 #[cfg(test)]
