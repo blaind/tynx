@@ -349,6 +349,11 @@ impl DynTensor {
     pub fn softsign(self) -> Self {
         map_float!(self, |tensor| activation::softsign(tensor))
     }
+
+    /// Apply the hard sigmoid function element-wise.
+    pub fn hard_sigmoid(self, alpha: f64, beta: f64) -> Self {
+        map_float!(self, |tensor| activation::hard_sigmoid(tensor, alpha, beta))
+    }
 }
 
 #[cfg(test)]

@@ -4,10 +4,11 @@ use burn::tensor::Device;
 use onnx_ir::node::{
     abs::AbsNode, acos::AcosNode, acosh::AcoshNode, asin::AsinNode, asinh::AsinhNode,
     atan::AtanNode, atanh::AtanhNode, ceil::CeilNode, cos::CosNode, cosh::CoshNode, elu::EluNode,
-    erf::ErfNode, exp::ExpNode, floor::FloorNode, leaky_relu::LeakyReluNode, log::LogNode,
-    neg::NegNode, reciprocal::ReciprocalNode, relu::ReluNode, round::RoundNode, selu::SeluNode,
-    sigmoid::SigmoidNode, sign::SignNode, sin::SinNode, sinh::SinhNode, softplus::SoftplusNode,
-    softsign::SoftsignNode, sqrt::SqrtNode, tan::TanNode, tanh::TanhNode,
+    erf::ErfNode, exp::ExpNode, floor::FloorNode, hard_sigmoid::HardSigmoidNode,
+    leaky_relu::LeakyReluNode, log::LogNode, neg::NegNode, reciprocal::ReciprocalNode,
+    relu::ReluNode, round::RoundNode, selu::SeluNode, sigmoid::SigmoidNode, sign::SignNode,
+    sin::SinNode, sinh::SinhNode, softplus::SoftplusNode, softsign::SoftsignNode, sqrt::SqrtNode,
+    tan::TanNode, tanh::TanhNode,
 };
 
 use super::{Env, resolve};
@@ -165,6 +166,17 @@ pub(super) fn softsign(node: &SoftsignNode, env: &Env, device: &Device) -> Resul
     Ok(vec![Value::Tensor(input.softsign())])
 }
 
+pub(super) fn hard_sigmoid(
+    node: &HardSigmoidNode,
+    env: &Env,
+    device: &Device,
+) -> Result<Vec<Value>> {
+    let input = resolve::first(env, &node.name, &node.inputs, device)?.into_tensor()?;
+    Ok(vec![Value::Tensor(
+        input.hard_sigmoid(node.config.alpha, node.config.beta),
+    )])
+}
+
 #[cfg(test)]
 mod tests {
     use burn::tensor::TensorData;
@@ -185,6 +197,7 @@ mod tests {
             erf::ErfNodeBuilder,
             exp::ExpNodeBuilder,
             floor::FloorNodeBuilder,
+            hard_sigmoid::{HardSigmoidConfig, HardSigmoidNodeBuilder},
             leaky_relu::{LeakyReluConfig, LeakyReluNodeBuilder},
             log::LogNodeBuilder,
             neg::NegNodeBuilder,
@@ -1072,5 +1085,32 @@ mod tests {
         for (actual, expected) in output.into_iter().zip([-2.0 / 3.0, 0.0, 2.0 / 3.0]) {
             assert!((actual - expected).abs() < 1e-6);
         }
+    }
+
+    #[test]
+    fn applies_hard_sigmoid_with_custom_coefficients() {
+        let node = HardSigmoidNodeBuilder::new("hard_sigmoid")
+            .input_tensor("x", 1, DType::F32)
+            .output_tensor("y", 1, DType::F32)
+            .config(HardSigmoidConfig::new(0.25, 0.5))
+            .build();
+        let device = Device::default();
+        let input =
+            Value::from_tensor_data(TensorData::new(vec![-4.0_f32, 0.0, 4.0], [3]), 1, &device)
+                .unwrap();
+        let mut env = Env::new();
+        env.insert("x".to_string(), input);
+
+        let output = hard_sigmoid(&node, &env, &device)
+            .unwrap()
+            .pop()
+            .unwrap()
+            .into_tensor()
+            .unwrap()
+            .into_data()
+            .iter::<f32>()
+            .collect::<Vec<_>>();
+
+        assert_eq!(output, [0.0, 0.5, 1.0]);
     }
 }

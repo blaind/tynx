@@ -33,6 +33,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Erf(node) => unary::erf(node, env, device),
         Node::Exp(node) => unary::exp(node, env, device),
         Node::Floor(node) => unary::floor(node, env, device),
+        Node::HardSigmoid(node) => unary::hard_sigmoid(node, env, device),
         Node::Identity(node) => Ok(vec![resolve::first(env, &node.name, &node.inputs, device)?]),
         Node::LeakyRelu(node) => unary::leaky_relu(node, env, device),
         Node::Log(node) => unary::log(node, env, device),
@@ -69,8 +70,8 @@ mod tests {
     use onnx_ir::{
         DType, Node,
         node::{
-            hard_sigmoid::{HardSigmoidConfig, HardSigmoidNodeBuilder},
             identity::IdentityNodeBuilder,
+            thresholded_relu::{ThresholdedReluConfig, ThresholdedReluNodeBuilder},
         },
     };
 
@@ -98,16 +99,19 @@ mod tests {
 
     #[test]
     fn unsupported_errors_name_the_operator() {
-        let node = Node::HardSigmoid(
-            HardSigmoidNodeBuilder::new("")
+        let node = Node::ThresholdedRelu(
+            ThresholdedReluNodeBuilder::new("")
                 .input_tensor("x", 1, DType::F32)
                 .output_tensor("y", 1, DType::F32)
-                .config(HardSigmoidConfig::new(0.2, 0.5))
+                .config(ThresholdedReluConfig::new(1.0))
                 .build(),
         );
 
         let error = execute(&node, &Env::new(), &Device::default()).unwrap_err();
 
-        assert_eq!(error, TynxError::UnsupportedOp("HardSigmoid".to_string()));
+        assert_eq!(
+            error,
+            TynxError::UnsupportedOp("ThresholdedRelu".to_string())
+        );
     }
 }
