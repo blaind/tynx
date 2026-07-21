@@ -4,9 +4,9 @@ use burn::tensor::Device;
 use onnx_ir::node::{
     abs::AbsNode, acos::AcosNode, acosh::AcoshNode, asin::AsinNode, asinh::AsinhNode,
     atan::AtanNode, atanh::AtanhNode, ceil::CeilNode, cos::CosNode, cosh::CoshNode, erf::ErfNode,
-    exp::ExpNode, floor::FloorNode, log::LogNode, neg::NegNode, relu::ReluNode, round::RoundNode,
-    sigmoid::SigmoidNode, sin::SinNode, sinh::SinhNode, sqrt::SqrtNode, tan::TanNode,
-    tanh::TanhNode,
+    exp::ExpNode, floor::FloorNode, log::LogNode, neg::NegNode, reciprocal::ReciprocalNode,
+    relu::ReluNode, round::RoundNode, sigmoid::SigmoidNode, sin::SinNode, sinh::SinhNode,
+    sqrt::SqrtNode, tan::TanNode, tanh::TanhNode,
 };
 
 use super::{Env, resolve};
@@ -127,6 +127,11 @@ pub(super) fn round(node: &RoundNode, env: &Env, device: &Device) -> Result<Vec<
     Ok(vec![Value::Tensor(input.round())])
 }
 
+pub(super) fn reciprocal(node: &ReciprocalNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
+    let input = resolve::first(env, &node.name, &node.inputs, device)?.into_tensor()?;
+    Ok(vec![Value::Tensor(input.reciprocal())])
+}
+
 #[cfg(test)]
 mod tests {
     use burn::tensor::TensorData;
@@ -138,9 +143,9 @@ mod tests {
             atanh::AtanhNodeBuilder, ceil::CeilNodeBuilder, cos::CosNodeBuilder,
             cosh::CoshNodeBuilder, erf::ErfNodeBuilder, exp::ExpNodeBuilder,
             floor::FloorNodeBuilder, log::LogNodeBuilder, neg::NegNodeBuilder,
-            relu::ReluNodeBuilder, round::RoundNodeBuilder, sigmoid::SigmoidNodeBuilder,
-            sin::SinNodeBuilder, sinh::SinhNodeBuilder, sqrt::SqrtNodeBuilder, tan::TanNodeBuilder,
-            tanh::TanhNodeBuilder,
+            reciprocal::ReciprocalNodeBuilder, relu::ReluNodeBuilder, round::RoundNodeBuilder,
+            sigmoid::SigmoidNodeBuilder, sin::SinNodeBuilder, sinh::SinhNodeBuilder,
+            sqrt::SqrtNodeBuilder, tan::TanNodeBuilder, tanh::TanhNodeBuilder,
         },
     };
 
@@ -815,5 +820,31 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(output, [-2.0, -2.0, 0.0, 0.0, 2.0, 2.0]);
+    }
+
+    #[test]
+    fn takes_reciprocals() {
+        let node = ReciprocalNodeBuilder::new("reciprocal")
+            .input_tensor("x", 1, DType::F32)
+            .output_tensor("y", 1, DType::F32)
+            .build();
+        let device = Device::default();
+        let input =
+            Value::from_tensor_data(TensorData::new(vec![-2.0_f32, 0.5, 4.0], [3]), 1, &device)
+                .unwrap();
+        let mut env = Env::new();
+        env.insert("x".to_string(), input);
+
+        let output = reciprocal(&node, &env, &device)
+            .unwrap()
+            .pop()
+            .unwrap()
+            .into_tensor()
+            .unwrap()
+            .into_data()
+            .iter::<f32>()
+            .collect::<Vec<_>>();
+
+        assert_eq!(output, [-0.5, 2.0, 0.25]);
     }
 }

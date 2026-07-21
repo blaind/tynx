@@ -313,6 +313,11 @@ impl DynTensor {
     pub fn round(self) -> Self {
         map_float!(self, |tensor| tensor.round())
     }
+
+    /// Replace each element with its multiplicative inverse.
+    pub fn reciprocal(self) -> Self {
+        map_float!(self, |tensor| tensor.recip())
+    }
 }
 
 #[cfg(test)]
