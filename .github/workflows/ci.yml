@@ -90,6 +90,35 @@ jobs:
         with:
           rust-version: stable
 
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: python
+      - name: Create Python environment
+        run: python -m venv .venv
+      - name: Install Maturin
+        run: |
+          .venv/bin/python -m pip install "maturin>=1.9,<2"
+      - name: Build Python bindings
+        working-directory: crates/tynx-python
+        env:
+          VIRTUAL_ENV: ${{ github.workspace }}/.venv
+        run: |
+          "$VIRTUAL_ENV/bin/maturin" develop --locked --group test
+      - name: Run Python tests
+        working-directory: crates/tynx-python
+        env:
+          VIRTUAL_ENV: ${{ github.workspace }}/.venv
+        run: |
+          "$VIRTUAL_ENV/bin/python" -m pytest -n auto --maxprocesses 4
+
   test:
     runs-on: ubuntu-latest
     steps:
