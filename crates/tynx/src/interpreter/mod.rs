@@ -43,6 +43,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Mish(node) => unary::mish(node, env, device),
         Node::Mul(node) => binary::mul(node, env, device),
         Node::Neg(node) => unary::neg(node, env, device),
+        Node::PRelu(node) => binary::prelu(node, env, device),
         Node::Reciprocal(node) => unary::reciprocal(node, env, device),
         Node::Relu(node) => unary::relu(node, env, device),
         Node::Round(node) => unary::round(node, env, device),
@@ -74,7 +75,10 @@ fn operator_kind(node: &Node) -> String {
 mod tests {
     use onnx_ir::{
         DType, Node,
-        node::{identity::IdentityNodeBuilder, prelu::PReluNodeBuilder},
+        node::{
+            clip::{ClipConfig, ClipNodeBuilder},
+            identity::IdentityNodeBuilder,
+        },
     };
 
     use super::*;
@@ -101,16 +105,19 @@ mod tests {
 
     #[test]
     fn unsupported_errors_name_the_operator() {
-        let node = Node::PRelu(
-            PReluNodeBuilder::new("")
+        let node = Node::Clip(
+            ClipNodeBuilder::new("")
                 .input_tensor("x", 1, DType::F32)
-                .input_tensor("slope", 1, DType::F32)
                 .output_tensor("y", 1, DType::F32)
+                .config(ClipConfig {
+                    min: None,
+                    max: None,
+                })
                 .build(),
         );
 
         let error = execute(&node, &Env::new(), &Device::default()).unwrap_err();
 
-        assert_eq!(error, TynxError::UnsupportedOp("PRelu".to_string()));
+        assert_eq!(error, TynxError::UnsupportedOp("Clip".to_string()));
     }
 }

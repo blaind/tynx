@@ -1,7 +1,10 @@
 //! Element-wise binary operators.
 
 use burn::tensor::Device;
-use onnx_ir::node::arithmetic::{AddNode, DivNode, MulNode, SubNode};
+use onnx_ir::node::{
+    arithmetic::{AddNode, DivNode, MulNode, SubNode},
+    prelu::PReluNode,
+};
 
 use super::{Env, resolve};
 use crate::{Result, Value};
@@ -34,12 +37,22 @@ pub(super) fn div(node: &DivNode, env: &Env, device: &Device) -> Result<Vec<Valu
     Ok(vec![Value::Tensor(left.div_broadcast(right)?)])
 }
 
+pub(super) fn prelu(node: &PReluNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
+    let input = resolve::at(env, &node.name, &node.inputs, 0, device)?.into_tensor()?;
+    let slope = resolve::at(env, &node.name, &node.inputs, 1, device)?.into_tensor()?;
+
+    Ok(vec![Value::Tensor(input.prelu(slope)?)])
+}
+
 #[cfg(test)]
 mod tests {
     use burn::tensor::TensorData;
     use onnx_ir::{
         DType,
-        node::arithmetic::{AddNodeBuilder, DivNodeBuilder, MulNodeBuilder, SubNodeBuilder},
+        node::{
+            arithmetic::{AddNodeBuilder, DivNodeBuilder, MulNodeBuilder, SubNodeBuilder},
+            prelu::PReluNodeBuilder,
+        },
     };
 
     use super::*;
@@ -189,5 +202,41 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(output, [1.0, 2.0, 3.0, 4.0]);
+    }
+
+    #[test]
+    fn applies_prelu_with_unidirectional_broadcasting() {
+        let node = PReluNodeBuilder::new("prelu")
+            .input_tensor("x", 2, DType::F32)
+            .input_tensor("slope", 1, DType::F32)
+            .output_tensor("y", 2, DType::F32)
+            .build();
+        let device = Device::default();
+        let mut env = Env::new();
+        env.insert(
+            "x".to_string(),
+            Value::from_tensor_data(
+                TensorData::new(vec![-1.0_f32, -2.0, -3.0, -4.0], [2, 2]),
+                2,
+                &device,
+            )
+            .unwrap(),
+        );
+        env.insert(
+            "slope".to_string(),
+            Value::from_tensor_data(TensorData::new(vec![0.1_f32, 0.2], [2]), 1, &device).unwrap(),
+        );
+
+        let output = prelu(&node, &env, &device)
+            .unwrap()
+            .pop()
+            .unwrap()
+            .into_tensor()
+            .unwrap()
+            .into_data()
+            .iter::<f32>()
+            .collect::<Vec<_>>();
+
+        assert_eq!(output, [-0.1, -0.4, -0.3, -0.8]);
     }
 }

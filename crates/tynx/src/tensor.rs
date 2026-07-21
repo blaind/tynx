@@ -194,6 +194,25 @@ impl DynTensor {
         Ok(zip_float!(left, right, |left, right| left.div(right)))
     }
 
+    /// Apply parametric rectified linear unit with a broadcastable slope tensor.
+    pub fn prelu(self, slope: Self) -> Result<Self> {
+        let input_rank = self.rank();
+        if slope.rank() > input_rank {
+            return Err(TynxError::Shape(format!(
+                "PRelu slope rank {} exceeds input rank {input_rank}",
+                slope.rank()
+            )));
+        }
+        let slope = slope.to_rank(input_rank)?;
+
+        Ok(zip_float!(self, slope, |input, slope| {
+            input
+                .clone()
+                .clamp_min(0.0)
+                .add(slope.mul(input.clamp_max(0.0)))
+        }))
+    }
+
     fn broadcast_pair(left: Self, right: Self) -> Result<(Self, Self)> {
         let rank = left.rank().max(right.rank());
         Ok((left.to_rank(rank)?, right.to_rank(rank)?))
