@@ -338,6 +338,12 @@ impl DynTensor {
     pub fn leaky_relu(self, alpha: f64) -> Self {
         map_float!(self, |tensor| activation::leaky_relu(tensor, alpha))
     }
+
+    /// Apply the scaled exponential linear unit function element-wise.
+    pub fn selu(self, alpha: f64, gamma: f64) -> Self {
+        map_float!(self, |tensor| activation::elu(tensor, alpha)
+            .mul_scalar(gamma))
+    }
 }
 
 #[cfg(test)]

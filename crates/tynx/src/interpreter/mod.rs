@@ -41,6 +41,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Reciprocal(node) => unary::reciprocal(node, env, device),
         Node::Relu(node) => unary::relu(node, env, device),
         Node::Round(node) => unary::round(node, env, device),
+        Node::Selu(node) => unary::selu(node, env, device),
         Node::Sigmoid(node) => unary::sigmoid(node, env, device),
         Node::Sign(node) => unary::sign(node, env, device),
         Node::Sin(node) => unary::sin(node, env, device),
@@ -66,10 +67,7 @@ fn operator_kind(node: &Node) -> String {
 mod tests {
     use onnx_ir::{
         DType, Node,
-        node::{
-            identity::IdentityNodeBuilder,
-            selu::{SeluConfig, SeluNodeBuilder},
-        },
+        node::{identity::IdentityNodeBuilder, softsign::SoftsignNodeBuilder},
     };
 
     use super::*;
@@ -96,16 +94,15 @@ mod tests {
 
     #[test]
     fn unsupported_errors_name_the_operator() {
-        let node = Node::Selu(
-            SeluNodeBuilder::new("")
+        let node = Node::Softsign(
+            SoftsignNodeBuilder::new("")
                 .input_tensor("x", 1, DType::F32)
                 .output_tensor("y", 1, DType::F32)
-                .config(SeluConfig::new(1.673_263_2, 1.050_701))
                 .build(),
         );
 
         let error = execute(&node, &Env::new(), &Device::default()).unwrap_err();
 
-        assert_eq!(error, TynxError::UnsupportedOp("Selu".to_string()));
+        assert_eq!(error, TynxError::UnsupportedOp("Softsign".to_string()));
     }
 }
