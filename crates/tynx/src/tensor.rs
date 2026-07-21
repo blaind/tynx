@@ -318,6 +318,11 @@ impl DynTensor {
     pub fn reciprocal(self) -> Self {
         map_float!(self, |tensor| tensor.recip())
     }
+
+    /// Return the sign of each tensor element.
+    pub fn sign(self) -> Self {
+        map_float!(self, |tensor| tensor.sign())
+    }
 }
 
 #[cfg(test)]

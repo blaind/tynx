@@ -1431,7 +1431,7 @@
     "test_shrink_soft_expanded_ver18": "runtime_unsupported",
     "test_sigmoid": "pass",
     "test_sigmoid_example": "pass",
-    "test_sign": "runtime_unsupported",
+    "test_sign": "pass",
     "test_simple_rnn_batchwise": "runtime_unsupported",
     "test_simple_rnn_defaults": "runtime_unsupported",
     "test_simple_rnn_with_initial_bias": "runtime_unsupported",

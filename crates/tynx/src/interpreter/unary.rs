@@ -5,8 +5,8 @@ use onnx_ir::node::{
     abs::AbsNode, acos::AcosNode, acosh::AcoshNode, asin::AsinNode, asinh::AsinhNode,
     atan::AtanNode, atanh::AtanhNode, ceil::CeilNode, cos::CosNode, cosh::CoshNode, erf::ErfNode,
     exp::ExpNode, floor::FloorNode, log::LogNode, neg::NegNode, reciprocal::ReciprocalNode,
-    relu::ReluNode, round::RoundNode, sigmoid::SigmoidNode, sin::SinNode, sinh::SinhNode,
-    sqrt::SqrtNode, tan::TanNode, tanh::TanhNode,
+    relu::ReluNode, round::RoundNode, sigmoid::SigmoidNode, sign::SignNode, sin::SinNode,
+    sinh::SinhNode, sqrt::SqrtNode, tan::TanNode, tanh::TanhNode,
 };
 
 use super::{Env, resolve};
@@ -132,6 +132,11 @@ pub(super) fn reciprocal(node: &ReciprocalNode, env: &Env, device: &Device) -> R
     Ok(vec![Value::Tensor(input.reciprocal())])
 }
 
+pub(super) fn sign(node: &SignNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
+    let input = resolve::first(env, &node.name, &node.inputs, device)?.into_tensor()?;
+    Ok(vec![Value::Tensor(input.sign())])
+}
+
 #[cfg(test)]
 mod tests {
     use burn::tensor::TensorData;
@@ -144,8 +149,9 @@ mod tests {
             cosh::CoshNodeBuilder, erf::ErfNodeBuilder, exp::ExpNodeBuilder,
             floor::FloorNodeBuilder, log::LogNodeBuilder, neg::NegNodeBuilder,
             reciprocal::ReciprocalNodeBuilder, relu::ReluNodeBuilder, round::RoundNodeBuilder,
-            sigmoid::SigmoidNodeBuilder, sin::SinNodeBuilder, sinh::SinhNodeBuilder,
-            sqrt::SqrtNodeBuilder, tan::TanNodeBuilder, tanh::TanhNodeBuilder,
+            sigmoid::SigmoidNodeBuilder, sign::SignNodeBuilder, sin::SinNodeBuilder,
+            sinh::SinhNodeBuilder, sqrt::SqrtNodeBuilder, tan::TanNodeBuilder,
+            tanh::TanhNodeBuilder,
         },
     };
 
@@ -846,5 +852,31 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(output, [-0.5, 2.0, 0.25]);
+    }
+
+    #[test]
+    fn takes_signs() {
+        let node = SignNodeBuilder::new("sign")
+            .input_tensor("x", 1, DType::F32)
+            .output_tensor("y", 1, DType::F32)
+            .build();
+        let device = Device::default();
+        let input =
+            Value::from_tensor_data(TensorData::new(vec![-3.0_f32, 0.0, 4.0], [3]), 1, &device)
+                .unwrap();
+        let mut env = Env::new();
+        env.insert("x".to_string(), input);
+
+        let output = sign(&node, &env, &device)
+            .unwrap()
+            .pop()
+            .unwrap()
+            .into_tensor()
+            .unwrap()
+            .into_data()
+            .iter::<f32>()
+            .collect::<Vec<_>>();
+
+        assert_eq!(output, [-1.0, 0.0, 1.0]);
     }
 }

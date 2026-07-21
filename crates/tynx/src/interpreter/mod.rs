@@ -40,6 +40,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Relu(node) => unary::relu(node, env, device),
         Node::Round(node) => unary::round(node, env, device),
         Node::Sigmoid(node) => unary::sigmoid(node, env, device),
+        Node::Sign(node) => unary::sign(node, env, device),
         Node::Sin(node) => unary::sin(node, env, device),
         Node::Sinh(node) => unary::sinh(node, env, device),
         Node::Sqrt(node) => unary::sqrt(node, env, device),
@@ -62,7 +63,7 @@ fn operator_kind(node: &Node) -> String {
 mod tests {
     use onnx_ir::{
         DType, Node,
-        node::{identity::IdentityNodeBuilder, sign::SignNodeBuilder},
+        node::{identity::IdentityNodeBuilder, softplus::SoftplusNodeBuilder},
     };
 
     use super::*;
@@ -89,8 +90,8 @@ mod tests {
 
     #[test]
     fn unsupported_errors_name_the_operator() {
-        let node = Node::Sign(
-            SignNodeBuilder::new("")
+        let node = Node::Softplus(
+            SoftplusNodeBuilder::new("")
                 .input_tensor("x", 1, DType::F32)
                 .output_tensor("y", 1, DType::F32)
                 .build(),
@@ -98,6 +99,6 @@ mod tests {
 
         let error = execute(&node, &Env::new(), &Device::default()).unwrap_err();
 
-        assert_eq!(error, TynxError::UnsupportedOp("Sign".to_string()));
+        assert_eq!(error, TynxError::UnsupportedOp("Softplus".to_string()));
     }
 }
