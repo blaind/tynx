@@ -119,6 +119,39 @@ impl_metadata!(DynInt);
 impl_metadata!(DynBool);
 
 impl DynTensor {
+    /// Promote the tensor by adding leading singleton dimensions.
+    pub fn to_rank(self, target: usize) -> Result<Self> {
+        let current = self.rank();
+        if current == target {
+            return Ok(self);
+        }
+        if current > target || target > MAX_RANK {
+            return Err(TynxError::RankPromote {
+                from: current,
+                to: target,
+            });
+        }
+
+        Ok(match (self, target) {
+            (Self::R1(tensor), 2) => Self::R2(tensor.unsqueeze()),
+            (Self::R1(tensor), 3) => Self::R3(tensor.unsqueeze()),
+            (Self::R1(tensor), 4) => Self::R4(tensor.unsqueeze()),
+            (Self::R1(tensor), 5) => Self::R5(tensor.unsqueeze()),
+            (Self::R1(tensor), 6) => Self::R6(tensor.unsqueeze()),
+            (Self::R2(tensor), 3) => Self::R3(tensor.unsqueeze()),
+            (Self::R2(tensor), 4) => Self::R4(tensor.unsqueeze()),
+            (Self::R2(tensor), 5) => Self::R5(tensor.unsqueeze()),
+            (Self::R2(tensor), 6) => Self::R6(tensor.unsqueeze()),
+            (Self::R3(tensor), 4) => Self::R4(tensor.unsqueeze()),
+            (Self::R3(tensor), 5) => Self::R5(tensor.unsqueeze()),
+            (Self::R3(tensor), 6) => Self::R6(tensor.unsqueeze()),
+            (Self::R4(tensor), 5) => Self::R5(tensor.unsqueeze()),
+            (Self::R4(tensor), 6) => Self::R6(tensor.unsqueeze()),
+            (Self::R5(tensor), 6) => Self::R6(tensor.unsqueeze()),
+            (_, target) => return Err(TynxError::RankOverflow(target)),
+        })
+    }
+
     /// Apply rectified linear unit element-wise.
     pub fn relu(self) -> Self {
         map_float!(self, activation::relu)
@@ -143,5 +176,23 @@ mod tests {
 
         assert_eq!(tensor.rank(), 2);
         assert_eq!(tensor.dims(), vec![2, 3]);
+    }
+
+    #[test]
+    fn promotes_rank_with_leading_singleton_dimensions() {
+        let tensor = DynTensor::R1(Tensor::<1>::zeros([3], &Device::default()));
+
+        let promoted = tensor.to_rank(3).unwrap();
+
+        assert_eq!(promoted.dims(), vec![1, 1, 3]);
+    }
+
+    #[test]
+    fn rejects_rank_demotions() {
+        let tensor = DynTensor::R2(Tensor::<2>::zeros([2, 3], &Device::default()));
+
+        let error = tensor.to_rank(1).unwrap_err();
+
+        assert_eq!(error, TynxError::RankPromote { from: 2, to: 1 });
     }
 }
