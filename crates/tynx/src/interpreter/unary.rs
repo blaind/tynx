@@ -2,9 +2,9 @@
 
 use burn::tensor::Device;
 use onnx_ir::node::{
-    abs::AbsNode, cos::CosNode, cosh::CoshNode, exp::ExpNode, log::LogNode, neg::NegNode,
-    relu::ReluNode, sigmoid::SigmoidNode, sin::SinNode, sinh::SinhNode, sqrt::SqrtNode,
-    tan::TanNode, tanh::TanhNode,
+    abs::AbsNode, acos::AcosNode, cos::CosNode, cosh::CoshNode, exp::ExpNode, log::LogNode,
+    neg::NegNode, relu::ReluNode, sigmoid::SigmoidNode, sin::SinNode, sinh::SinhNode,
+    sqrt::SqrtNode, tan::TanNode, tanh::TanhNode,
 };
 
 use super::{Env, resolve};
@@ -75,14 +75,19 @@ pub(super) fn sinh(node: &SinhNode, env: &Env, device: &Device) -> Result<Vec<Va
     Ok(vec![Value::Tensor(input.sinh())])
 }
 
+pub(super) fn acos(node: &AcosNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
+    let input = resolve::first(env, &node.name, &node.inputs, device)?.into_tensor()?;
+    Ok(vec![Value::Tensor(input.acos())])
+}
+
 #[cfg(test)]
 mod tests {
     use burn::tensor::TensorData;
     use onnx_ir::{
         DType,
         node::{
-            abs::AbsNodeBuilder, cos::CosNodeBuilder, cosh::CoshNodeBuilder, exp::ExpNodeBuilder,
-            log::LogNodeBuilder, neg::NegNodeBuilder, relu::ReluNodeBuilder,
+            abs::AbsNodeBuilder, acos::AcosNodeBuilder, cos::CosNodeBuilder, cosh::CoshNodeBuilder,
+            exp::ExpNodeBuilder, log::LogNodeBuilder, neg::NegNodeBuilder, relu::ReluNodeBuilder,
             sigmoid::SigmoidNodeBuilder, sin::SinNodeBuilder, sinh::SinhNodeBuilder,
             sqrt::SqrtNodeBuilder, tan::TanNodeBuilder, tanh::TanhNodeBuilder,
         },
@@ -469,6 +474,38 @@ mod tests {
             .collect::<Vec<_>>();
 
         for (actual, expected) in output.into_iter().zip([0.0, 1.175_201_2, -1.175_201_2]) {
+            assert!((actual - expected).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn takes_inverse_cosines() {
+        let node = AcosNodeBuilder::new("acos")
+            .input_tensor("x", 1, DType::F32)
+            .output_tensor("y", 1, DType::F32)
+            .build();
+        let device = Device::default();
+        let input =
+            Value::from_tensor_data(TensorData::new(vec![1.0_f32, 0.0, -1.0], [3]), 1, &device)
+                .unwrap();
+        let mut env = Env::new();
+        env.insert("x".to_string(), input);
+
+        let output = acos(&node, &env, &device)
+            .unwrap()
+            .pop()
+            .unwrap()
+            .into_tensor()
+            .unwrap()
+            .into_data()
+            .iter::<f32>()
+            .collect::<Vec<_>>();
+
+        for (actual, expected) in
+            output
+                .into_iter()
+                .zip([0.0, std::f32::consts::FRAC_PI_2, std::f32::consts::PI])
+        {
             assert!((actual - expected).abs() < 1e-6);
         }
     }

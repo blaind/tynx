@@ -263,6 +263,11 @@ impl DynTensor {
     pub fn sinh(self) -> Self {
         map_float!(self, |tensor| tensor.sinh())
     }
+
+    /// Apply the inverse cosine function element-wise.
+    pub fn acos(self) -> Self {
+        map_float!(self, |tensor| tensor.acos())
+    }
 }
 
 #[cfg(test)]

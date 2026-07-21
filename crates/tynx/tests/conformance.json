@@ -7,8 +7,8 @@
   },
   "cases": {
     "test_abs": "pass",
-    "test_acos": "runtime_unsupported",
-    "test_acos_example": "runtime_unsupported",
+    "test_acos": "pass",
+    "test_acos_example": "pass",
     "test_acosh": "runtime_unsupported",
     "test_acosh_example": "runtime_unsupported",
     "test_adagrad": "parse_unsupported",
