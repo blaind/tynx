@@ -5,6 +5,7 @@ mod clip;
 mod pow;
 mod resolve;
 mod unary;
+mod variadic;
 
 use std::collections::HashMap;
 
@@ -43,6 +44,9 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Identity(node) => Ok(vec![resolve::first(env, &node.name, &node.inputs, device)?]),
         Node::LeakyRelu(node) => unary::leaky_relu(node, env, device),
         Node::Log(node) => unary::log(node, env, device),
+        Node::Max(node) => variadic::max(node, env, device),
+        Node::Mean(node) => variadic::mean(node, env, device),
+        Node::Min(node) => variadic::min(node, env, device),
         Node::Mish(node) => unary::mish(node, env, device),
         Node::Mul(node) => binary::mul(node, env, device),
         Node::Neg(node) => unary::neg(node, env, device),
@@ -60,6 +64,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Softsign(node) => unary::softsign(node, env, device),
         Node::Sqrt(node) => unary::sqrt(node, env, device),
         Node::Sub(node) => binary::sub(node, env, device),
+        Node::Sum(node) => variadic::sum(node, env, device),
         Node::Tan(node) => unary::tan(node, env, device),
         Node::Tanh(node) => unary::tanh(node, env, device),
         Node::ThresholdedRelu(node) => unary::thresholded_relu(node, env, device),

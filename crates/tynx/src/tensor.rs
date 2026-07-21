@@ -221,6 +221,23 @@ impl DynTensor {
         Ok(zip_float!(left, right, |left, right| left.div(right)))
     }
 
+    /// Take the element-wise maximum with multidirectional broadcasting.
+    pub fn max_broadcast(self, other: Self) -> Result<Self> {
+        let (left, right) = Self::broadcast_pair(self, other)?;
+        Ok(zip_float!(left, right, |left, right| left.max_pair(right)))
+    }
+
+    /// Take the element-wise minimum with multidirectional broadcasting.
+    pub fn min_broadcast(self, other: Self) -> Result<Self> {
+        let (left, right) = Self::broadcast_pair(self, other)?;
+        Ok(zip_float!(left, right, |left, right| left.min_pair(right)))
+    }
+
+    /// Divide every element by a scalar.
+    pub fn div_scalar(self, divisor: f64) -> Self {
+        map_float!(self, |tensor| tensor.div_scalar(divisor))
+    }
+
     /// Apply parametric rectified linear unit with a broadcastable slope tensor.
     pub fn prelu(self, slope: Self) -> Result<Self> {
         let input_rank = self.rank();
@@ -560,6 +577,29 @@ impl DynInt {
     /// Raise every element to an integer scalar exponent.
     pub fn powi_scalar(self, exponent: i64) -> Self {
         map_int!(self, |tensor| tensor.powi_scalar(exponent))
+    }
+
+    /// Add two integer tensors with multidirectional broadcasting.
+    pub fn add_broadcast(self, other: Self) -> Result<Self> {
+        let (left, right) = Self::broadcast_pair(self, other)?;
+        Ok(zip_int!(left, right, |left, right| left.add(right)))
+    }
+
+    /// Take the element-wise maximum with multidirectional broadcasting.
+    pub fn max_broadcast(self, other: Self) -> Result<Self> {
+        let (left, right) = Self::broadcast_pair(self, other)?;
+        Ok(zip_int!(left, right, |left, right| left.max_pair(right)))
+    }
+
+    /// Take the element-wise minimum with multidirectional broadcasting.
+    pub fn min_broadcast(self, other: Self) -> Result<Self> {
+        let (left, right) = Self::broadcast_pair(self, other)?;
+        Ok(zip_int!(left, right, |left, right| left.min_pair(right)))
+    }
+
+    fn broadcast_pair(left: Self, right: Self) -> Result<(Self, Self)> {
+        let rank = left.rank().max(right.rank());
+        Ok((left.to_rank(rank)?, right.to_rank(rank)?))
     }
 
     /// Clamp every element to the optional lower and upper bounds.
