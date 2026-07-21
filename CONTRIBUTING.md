@@ -26,3 +26,13 @@ python -m pip install "maturin>=1.9,<2"
 maturin develop --locked --group test
 pytest -n auto --maxprocesses 4
 ```
+
+Run the Python linters without building the extension:
+
+```sh
+python -m pip install --upgrade "pip>=25.1"
+python -m pip install --group lint
+ruff check python tests
+ruff format --check python tests
+mypy
+```

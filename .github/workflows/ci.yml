@@ -119,6 +119,36 @@ jobs:
         run: |
           "$VIRTUAL_ENV/bin/python" -m pytest -n auto --maxprocesses 4
 
+  python-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Create Python environment
+        run: python -m venv .venv
+      - name: Install Python linters
+        working-directory: crates/tynx-python
+        env:
+          VIRTUAL_ENV: ${{ github.workspace }}/.venv
+        run: |
+          "$VIRTUAL_ENV/bin/python" -m pip install --upgrade "pip>=25.1"
+          "$VIRTUAL_ENV/bin/python" -m pip install --group lint
+      - name: Ruff
+        working-directory: crates/tynx-python
+        env:
+          VIRTUAL_ENV: ${{ github.workspace }}/.venv
+        run: |
+          "$VIRTUAL_ENV/bin/ruff" check python tests
+          "$VIRTUAL_ENV/bin/ruff" format --check python tests
+      - name: Mypy
+        working-directory: crates/tynx-python
+        env:
+          VIRTUAL_ENV: ${{ github.workspace }}/.venv
+        run: |
+          "$VIRTUAL_ENV/bin/mypy"
+
   test:
     runs-on: ubuntu-latest
     steps:
