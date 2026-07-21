@@ -258,6 +258,11 @@ impl DynTensor {
     pub fn cosh(self) -> Self {
         map_float!(self, |tensor| tensor.cosh())
     }
+
+    /// Apply the hyperbolic sine function element-wise.
+    pub fn sinh(self) -> Self {
+        map_float!(self, |tensor| tensor.sinh())
+    }
 }
 
 #[cfg(test)]
