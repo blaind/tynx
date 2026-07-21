@@ -1,7 +1,7 @@
 //! Element-wise binary operators.
 
 use burn::tensor::Device;
-use onnx_ir::node::arithmetic::{AddNode, MulNode, SubNode};
+use onnx_ir::node::arithmetic::{AddNode, DivNode, MulNode, SubNode};
 
 use super::{Env, resolve};
 use crate::{Result, Value};
@@ -27,12 +27,19 @@ pub(super) fn mul(node: &MulNode, env: &Env, device: &Device) -> Result<Vec<Valu
     Ok(vec![Value::Tensor(left.mul_broadcast(right)?)])
 }
 
+pub(super) fn div(node: &DivNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
+    let left = resolve::at(env, &node.name, &node.inputs, 0, device)?.into_tensor()?;
+    let right = resolve::at(env, &node.name, &node.inputs, 1, device)?.into_tensor()?;
+
+    Ok(vec![Value::Tensor(left.div_broadcast(right)?)])
+}
+
 #[cfg(test)]
 mod tests {
     use burn::tensor::TensorData;
     use onnx_ir::{
         DType,
-        node::arithmetic::{AddNodeBuilder, MulNodeBuilder, SubNodeBuilder},
+        node::arithmetic::{AddNodeBuilder, DivNodeBuilder, MulNodeBuilder, SubNodeBuilder},
     };
 
     use super::*;
@@ -145,5 +152,42 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(output, [10.0, 40.0, 30.0, 80.0]);
+    }
+
+    #[test]
+    fn divides_in_operand_order_with_broadcasting() {
+        let node = DivNodeBuilder::new("div")
+            .input_tensor("matrix", 2, DType::F32)
+            .input_tensor("row", 1, DType::F32)
+            .output_tensor("quotient", 2, DType::F32)
+            .build();
+        let device = Device::default();
+        let mut env = Env::new();
+        env.insert(
+            "matrix".to_string(),
+            Value::from_tensor_data(
+                TensorData::new(vec![10.0_f32, 40.0, 30.0, 80.0], [2, 2]),
+                2,
+                &device,
+            )
+            .unwrap(),
+        );
+        env.insert(
+            "row".to_string(),
+            Value::from_tensor_data(TensorData::new(vec![10.0_f32, 20.0], [2]), 1, &device)
+                .unwrap(),
+        );
+
+        let output = div(&node, &env, &device)
+            .unwrap()
+            .pop()
+            .unwrap()
+            .into_tensor()
+            .unwrap()
+            .into_data()
+            .iter::<f32>()
+            .collect::<Vec<_>>();
+
+        assert_eq!(output, [1.0, 2.0, 3.0, 4.0]);
     }
 }

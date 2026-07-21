@@ -18,6 +18,7 @@ pub type Env = HashMap<String, Value>;
 pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
     match node {
         Node::Add(node) => binary::add(node, env, device),
+        Node::Div(node) => binary::div(node, env, device),
         Node::Identity(node) => Ok(vec![resolve::first(env, &node.name, &node.inputs, device)?]),
         Node::Mul(node) => binary::mul(node, env, device),
         Node::Relu(node) => unary::relu(node, env, device),
