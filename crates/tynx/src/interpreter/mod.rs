@@ -38,6 +38,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Identity(node) => Ok(vec![resolve::first(env, &node.name, &node.inputs, device)?]),
         Node::LeakyRelu(node) => unary::leaky_relu(node, env, device),
         Node::Log(node) => unary::log(node, env, device),
+        Node::Mish(node) => unary::mish(node, env, device),
         Node::Mul(node) => binary::mul(node, env, device),
         Node::Neg(node) => unary::neg(node, env, device),
         Node::Reciprocal(node) => unary::reciprocal(node, env, device),
@@ -71,7 +72,7 @@ fn operator_kind(node: &Node) -> String {
 mod tests {
     use onnx_ir::{
         DType, Node,
-        node::{identity::IdentityNodeBuilder, mish::MishNodeBuilder},
+        node::{hard_swish::HardSwishNodeBuilder, identity::IdentityNodeBuilder},
     };
 
     use super::*;
@@ -98,8 +99,8 @@ mod tests {
 
     #[test]
     fn unsupported_errors_name_the_operator() {
-        let node = Node::Mish(
-            MishNodeBuilder::new("")
+        let node = Node::HardSwish(
+            HardSwishNodeBuilder::new("")
                 .input_tensor("x", 1, DType::F32)
                 .output_tensor("y", 1, DType::F32)
                 .build(),
@@ -107,6 +108,6 @@ mod tests {
 
         let error = execute(&node, &Env::new(), &Device::default()).unwrap_err();
 
-        assert_eq!(error, TynxError::UnsupportedOp("Mish".to_string()));
+        assert_eq!(error, TynxError::UnsupportedOp("HardSwish".to_string()));
     }
 }

@@ -364,6 +364,11 @@ impl DynTensor {
     pub fn celu(self, alpha: f64) -> Self {
         map_float!(self, |tensor| activation::celu(tensor, alpha))
     }
+
+    /// Apply the Mish activation function element-wise.
+    pub fn mish(self) -> Self {
+        map_float!(self, |tensor| activation::mish(tensor))
+    }
 }
 
 #[cfg(test)]
