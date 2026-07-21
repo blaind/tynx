@@ -3,6 +3,7 @@
 mod binary;
 mod clip;
 mod comparison;
+mod logical;
 mod pow;
 mod resolve;
 mod unary;
@@ -25,6 +26,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Acos(node) => unary::acos(node, env, device),
         Node::Acosh(node) => unary::acosh(node, env, device),
         Node::Add(node) => binary::add(node, env, device),
+        Node::And(node) => logical::and(node, env, device),
         Node::Asin(node) => unary::asin(node, env, device),
         Node::Asinh(node) => unary::asinh(node, env, device),
         Node::Atan(node) => unary::atan(node, env, device),
@@ -56,6 +58,8 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Mish(node) => unary::mish(node, env, device),
         Node::Mul(node) => binary::mul(node, env, device),
         Node::Neg(node) => unary::neg(node, env, device),
+        Node::Not(node) => logical::not(node, env, device),
+        Node::Or(node) => logical::or(node, env, device),
         Node::PRelu(node) => binary::prelu(node, env, device),
         Node::Pow(node) => pow::pow(node, env, device),
         Node::Reciprocal(node) => unary::reciprocal(node, env, device),
@@ -74,6 +78,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Tan(node) => unary::tan(node, env, device),
         Node::Tanh(node) => unary::tanh(node, env, device),
         Node::ThresholdedRelu(node) => unary::thresholded_relu(node, env, device),
+        Node::Xor(node) => logical::xor(node, env, device),
         _ => Err(TynxError::UnsupportedOp(operator_kind(node))),
     }
 }

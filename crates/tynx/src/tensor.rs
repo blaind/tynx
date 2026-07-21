@@ -66,6 +66,19 @@ macro_rules! map_int {
     };
 }
 
+macro_rules! map_bool {
+    ($tensor:expr, |$value:ident| $body:expr) => {
+        match $tensor {
+            DynBool::R1($value) => DynBool::R1($body),
+            DynBool::R2($value) => DynBool::R2($body),
+            DynBool::R3($value) => DynBool::R3($body),
+            DynBool::R4($value) => DynBool::R4($body),
+            DynBool::R5($value) => DynBool::R5($body),
+            DynBool::R6($value) => DynBool::R6($body),
+        }
+    };
+}
+
 macro_rules! zip_float {
     ($left:expr, $right:expr, |$a:ident, $b:ident| $body:expr) => {
         match ($left, $right) {
@@ -117,6 +130,20 @@ macro_rules! zip_int_bool {
             (DynInt::R4($a), DynInt::R4($b)) => DynBool::R4($body),
             (DynInt::R5($a), DynInt::R5($b)) => DynBool::R5($body),
             (DynInt::R6($a), DynInt::R6($b)) => DynBool::R6($body),
+            _ => unreachable!("tensor ranks were promoted before the operation"),
+        }
+    };
+}
+
+macro_rules! zip_bool {
+    ($left:expr, $right:expr, |$a:ident, $b:ident| $body:expr) => {
+        match ($left, $right) {
+            (DynBool::R1($a), DynBool::R1($b)) => DynBool::R1($body),
+            (DynBool::R2($a), DynBool::R2($b)) => DynBool::R2($body),
+            (DynBool::R3($a), DynBool::R3($b)) => DynBool::R3($body),
+            (DynBool::R4($a), DynBool::R4($b)) => DynBool::R4($body),
+            (DynBool::R5($a), DynBool::R5($b)) => DynBool::R5($body),
+            (DynBool::R6($a), DynBool::R6($b)) => DynBool::R6($body),
             _ => unreachable!("tensor ranks were promoted before the operation"),
         }
     };
@@ -733,6 +760,69 @@ fn scalar_as_u64(value: crate::Scalar) -> u64 {
         crate::Scalar::I64(value) => value.max(0) as u64,
         crate::Scalar::U64(value) => value,
         crate::Scalar::Bool(value) => u64::from(value),
+    }
+}
+
+impl DynBool {
+    /// Promote the tensor by adding leading singleton dimensions.
+    pub fn to_rank(self, target: usize) -> Result<Self> {
+        let current = self.rank();
+        if current == target {
+            return Ok(self);
+        }
+        if current > target || target > MAX_RANK {
+            return Err(TynxError::RankPromote {
+                from: current,
+                to: target,
+            });
+        }
+
+        Ok(match (self, target) {
+            (Self::R1(tensor), 2) => Self::R2(tensor.unsqueeze()),
+            (Self::R1(tensor), 3) => Self::R3(tensor.unsqueeze()),
+            (Self::R1(tensor), 4) => Self::R4(tensor.unsqueeze()),
+            (Self::R1(tensor), 5) => Self::R5(tensor.unsqueeze()),
+            (Self::R1(tensor), 6) => Self::R6(tensor.unsqueeze()),
+            (Self::R2(tensor), 3) => Self::R3(tensor.unsqueeze()),
+            (Self::R2(tensor), 4) => Self::R4(tensor.unsqueeze()),
+            (Self::R2(tensor), 5) => Self::R5(tensor.unsqueeze()),
+            (Self::R2(tensor), 6) => Self::R6(tensor.unsqueeze()),
+            (Self::R3(tensor), 4) => Self::R4(tensor.unsqueeze()),
+            (Self::R3(tensor), 5) => Self::R5(tensor.unsqueeze()),
+            (Self::R3(tensor), 6) => Self::R6(tensor.unsqueeze()),
+            (Self::R4(tensor), 5) => Self::R5(tensor.unsqueeze()),
+            (Self::R4(tensor), 6) => Self::R6(tensor.unsqueeze()),
+            (Self::R5(tensor), 6) => Self::R6(tensor.unsqueeze()),
+            (_, target) => return Err(TynxError::RankOverflow(target)),
+        })
+    }
+
+    /// Apply logical AND with multidirectional broadcasting.
+    pub fn and_broadcast(self, other: Self) -> Result<Self> {
+        let (left, right) = Self::broadcast_pair(self, other)?;
+        Ok(zip_bool!(left, right, |left, right| left.bool_and(right)))
+    }
+
+    /// Apply logical OR with multidirectional broadcasting.
+    pub fn or_broadcast(self, other: Self) -> Result<Self> {
+        let (left, right) = Self::broadcast_pair(self, other)?;
+        Ok(zip_bool!(left, right, |left, right| left.bool_or(right)))
+    }
+
+    /// Apply logical XOR with multidirectional broadcasting.
+    pub fn xor_broadcast(self, other: Self) -> Result<Self> {
+        let (left, right) = Self::broadcast_pair(self, other)?;
+        Ok(zip_bool!(left, right, |left, right| left.bool_xor(right)))
+    }
+
+    /// Apply logical NOT element-wise.
+    pub fn logical_not(self) -> Self {
+        map_bool!(self, |tensor| tensor.bool_not())
+    }
+
+    fn broadcast_pair(left: Self, right: Self) -> Result<(Self, Self)> {
+        let rank = left.rank().max(right.rank());
+        Ok((left.to_rank(rank)?, right.to_rank(rank)?))
     }
 }
 
