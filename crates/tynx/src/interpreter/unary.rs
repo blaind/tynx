@@ -1,7 +1,9 @@
 //! Rank-preserving unary operators.
 
 use burn::tensor::Device;
-use onnx_ir::node::{exp::ExpNode, relu::ReluNode, sigmoid::SigmoidNode, tanh::TanhNode};
+use onnx_ir::node::{
+    exp::ExpNode, log::LogNode, relu::ReluNode, sigmoid::SigmoidNode, tanh::TanhNode,
+};
 
 use super::{Env, resolve};
 use crate::{Result, Value};
@@ -26,14 +28,19 @@ pub(super) fn exp(node: &ExpNode, env: &Env, device: &Device) -> Result<Vec<Valu
     Ok(vec![Value::Tensor(input.exp())])
 }
 
+pub(super) fn log(node: &LogNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
+    let input = resolve::first(env, &node.name, &node.inputs, device)?.into_tensor()?;
+    Ok(vec![Value::Tensor(input.log())])
+}
+
 #[cfg(test)]
 mod tests {
     use burn::tensor::TensorData;
     use onnx_ir::{
         DType,
         node::{
-            exp::ExpNodeBuilder, relu::ReluNodeBuilder, sigmoid::SigmoidNodeBuilder,
-            tanh::TanhNodeBuilder,
+            exp::ExpNodeBuilder, log::LogNodeBuilder, relu::ReluNodeBuilder,
+            sigmoid::SigmoidNodeBuilder, tanh::TanhNodeBuilder,
         },
     };
 
@@ -148,5 +155,35 @@ mod tests {
 
         assert_eq!(output[0], 1.0);
         assert!((output[1] - std::f32::consts::E).abs() < 1e-6);
+    }
+
+    #[test]
+    fn takes_natural_logarithms() {
+        let node = LogNodeBuilder::new("log")
+            .input_tensor("x", 1, DType::F32)
+            .output_tensor("y", 1, DType::F32)
+            .build();
+        let device = Device::default();
+        let input = Value::from_tensor_data(
+            TensorData::new(vec![1.0_f32, std::f32::consts::E], [2]),
+            1,
+            &device,
+        )
+        .unwrap();
+        let mut env = Env::new();
+        env.insert("x".to_string(), input);
+
+        let output = log(&node, &env, &device)
+            .unwrap()
+            .pop()
+            .unwrap()
+            .into_tensor()
+            .unwrap()
+            .into_data()
+            .iter::<f32>()
+            .collect::<Vec<_>>();
+
+        assert_eq!(output[0], 0.0);
+        assert!((output[1] - 1.0).abs() < 1e-6);
     }
 }

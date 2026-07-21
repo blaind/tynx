@@ -218,6 +218,11 @@ impl DynTensor {
     pub fn exp(self) -> Self {
         map_float!(self, |tensor| tensor.exp())
     }
+
+    /// Apply the natural logarithm element-wise.
+    pub fn log(self) -> Self {
+        map_float!(self, |tensor| tensor.log())
+    }
 }
 
 #[cfg(test)]
