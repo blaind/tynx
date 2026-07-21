@@ -323,6 +323,11 @@ impl DynTensor {
     pub fn sign(self) -> Self {
         map_float!(self, |tensor| tensor.sign())
     }
+
+    /// Apply the softplus function element-wise.
+    pub fn softplus(self) -> Self {
+        map_float!(self, |tensor| activation::softplus(tensor, 1.0))
+    }
 }
 
 #[cfg(test)]

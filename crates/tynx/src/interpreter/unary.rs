@@ -6,7 +6,7 @@ use onnx_ir::node::{
     atan::AtanNode, atanh::AtanhNode, ceil::CeilNode, cos::CosNode, cosh::CoshNode, erf::ErfNode,
     exp::ExpNode, floor::FloorNode, log::LogNode, neg::NegNode, reciprocal::ReciprocalNode,
     relu::ReluNode, round::RoundNode, sigmoid::SigmoidNode, sign::SignNode, sin::SinNode,
-    sinh::SinhNode, sqrt::SqrtNode, tan::TanNode, tanh::TanhNode,
+    sinh::SinhNode, softplus::SoftplusNode, sqrt::SqrtNode, tan::TanNode, tanh::TanhNode,
 };
 
 use super::{Env, resolve};
@@ -137,6 +137,11 @@ pub(super) fn sign(node: &SignNode, env: &Env, device: &Device) -> Result<Vec<Va
     Ok(vec![Value::Tensor(input.sign())])
 }
 
+pub(super) fn softplus(node: &SoftplusNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
+    let input = resolve::first(env, &node.name, &node.inputs, device)?.into_tensor()?;
+    Ok(vec![Value::Tensor(input.softplus())])
+}
+
 #[cfg(test)]
 mod tests {
     use burn::tensor::TensorData;
@@ -150,8 +155,8 @@ mod tests {
             floor::FloorNodeBuilder, log::LogNodeBuilder, neg::NegNodeBuilder,
             reciprocal::ReciprocalNodeBuilder, relu::ReluNodeBuilder, round::RoundNodeBuilder,
             sigmoid::SigmoidNodeBuilder, sign::SignNodeBuilder, sin::SinNodeBuilder,
-            sinh::SinhNodeBuilder, sqrt::SqrtNodeBuilder, tan::TanNodeBuilder,
-            tanh::TanhNodeBuilder,
+            sinh::SinhNodeBuilder, softplus::SoftplusNodeBuilder, sqrt::SqrtNodeBuilder,
+            tan::TanNodeBuilder, tanh::TanhNodeBuilder,
         },
     };
 
@@ -878,5 +883,37 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(output, [-1.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn applies_softplus() {
+        let node = SoftplusNodeBuilder::new("softplus")
+            .input_tensor("x", 1, DType::F32)
+            .output_tensor("y", 1, DType::F32)
+            .build();
+        let device = Device::default();
+        let input =
+            Value::from_tensor_data(TensorData::new(vec![-1.0_f32, 0.0, 1.0], [3]), 1, &device)
+                .unwrap();
+        let mut env = Env::new();
+        env.insert("x".to_string(), input);
+
+        let output = softplus(&node, &env, &device)
+            .unwrap()
+            .pop()
+            .unwrap()
+            .into_tensor()
+            .unwrap()
+            .into_data()
+            .iter::<f32>()
+            .collect::<Vec<_>>();
+
+        for (actual, expected) in
+            output
+                .into_iter()
+                .zip([0.313_261_7, std::f32::consts::LN_2, 1.313_261_6])
+        {
+            assert!((actual - expected).abs() < 1e-6);
+        }
     }
 }
