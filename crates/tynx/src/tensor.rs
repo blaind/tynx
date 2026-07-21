@@ -168,11 +168,21 @@ impl DynTensor {
 
     /// Add two tensors using ONNX-style multidirectional broadcasting.
     pub fn add_broadcast(self, other: Self) -> Result<Self> {
-        let rank = self.rank().max(other.rank());
-        let left = self.to_rank(rank)?;
-        let right = other.to_rank(rank)?;
+        let (left, right) = Self::broadcast_pair(self, other)?;
 
         Ok(zip_float!(left, right, |left, right| left.add(right)))
+    }
+
+    /// Subtract two tensors using ONNX-style multidirectional broadcasting.
+    pub fn sub_broadcast(self, other: Self) -> Result<Self> {
+        let (left, right) = Self::broadcast_pair(self, other)?;
+
+        Ok(zip_float!(left, right, |left, right| left.sub(right)))
+    }
+
+    fn broadcast_pair(left: Self, right: Self) -> Result<(Self, Self)> {
+        let rank = left.rank().max(right.rank());
+        Ok((left.to_rank(rank)?, right.to_rank(rank)?))
     }
 
     /// Apply rectified linear unit element-wise.
