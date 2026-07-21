@@ -354,6 +354,11 @@ impl DynTensor {
     pub fn hard_sigmoid(self, alpha: f64, beta: f64) -> Self {
         map_float!(self, |tensor| activation::hard_sigmoid(tensor, alpha, beta))
     }
+
+    /// Apply thresholded rectified linear unit element-wise.
+    pub fn thresholded_relu(self, alpha: f64) -> Self {
+        map_float!(self, |tensor| activation::thresholded_relu(tensor, alpha))
+    }
 }
 
 #[cfg(test)]

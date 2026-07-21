@@ -53,6 +53,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Sub(node) => binary::sub(node, env, device),
         Node::Tan(node) => unary::tan(node, env, device),
         Node::Tanh(node) => unary::tanh(node, env, device),
+        Node::ThresholdedRelu(node) => unary::thresholded_relu(node, env, device),
         _ => Err(TynxError::UnsupportedOp(operator_kind(node))),
     }
 }
@@ -70,8 +71,8 @@ mod tests {
     use onnx_ir::{
         DType, Node,
         node::{
+            celu::{CeluConfig, CeluNodeBuilder},
             identity::IdentityNodeBuilder,
-            thresholded_relu::{ThresholdedReluConfig, ThresholdedReluNodeBuilder},
         },
     };
 
@@ -99,19 +100,16 @@ mod tests {
 
     #[test]
     fn unsupported_errors_name_the_operator() {
-        let node = Node::ThresholdedRelu(
-            ThresholdedReluNodeBuilder::new("")
+        let node = Node::Celu(
+            CeluNodeBuilder::new("")
                 .input_tensor("x", 1, DType::F32)
                 .output_tensor("y", 1, DType::F32)
-                .config(ThresholdedReluConfig::new(1.0))
+                .config(CeluConfig::new(1.0))
                 .build(),
         );
 
         let error = execute(&node, &Env::new(), &Device::default()).unwrap_err();
 
-        assert_eq!(
-            error,
-            TynxError::UnsupportedOp("ThresholdedRelu".to_string())
-        );
+        assert_eq!(error, TynxError::UnsupportedOp("Celu".to_string()));
     }
 }

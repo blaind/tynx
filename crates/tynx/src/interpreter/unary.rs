@@ -8,7 +8,7 @@ use onnx_ir::node::{
     leaky_relu::LeakyReluNode, log::LogNode, neg::NegNode, reciprocal::ReciprocalNode,
     relu::ReluNode, round::RoundNode, selu::SeluNode, sigmoid::SigmoidNode, sign::SignNode,
     sin::SinNode, sinh::SinhNode, softplus::SoftplusNode, softsign::SoftsignNode, sqrt::SqrtNode,
-    tan::TanNode, tanh::TanhNode,
+    tan::TanNode, tanh::TanhNode, thresholded_relu::ThresholdedReluNode,
 };
 
 use super::{Env, resolve};
@@ -177,6 +177,17 @@ pub(super) fn hard_sigmoid(
     )])
 }
 
+pub(super) fn thresholded_relu(
+    node: &ThresholdedReluNode,
+    env: &Env,
+    device: &Device,
+) -> Result<Vec<Value>> {
+    let input = resolve::first(env, &node.name, &node.inputs, device)?.into_tensor()?;
+    Ok(vec![Value::Tensor(
+        input.thresholded_relu(node.config.alpha),
+    )])
+}
+
 #[cfg(test)]
 mod tests {
     use burn::tensor::TensorData;
@@ -214,6 +225,7 @@ mod tests {
             sqrt::SqrtNodeBuilder,
             tan::TanNodeBuilder,
             tanh::TanhNodeBuilder,
+            thresholded_relu::{ThresholdedReluConfig, ThresholdedReluNodeBuilder},
         },
     };
 
@@ -1112,5 +1124,32 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(output, [0.0, 0.5, 1.0]);
+    }
+
+    #[test]
+    fn applies_thresholded_relu_with_custom_alpha() {
+        let node = ThresholdedReluNodeBuilder::new("thresholded_relu")
+            .input_tensor("x", 1, DType::F32)
+            .output_tensor("y", 1, DType::F32)
+            .config(ThresholdedReluConfig::new(0.5))
+            .build();
+        let device = Device::default();
+        let input =
+            Value::from_tensor_data(TensorData::new(vec![-1.0_f32, 0.5, 2.0], [3]), 1, &device)
+                .unwrap();
+        let mut env = Env::new();
+        env.insert("x".to_string(), input);
+
+        let output = thresholded_relu(&node, &env, &device)
+            .unwrap()
+            .pop()
+            .unwrap()
+            .into_tensor()
+            .unwrap()
+            .into_data()
+            .iter::<f32>()
+            .collect::<Vec<_>>();
+
+        assert_eq!(output, [0.0, 0.0, 2.0]);
     }
 }
