@@ -12,9 +12,19 @@ pub(super) fn first(
     inputs: &[Argument],
     device: &Device,
 ) -> Result<Value> {
-    let argument = inputs
-        .first()
-        .ok_or_else(|| TynxError::Shape(format!("node '{node_name}' has no input")))?;
+    at(env, node_name, inputs, 0, device)
+}
+
+pub(super) fn at(
+    env: &Env,
+    node_name: &str,
+    inputs: &[Argument],
+    index: usize,
+    device: &Device,
+) -> Result<Value> {
+    let argument = inputs.get(index).ok_or_else(|| {
+        TynxError::Shape(format!("node '{node_name}' has no input at index {index}"))
+    })?;
 
     input(env, argument, device)
 }

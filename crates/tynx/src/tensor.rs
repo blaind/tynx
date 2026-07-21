@@ -53,6 +53,20 @@ macro_rules! map_float {
     };
 }
 
+macro_rules! zip_float {
+    ($left:expr, $right:expr, |$a:ident, $b:ident| $body:expr) => {
+        match ($left, $right) {
+            (DynTensor::R1($a), DynTensor::R1($b)) => DynTensor::R1($body),
+            (DynTensor::R2($a), DynTensor::R2($b)) => DynTensor::R2($body),
+            (DynTensor::R3($a), DynTensor::R3($b)) => DynTensor::R3($body),
+            (DynTensor::R4($a), DynTensor::R4($b)) => DynTensor::R4($body),
+            (DynTensor::R5($a), DynTensor::R5($b)) => DynTensor::R5($body),
+            (DynTensor::R6($a), DynTensor::R6($b)) => DynTensor::R6($body),
+            _ => unreachable!("tensor ranks were promoted before the operation"),
+        }
+    };
+}
+
 macro_rules! impl_metadata {
     ($name:ident) => {
         impl $name {
@@ -150,6 +164,15 @@ impl DynTensor {
             (Self::R5(tensor), 6) => Self::R6(tensor.unsqueeze()),
             (_, target) => return Err(TynxError::RankOverflow(target)),
         })
+    }
+
+    /// Add two tensors using ONNX-style multidirectional broadcasting.
+    pub fn add_broadcast(self, other: Self) -> Result<Self> {
+        let rank = self.rank().max(other.rank());
+        let left = self.to_rank(rank)?;
+        let right = other.to_rank(rank)?;
+
+        Ok(zip_float!(left, right, |left, right| left.add(right)))
     }
 
     /// Apply rectified linear unit element-wise.

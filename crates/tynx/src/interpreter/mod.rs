@@ -1,5 +1,6 @@
 //! Runtime dispatch for individual ONNX nodes.
 
+mod binary;
 mod resolve;
 mod unary;
 
@@ -16,6 +17,7 @@ pub type Env = HashMap<String, Value>;
 /// Execute one ONNX node using values from the runtime environment.
 pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
     match node {
+        Node::Add(node) => binary::add(node, env, device),
         Node::Identity(node) => Ok(vec![resolve::first(env, &node.name, &node.inputs, device)?]),
         Node::Relu(node) => unary::relu(node, env, device),
         Node::Sigmoid(node) => unary::sigmoid(node, env, device),
