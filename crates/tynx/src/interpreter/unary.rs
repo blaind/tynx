@@ -3,10 +3,11 @@
 use burn::tensor::Device;
 use onnx_ir::node::{
     abs::AbsNode, acos::AcosNode, acosh::AcoshNode, asin::AsinNode, asinh::AsinhNode,
-    atan::AtanNode, atanh::AtanhNode, ceil::CeilNode, cos::CosNode, cosh::CoshNode, erf::ErfNode,
-    exp::ExpNode, floor::FloorNode, log::LogNode, neg::NegNode, reciprocal::ReciprocalNode,
-    relu::ReluNode, round::RoundNode, sigmoid::SigmoidNode, sign::SignNode, sin::SinNode,
-    sinh::SinhNode, softplus::SoftplusNode, sqrt::SqrtNode, tan::TanNode, tanh::TanhNode,
+    atan::AtanNode, atanh::AtanhNode, ceil::CeilNode, cos::CosNode, cosh::CoshNode, elu::EluNode,
+    erf::ErfNode, exp::ExpNode, floor::FloorNode, log::LogNode, neg::NegNode,
+    reciprocal::ReciprocalNode, relu::ReluNode, round::RoundNode, sigmoid::SigmoidNode,
+    sign::SignNode, sin::SinNode, sinh::SinhNode, softplus::SoftplusNode, sqrt::SqrtNode,
+    tan::TanNode, tanh::TanhNode,
 };
 
 use super::{Env, resolve};
@@ -142,21 +143,44 @@ pub(super) fn softplus(node: &SoftplusNode, env: &Env, device: &Device) -> Resul
     Ok(vec![Value::Tensor(input.softplus())])
 }
 
+pub(super) fn elu(node: &EluNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
+    let input = resolve::first(env, &node.name, &node.inputs, device)?.into_tensor()?;
+    Ok(vec![Value::Tensor(input.elu(node.config.alpha))])
+}
+
 #[cfg(test)]
 mod tests {
     use burn::tensor::TensorData;
     use onnx_ir::{
         DType,
         node::{
-            abs::AbsNodeBuilder, acos::AcosNodeBuilder, acosh::AcoshNodeBuilder,
-            asin::AsinNodeBuilder, asinh::AsinhNodeBuilder, atan::AtanNodeBuilder,
-            atanh::AtanhNodeBuilder, ceil::CeilNodeBuilder, cos::CosNodeBuilder,
-            cosh::CoshNodeBuilder, erf::ErfNodeBuilder, exp::ExpNodeBuilder,
-            floor::FloorNodeBuilder, log::LogNodeBuilder, neg::NegNodeBuilder,
-            reciprocal::ReciprocalNodeBuilder, relu::ReluNodeBuilder, round::RoundNodeBuilder,
-            sigmoid::SigmoidNodeBuilder, sign::SignNodeBuilder, sin::SinNodeBuilder,
-            sinh::SinhNodeBuilder, softplus::SoftplusNodeBuilder, sqrt::SqrtNodeBuilder,
-            tan::TanNodeBuilder, tanh::TanhNodeBuilder,
+            abs::AbsNodeBuilder,
+            acos::AcosNodeBuilder,
+            acosh::AcoshNodeBuilder,
+            asin::AsinNodeBuilder,
+            asinh::AsinhNodeBuilder,
+            atan::AtanNodeBuilder,
+            atanh::AtanhNodeBuilder,
+            ceil::CeilNodeBuilder,
+            cos::CosNodeBuilder,
+            cosh::CoshNodeBuilder,
+            elu::{EluConfig, EluNodeBuilder},
+            erf::ErfNodeBuilder,
+            exp::ExpNodeBuilder,
+            floor::FloorNodeBuilder,
+            log::LogNodeBuilder,
+            neg::NegNodeBuilder,
+            reciprocal::ReciprocalNodeBuilder,
+            relu::ReluNodeBuilder,
+            round::RoundNodeBuilder,
+            sigmoid::SigmoidNodeBuilder,
+            sign::SignNodeBuilder,
+            sin::SinNodeBuilder,
+            sinh::SinhNodeBuilder,
+            softplus::SoftplusNodeBuilder,
+            sqrt::SqrtNodeBuilder,
+            tan::TanNodeBuilder,
+            tanh::TanhNodeBuilder,
         },
     };
 
@@ -915,5 +939,34 @@ mod tests {
         {
             assert!((actual - expected).abs() < 1e-6);
         }
+    }
+
+    #[test]
+    fn applies_elu_with_alpha() {
+        let node = EluNodeBuilder::new("elu")
+            .input_tensor("x", 1, DType::F32)
+            .output_tensor("y", 1, DType::F32)
+            .config(EluConfig::new(2.0))
+            .build();
+        let device = Device::default();
+        let input =
+            Value::from_tensor_data(TensorData::new(vec![-1.0_f32, 0.0, 1.0], [3]), 1, &device)
+                .unwrap();
+        let mut env = Env::new();
+        env.insert("x".to_string(), input);
+
+        let output = elu(&node, &env, &device)
+            .unwrap()
+            .pop()
+            .unwrap()
+            .into_tensor()
+            .unwrap()
+            .into_data()
+            .iter::<f32>()
+            .collect::<Vec<_>>();
+
+        assert!((output[0] + 1.264_241_1).abs() < 1e-6);
+        assert_eq!(output[1], 0.0);
+        assert_eq!(output[2], 1.0);
     }
 }

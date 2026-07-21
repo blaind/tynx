@@ -328,6 +328,11 @@ impl DynTensor {
     pub fn softplus(self) -> Self {
         map_float!(self, |tensor| activation::softplus(tensor, 1.0))
     }
+
+    /// Apply the exponential linear unit function element-wise.
+    pub fn elu(self, alpha: f64) -> Self {
+        map_float!(self, |tensor| activation::elu(tensor, alpha))
+    }
 }
 
 #[cfg(test)]

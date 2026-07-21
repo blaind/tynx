@@ -29,6 +29,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Cos(node) => unary::cos(node, env, device),
         Node::Cosh(node) => unary::cosh(node, env, device),
         Node::Div(node) => binary::div(node, env, device),
+        Node::Elu(node) => unary::elu(node, env, device),
         Node::Erf(node) => unary::erf(node, env, device),
         Node::Exp(node) => unary::exp(node, env, device),
         Node::Floor(node) => unary::floor(node, env, device),
@@ -65,8 +66,8 @@ mod tests {
     use onnx_ir::{
         DType, Node,
         node::{
-            elu::{EluConfig, EluNodeBuilder},
             identity::IdentityNodeBuilder,
+            leaky_relu::{LeakyReluConfig, LeakyReluNodeBuilder},
         },
     };
 
@@ -94,16 +95,16 @@ mod tests {
 
     #[test]
     fn unsupported_errors_name_the_operator() {
-        let node = Node::Elu(
-            EluNodeBuilder::new("")
+        let node = Node::LeakyRelu(
+            LeakyReluNodeBuilder::new("")
                 .input_tensor("x", 1, DType::F32)
                 .output_tensor("y", 1, DType::F32)
-                .config(EluConfig::new(1.0))
+                .config(LeakyReluConfig::new(0.01))
                 .build(),
         );
 
         let error = execute(&node, &Env::new(), &Device::default()).unwrap_err();
 
-        assert_eq!(error, TynxError::UnsupportedOp("Elu".to_string()));
+        assert_eq!(error, TynxError::UnsupportedOp("LeakyRelu".to_string()));
     }
 }
