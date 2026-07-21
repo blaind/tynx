@@ -1,6 +1,6 @@
 //! Rank-erased tensor containers used by the runtime.
 
-use burn::tensor::{Bool, Device, Int, Tensor, TensorData};
+use burn::tensor::{Bool, Device, Int, Tensor, TensorData, activation};
 
 use crate::error::{Result, TynxError};
 
@@ -38,6 +38,19 @@ pub enum DynBool {
     R4(Tensor<4, Bool>),
     R5(Tensor<5, Bool>),
     R6(Tensor<6, Bool>),
+}
+
+macro_rules! map_float {
+    ($tensor:expr, $operation:expr) => {
+        match $tensor {
+            DynTensor::R1(tensor) => DynTensor::R1(($operation)(tensor)),
+            DynTensor::R2(tensor) => DynTensor::R2(($operation)(tensor)),
+            DynTensor::R3(tensor) => DynTensor::R3(($operation)(tensor)),
+            DynTensor::R4(tensor) => DynTensor::R4(($operation)(tensor)),
+            DynTensor::R5(tensor) => DynTensor::R5(($operation)(tensor)),
+            DynTensor::R6(tensor) => DynTensor::R6(($operation)(tensor)),
+        }
+    };
 }
 
 macro_rules! impl_metadata {
@@ -104,6 +117,13 @@ macro_rules! impl_metadata {
 impl_metadata!(DynTensor);
 impl_metadata!(DynInt);
 impl_metadata!(DynBool);
+
+impl DynTensor {
+    /// Apply rectified linear unit element-wise.
+    pub fn relu(self) -> Self {
+        map_float!(self, activation::relu)
+    }
+}
 
 #[cfg(test)]
 mod tests {
