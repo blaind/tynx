@@ -18,6 +18,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
     match node {
         Node::Identity(node) => Ok(vec![resolve::first(env, &node.name, &node.inputs, device)?]),
         Node::Relu(node) => unary::relu(node, env, device),
+        Node::Sigmoid(node) => unary::sigmoid(node, env, device),
         _ => Err(TynxError::UnsupportedOp(format!("node '{}'", node.name()))),
     }
 }

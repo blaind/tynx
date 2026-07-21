@@ -123,6 +123,11 @@ impl DynTensor {
     pub fn relu(self) -> Self {
         map_float!(self, activation::relu)
     }
+
+    /// Apply the sigmoid function element-wise.
+    pub fn sigmoid(self) -> Self {
+        map_float!(self, activation::sigmoid)
+    }
 }
 
 #[cfg(test)]
