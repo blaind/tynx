@@ -278,6 +278,11 @@ impl DynTensor {
     pub fn asin(self) -> Self {
         map_float!(self, |tensor| tensor.asin())
     }
+
+    /// Apply the inverse hyperbolic sine function element-wise.
+    pub fn asinh(self) -> Self {
+        map_float!(self, |tensor| tensor.asinh())
+    }
 }
 
 #[cfg(test)]
