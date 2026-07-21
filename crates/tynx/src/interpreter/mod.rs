@@ -8,6 +8,7 @@ mod pow;
 mod resolve;
 mod unary;
 mod variadic;
+mod where_op;
 
 use std::collections::HashMap;
 
@@ -78,6 +79,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Tan(node) => unary::tan(node, env, device),
         Node::Tanh(node) => unary::tanh(node, env, device),
         Node::ThresholdedRelu(node) => unary::thresholded_relu(node, env, device),
+        Node::Where(node) => where_op::where_op(node, env, device),
         Node::Xor(node) => logical::xor(node, env, device),
         _ => Err(TynxError::UnsupportedOp(operator_kind(node))),
     }

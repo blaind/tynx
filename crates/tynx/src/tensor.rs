@@ -149,6 +149,84 @@ macro_rules! zip_bool {
     };
 }
 
+macro_rules! where_float {
+    ($condition:expr, $then:expr, $otherwise:expr) => {
+        match ($condition, $then, $otherwise) {
+            (DynBool::R1(condition), DynTensor::R1(then), DynTensor::R1(otherwise)) => {
+                DynTensor::R1(otherwise.mask_where(condition, then))
+            }
+            (DynBool::R2(condition), DynTensor::R2(then), DynTensor::R2(otherwise)) => {
+                DynTensor::R2(otherwise.mask_where(condition, then))
+            }
+            (DynBool::R3(condition), DynTensor::R3(then), DynTensor::R3(otherwise)) => {
+                DynTensor::R3(otherwise.mask_where(condition, then))
+            }
+            (DynBool::R4(condition), DynTensor::R4(then), DynTensor::R4(otherwise)) => {
+                DynTensor::R4(otherwise.mask_where(condition, then))
+            }
+            (DynBool::R5(condition), DynTensor::R5(then), DynTensor::R5(otherwise)) => {
+                DynTensor::R5(otherwise.mask_where(condition, then))
+            }
+            (DynBool::R6(condition), DynTensor::R6(then), DynTensor::R6(otherwise)) => {
+                DynTensor::R6(otherwise.mask_where(condition, then))
+            }
+            _ => unreachable!("Where operands were promoted to the same rank"),
+        }
+    };
+}
+
+macro_rules! where_int {
+    ($condition:expr, $then:expr, $otherwise:expr) => {
+        match ($condition, $then, $otherwise) {
+            (DynBool::R1(condition), DynInt::R1(then), DynInt::R1(otherwise)) => {
+                DynInt::R1(otherwise.mask_where(condition, then))
+            }
+            (DynBool::R2(condition), DynInt::R2(then), DynInt::R2(otherwise)) => {
+                DynInt::R2(otherwise.mask_where(condition, then))
+            }
+            (DynBool::R3(condition), DynInt::R3(then), DynInt::R3(otherwise)) => {
+                DynInt::R3(otherwise.mask_where(condition, then))
+            }
+            (DynBool::R4(condition), DynInt::R4(then), DynInt::R4(otherwise)) => {
+                DynInt::R4(otherwise.mask_where(condition, then))
+            }
+            (DynBool::R5(condition), DynInt::R5(then), DynInt::R5(otherwise)) => {
+                DynInt::R5(otherwise.mask_where(condition, then))
+            }
+            (DynBool::R6(condition), DynInt::R6(then), DynInt::R6(otherwise)) => {
+                DynInt::R6(otherwise.mask_where(condition, then))
+            }
+            _ => unreachable!("Where operands were promoted to the same rank"),
+        }
+    };
+}
+
+macro_rules! where_bool {
+    ($condition:expr, $then:expr, $otherwise:expr) => {
+        match ($condition, $then, $otherwise) {
+            (DynBool::R1(condition), DynBool::R1(then), DynBool::R1(otherwise)) => {
+                DynBool::R1(otherwise.mask_where(condition, then))
+            }
+            (DynBool::R2(condition), DynBool::R2(then), DynBool::R2(otherwise)) => {
+                DynBool::R2(otherwise.mask_where(condition, then))
+            }
+            (DynBool::R3(condition), DynBool::R3(then), DynBool::R3(otherwise)) => {
+                DynBool::R3(otherwise.mask_where(condition, then))
+            }
+            (DynBool::R4(condition), DynBool::R4(then), DynBool::R4(otherwise)) => {
+                DynBool::R4(otherwise.mask_where(condition, then))
+            }
+            (DynBool::R5(condition), DynBool::R5(then), DynBool::R5(otherwise)) => {
+                DynBool::R5(otherwise.mask_where(condition, then))
+            }
+            (DynBool::R6(condition), DynBool::R6(then), DynBool::R6(otherwise)) => {
+                DynBool::R6(otherwise.mask_where(condition, then))
+            }
+            _ => unreachable!("Where operands were promoted to the same rank"),
+        }
+    };
+}
+
 macro_rules! impl_metadata {
     ($name:ident) => {
         impl $name {
@@ -585,6 +663,17 @@ impl DynTensor {
             (None, None) => self,
         }
     }
+
+    /// Select elements from two tensors using a broadcastable boolean condition.
+    pub fn where_select(condition: DynBool, then: Self, otherwise: Self) -> Result<Self> {
+        let rank = condition.rank().max(then.rank()).max(otherwise.rank());
+        let dtype = then.dtype();
+        Ok(where_float!(
+            condition.to_rank(rank)?,
+            then.to_rank(rank)?,
+            otherwise.cast(dtype).to_rank(rank)?
+        ))
+    }
 }
 
 impl DynInt {
@@ -743,6 +832,17 @@ impl DynInt {
             }
         }
     }
+
+    /// Select elements from two integer tensors using a broadcastable boolean condition.
+    pub fn where_select(condition: DynBool, then: Self, otherwise: Self) -> Result<Self> {
+        let rank = condition.rank().max(then.rank()).max(otherwise.rank());
+        let dtype = then.dtype();
+        Ok(where_int!(
+            condition.to_rank(rank)?,
+            then.to_rank(rank)?,
+            otherwise.cast(dtype).to_rank(rank)?
+        ))
+    }
 }
 
 fn scalar_as_i64(value: crate::Scalar) -> i64 {
@@ -818,6 +918,16 @@ impl DynBool {
     /// Apply logical NOT element-wise.
     pub fn logical_not(self) -> Self {
         map_bool!(self, |tensor| tensor.bool_not())
+    }
+
+    /// Select elements from two boolean tensors using a broadcastable condition.
+    pub fn where_select(condition: Self, then: Self, otherwise: Self) -> Result<Self> {
+        let rank = condition.rank().max(then.rank()).max(otherwise.rank());
+        Ok(where_bool!(
+            condition.to_rank(rank)?,
+            then.to_rank(rank)?,
+            otherwise.to_rank(rank)?
+        ))
     }
 
     fn broadcast_pair(left: Self, right: Self) -> Result<(Self, Self)> {
