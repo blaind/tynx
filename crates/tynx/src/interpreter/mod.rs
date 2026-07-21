@@ -5,6 +5,7 @@ mod clip;
 mod comparison;
 mod logical;
 mod pow;
+mod reduction;
 mod resolve;
 mod shape;
 mod unary;
@@ -14,12 +15,16 @@ mod where_op;
 use std::collections::HashMap;
 
 use burn::tensor::Device;
-use onnx_ir::ir::Node;
+use onnx_ir::ir::{Node, OnnxGraph};
 
 use crate::{Result, TynxError, Value};
 
 /// Values available to nodes, keyed by ONNX argument name.
 pub type Env = HashMap<String, Value>;
+
+pub(crate) fn preserve_attributes(data: &[u8], graph: &mut OnnxGraph) -> Result<()> {
+    reduction::preserve_attributes(data, graph)
+}
 
 /// Execute one ONNX node using values from the runtime environment.
 pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
@@ -66,6 +71,16 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::PRelu(node) => binary::prelu(node, env, device),
         Node::Pow(node) => pow::pow(node, env, device),
         Node::Reciprocal(node) => unary::reciprocal(node, env, device),
+        Node::ReduceL1(node) => reduction::reduce_l1(node, env, device),
+        Node::ReduceL2(node) => reduction::reduce_l2(node, env, device),
+        Node::ReduceLogSum(node) => reduction::reduce_log_sum(node, env, device),
+        Node::ReduceLogSumExp(node) => reduction::reduce_log_sum_exp(node, env, device),
+        Node::ReduceMax(node) => reduction::reduce_max(node, env, device),
+        Node::ReduceMean(node) => reduction::reduce_mean(node, env, device),
+        Node::ReduceMin(node) => reduction::reduce_min(node, env, device),
+        Node::ReduceProd(node) => reduction::reduce_prod(node, env, device),
+        Node::ReduceSum(node) => reduction::reduce_sum(node, env, device),
+        Node::ReduceSumSquare(node) => reduction::reduce_sum_square(node, env, device),
         Node::Reshape(node) => shape::reshape(node, env, device),
         Node::Relu(node) => unary::relu(node, env, device),
         Node::Round(node) => unary::round(node, env, device),

@@ -130,7 +130,7 @@ pub(super) fn unsqueeze(node: &UnsqueezeNode, env: &Env, device: &Device) -> Res
     Ok(vec![reshape_value(input, dims, device)?])
 }
 
-fn reshape_value(value: Value, dims: Vec<usize>, device: &Device) -> Result<Value> {
+pub(super) fn reshape_value(value: Value, dims: Vec<usize>, device: &Device) -> Result<Value> {
     let old_count = checked_product(&value_dims(&value))?;
     let new_count = checked_product(&dims)?;
     if old_count != new_count {
@@ -188,7 +188,7 @@ fn scalar_data(scalar: Scalar, dims: &[usize]) -> TensorData {
     }
 }
 
-fn value_dims(value: &Value) -> Vec<usize> {
+pub(super) fn value_dims(value: &Value) -> Vec<usize> {
     match value {
         Value::Tensor(tensor) => tensor.dims(),
         Value::Int(tensor) => tensor.dims(),
@@ -198,7 +198,7 @@ fn value_dims(value: &Value) -> Vec<usize> {
     }
 }
 
-fn value_to_i64s(value: Value) -> Result<Vec<i64>> {
+pub(super) fn value_to_i64s(value: Value) -> Result<Vec<i64>> {
     match value {
         Value::Shape(values) => Ok(values),
         Value::Int(tensor) => Ok(tensor.into_data().iter::<i64>().collect()),

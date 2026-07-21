@@ -12,6 +12,7 @@ keywords = ["machine-learning", "neural-network", "onnx", "inference", "webgpu"]
 burn = { git = "https://github.com/tracel-ai/burn", rev = "78f10aec1ca6c6ffb1edd17a0fa131ae59ad5403", default-features = false, features = ["std"] }
 log = "0.4"
 onnx-ir = { git = "https://github.com/tracel-ai/burn-onnx", rev = "af2dfb43af43bf363dc2d7d858d933d86e2a65a8" }
+protobuf = "3"
 thiserror = "2"
 
 [features]
@@ -23,7 +24,6 @@ getrandom = { version = "0.4", features = ["wasm_js"] }
 
 [dev-dependencies]
 half = "2"
-protobuf = "3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

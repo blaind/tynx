@@ -1,6 +1,6 @@
 //! Loading and inspecting ONNX models.
 
-use std::path::Path;
+use std::{fs, path::Path};
 
 use burn::tensor::Device;
 use onnx_ir::OnnxGraphBuilder;
@@ -22,11 +22,8 @@ impl Session {
 
     /// Load a model from a file with optional graph simplification.
     pub fn from_file_with(path: impl AsRef<Path>, simplify: bool) -> Result<Self> {
-        let graph = OnnxGraphBuilder::new()
-            .simplify(simplify)
-            .parse_file(path)?;
-
-        Ok(Self { graph })
+        let data = fs::read(path).map_err(|error| TynxError::Parse(error.to_string()))?;
+        Self::from_bytes_with(&data, simplify)
     }
 
     /// Load a model from bytes and simplify its graph.
@@ -36,9 +33,10 @@ impl Session {
 
     /// Load a model from bytes with optional graph simplification.
     pub fn from_bytes_with(data: &[u8], simplify: bool) -> Result<Self> {
-        let graph = OnnxGraphBuilder::new()
+        let mut graph = OnnxGraphBuilder::new()
             .simplify(simplify)
             .parse_bytes(data)?;
+        crate::interpreter::preserve_attributes(data, &mut graph)?;
 
         Ok(Self { graph })
     }

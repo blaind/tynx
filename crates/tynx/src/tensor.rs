@@ -307,6 +307,31 @@ impl_metadata!(DynInt);
 impl_metadata!(DynBool);
 
 impl DynTensor {
+    /// Create a floating-point tensor filled with one value and an explicit dtype.
+    pub fn full(dims: &[usize], value: f64, device: &Device, dtype: DType) -> Result<Self> {
+        Ok(match dims {
+            [d0] => Self::R1(Tensor::<1>::full([*d0], value, (device, dtype))),
+            [d0, d1] => Self::R2(Tensor::<2>::full([*d0, *d1], value, (device, dtype))),
+            [d0, d1, d2] => Self::R3(Tensor::<3>::full([*d0, *d1, *d2], value, (device, dtype))),
+            [d0, d1, d2, d3] => Self::R4(Tensor::<4>::full(
+                [*d0, *d1, *d2, *d3],
+                value,
+                (device, dtype),
+            )),
+            [d0, d1, d2, d3, d4] => Self::R5(Tensor::<5>::full(
+                [*d0, *d1, *d2, *d3, *d4],
+                value,
+                (device, dtype),
+            )),
+            [d0, d1, d2, d3, d4, d5] => Self::R6(Tensor::<6>::full(
+                [*d0, *d1, *d2, *d3, *d4, *d5],
+                value,
+                (device, dtype),
+            )),
+            _ => return Err(TynxError::RankOverflow(dims.len())),
+        })
+    }
+
     /// Reshape the tensor while preserving its elements and dtype.
     pub fn reshape(self, dims: Vec<usize>) -> Result<Self> {
         Ok(match self {
@@ -418,6 +443,31 @@ impl DynTensor {
     /// Divide every element by a scalar.
     pub fn div_scalar(self, divisor: f64) -> Self {
         map_float!(self, |tensor| tensor.div_scalar(divisor))
+    }
+
+    /// Sum elements along dimensions while retaining singleton dimensions.
+    pub fn sum_dims(self, dims: &[usize]) -> Self {
+        map_float!(self, |tensor| tensor.sum_dims(dims))
+    }
+
+    /// Average elements along dimensions while retaining singleton dimensions.
+    pub fn mean_dims(self, dims: &[usize]) -> Self {
+        map_float!(self, |tensor| tensor.mean_dims(dims))
+    }
+
+    /// Multiply elements along dimensions while retaining singleton dimensions.
+    pub fn prod_dims(self, dims: &[usize]) -> Self {
+        map_float!(self, |tensor| tensor.prod_dims(dims))
+    }
+
+    /// Take the maximum along dimensions while retaining singleton dimensions.
+    pub fn reduce_max_dims(self, dims: &[usize]) -> Self {
+        map_float!(self, |tensor| tensor.max_dims(dims))
+    }
+
+    /// Take the minimum along dimensions while retaining singleton dimensions.
+    pub fn reduce_min_dims(self, dims: &[usize]) -> Self {
+        map_float!(self, |tensor| tensor.min_dims(dims))
     }
 
     /// Compare two tensors for equality with multidirectional broadcasting.
@@ -837,10 +887,35 @@ impl DynInt {
         map_int!(self, |tensor| tensor.powi_scalar(exponent))
     }
 
+    /// Take the absolute value of each integer element.
+    pub fn abs(self) -> Self {
+        map_int!(self, |tensor| tensor.abs())
+    }
+
     /// Add two integer tensors with multidirectional broadcasting.
     pub fn add_broadcast(self, other: Self) -> Result<Self> {
         let (left, right) = Self::broadcast_pair(self, other)?;
         Ok(zip_int!(left, right, |left, right| left.add(right)))
+    }
+
+    /// Sum elements along dimensions while retaining singleton dimensions.
+    pub fn sum_dims(self, dims: &[usize]) -> Self {
+        map_int!(self, |tensor| tensor.sum_dims(dims))
+    }
+
+    /// Multiply elements along dimensions while retaining singleton dimensions.
+    pub fn prod_dims(self, dims: &[usize]) -> Self {
+        map_int!(self, |tensor| tensor.prod_dims(dims))
+    }
+
+    /// Take the maximum along dimensions while retaining singleton dimensions.
+    pub fn reduce_max_dims(self, dims: &[usize]) -> Self {
+        map_int!(self, |tensor| tensor.max_dims(dims))
+    }
+
+    /// Take the minimum along dimensions while retaining singleton dimensions.
+    pub fn reduce_min_dims(self, dims: &[usize]) -> Self {
+        map_int!(self, |tensor| tensor.min_dims(dims))
     }
 
     /// Take the element-wise maximum with multidirectional broadcasting.
@@ -1037,6 +1112,24 @@ impl DynBool {
     /// Apply logical NOT element-wise.
     pub fn logical_not(self) -> Self {
         map_bool!(self, |tensor| tensor.bool_not())
+    }
+
+    /// Take the maximum along dimensions while retaining singleton dimensions.
+    pub fn reduce_max_dims(self, dims: &[usize]) -> Self {
+        map_bool!(self, |tensor| tensor
+            .int()
+            .cast(DType::I64)
+            .max_dims(dims)
+            .bool())
+    }
+
+    /// Take the minimum along dimensions while retaining singleton dimensions.
+    pub fn reduce_min_dims(self, dims: &[usize]) -> Self {
+        map_bool!(self, |tensor| tensor
+            .int()
+            .cast(DType::I64)
+            .min_dims(dims)
+            .bool())
     }
 
     /// Select elements from two boolean tensors using a broadcastable condition.
