@@ -1,0 +1,12 @@
+[package]
+name = "tynx"
+description = "A lightweight neural network runtime for inference and training"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords = ["machine-learning", "neural-network", "onnx", "inference", "webgpu"]
+
+[lints]
+workspace = true
