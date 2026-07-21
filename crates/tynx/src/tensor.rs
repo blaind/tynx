@@ -445,6 +445,34 @@ impl DynTensor {
         map_float!(self, |tensor| tensor.div_scalar(divisor))
     }
 
+    /// Multiply every element by a scalar.
+    pub fn mul_scalar(self, multiplier: f64) -> Self {
+        map_float!(self, |tensor| tensor.mul_scalar(multiplier))
+    }
+
+    /// Add a scalar to every element.
+    pub fn add_scalar(self, value: f64) -> Self {
+        map_float!(self, |tensor| tensor.add_scalar(value))
+    }
+
+    /// Multiply matrices or batches of matrices with matching runtime ranks.
+    pub fn matmul(self, other: Self) -> Result<Self> {
+        Ok(match (self, other) {
+            (Self::R2(left), Self::R2(right)) => Self::R2(left.matmul(right)),
+            (Self::R3(left), Self::R3(right)) => Self::R3(left.matmul(right)),
+            (Self::R4(left), Self::R4(right)) => Self::R4(left.matmul(right)),
+            (Self::R5(left), Self::R5(right)) => Self::R5(left.matmul(right)),
+            (Self::R6(left), Self::R6(right)) => Self::R6(left.matmul(right)),
+            (left, right) => {
+                return Err(TynxError::Shape(format!(
+                    "matmul requires matching ranks >= 2, got {} and {}",
+                    left.rank(),
+                    right.rank()
+                )));
+            }
+        })
+    }
+
     /// Sum elements along dimensions while retaining singleton dimensions.
     pub fn sum_dims(self, dims: &[usize]) -> Self {
         map_float!(self, |tensor| tensor.sum_dims(dims))
@@ -890,6 +918,29 @@ impl DynInt {
     /// Take the absolute value of each integer element.
     pub fn abs(self) -> Self {
         map_int!(self, |tensor| tensor.abs())
+    }
+
+    /// Subtract a signed scalar from every integer element.
+    pub fn sub_scalar(self, value: i64) -> Self {
+        map_int!(self, |tensor| tensor.sub_scalar(value))
+    }
+
+    /// Multiply matrices or batches of matrices with matching runtime ranks.
+    pub fn matmul(self, other: Self) -> Result<Self> {
+        Ok(match (self, other) {
+            (Self::R2(left), Self::R2(right)) => Self::R2(left.matmul(right)),
+            (Self::R3(left), Self::R3(right)) => Self::R3(left.matmul(right)),
+            (Self::R4(left), Self::R4(right)) => Self::R4(left.matmul(right)),
+            (Self::R5(left), Self::R5(right)) => Self::R5(left.matmul(right)),
+            (Self::R6(left), Self::R6(right)) => Self::R6(left.matmul(right)),
+            (left, right) => {
+                return Err(TynxError::Shape(format!(
+                    "matmul requires matching ranks >= 2, got {} and {}",
+                    left.rank(),
+                    right.rank()
+                )));
+            }
+        })
     }
 
     /// Add two integer tensors with multidirectional broadcasting.

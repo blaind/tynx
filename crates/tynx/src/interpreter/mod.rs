@@ -4,6 +4,7 @@ mod binary;
 mod clip;
 mod comparison;
 mod logical;
+mod matrix;
 mod pow;
 mod reduction;
 mod resolve;
@@ -60,7 +61,10 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Less(node) => comparison::less(node, env, device),
         Node::LessOrEqual(node) => comparison::less_or_equal(node, env, device),
         Node::Log(node) => unary::log(node, env, device),
+        Node::Gemm(node) => matrix::gemm(node, env, device),
         Node::Max(node) => variadic::max(node, env, device),
+        Node::MatMul(node) => matrix::matmul(node, env, device),
+        Node::MatMulInteger(node) => matrix::matmul_integer(node, env, device),
         Node::Mean(node) => variadic::mean(node, env, device),
         Node::Min(node) => variadic::min(node, env, device),
         Node::Mish(node) => unary::mish(node, env, device),
