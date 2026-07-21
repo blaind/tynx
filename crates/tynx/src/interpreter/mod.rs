@@ -23,13 +23,24 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Relu(node) => unary::relu(node, env, device),
         Node::Sigmoid(node) => unary::sigmoid(node, env, device),
         Node::Sub(node) => binary::sub(node, env, device),
-        _ => Err(TynxError::UnsupportedOp(format!("node '{}'", node.name()))),
+        _ => Err(TynxError::UnsupportedOp(operator_kind(node))),
     }
+}
+
+fn operator_kind(node: &Node) -> String {
+    node.to_string()
+        .split_whitespace()
+        .next()
+        .unwrap_or("unknown")
+        .to_string()
 }
 
 #[cfg(test)]
 mod tests {
-    use onnx_ir::{DType, Node, node::identity::IdentityNodeBuilder};
+    use onnx_ir::{
+        DType, Node,
+        node::{identity::IdentityNodeBuilder, tanh::TanhNodeBuilder},
+    };
 
     use super::*;
     use crate::Scalar;
@@ -51,5 +62,19 @@ mod tests {
             outputs.as_slice(),
             [Value::Scalar(Scalar::I64(42))]
         ));
+    }
+
+    #[test]
+    fn unsupported_errors_name_the_operator() {
+        let node = Node::Tanh(
+            TanhNodeBuilder::new("")
+                .input_tensor("x", 1, DType::F32)
+                .output_tensor("y", 1, DType::F32)
+                .build(),
+        );
+
+        let error = execute(&node, &Env::new(), &Device::default()).unwrap_err();
+
+        assert_eq!(error, TynxError::UnsupportedOp("Tanh".to_string()));
     }
 }
