@@ -374,6 +374,11 @@ impl DynTensor {
     pub fn hard_swish(self) -> Self {
         map_float!(self, |tensor| activation::hard_swish(tensor))
     }
+
+    /// Apply the Gaussian error linear unit function element-wise.
+    pub fn gelu(self) -> Self {
+        map_float!(self, |tensor| activation::gelu(tensor))
+    }
 }
 
 #[cfg(test)]

@@ -34,6 +34,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Erf(node) => unary::erf(node, env, device),
         Node::Exp(node) => unary::exp(node, env, device),
         Node::Floor(node) => unary::floor(node, env, device),
+        Node::Gelu(node) => unary::gelu(node, env, device),
         Node::HardSigmoid(node) => unary::hard_sigmoid(node, env, device),
         Node::HardSwish(node) => unary::hard_swish(node, env, device),
         Node::Identity(node) => Ok(vec![resolve::first(env, &node.name, &node.inputs, device)?]),
@@ -73,7 +74,7 @@ fn operator_kind(node: &Node) -> String {
 mod tests {
     use onnx_ir::{
         DType, Node,
-        node::{gelu::GeluNodeBuilder, identity::IdentityNodeBuilder},
+        node::{identity::IdentityNodeBuilder, prelu::PReluNodeBuilder},
     };
 
     use super::*;
@@ -100,15 +101,16 @@ mod tests {
 
     #[test]
     fn unsupported_errors_name_the_operator() {
-        let node = Node::Gelu(
-            GeluNodeBuilder::new("")
+        let node = Node::PRelu(
+            PReluNodeBuilder::new("")
                 .input_tensor("x", 1, DType::F32)
+                .input_tensor("slope", 1, DType::F32)
                 .output_tensor("y", 1, DType::F32)
                 .build(),
         );
 
         let error = execute(&node, &Env::new(), &Device::default()).unwrap_err();
 
-        assert_eq!(error, TynxError::UnsupportedOp("Gelu".to_string()));
+        assert_eq!(error, TynxError::UnsupportedOp("PRelu".to_string()));
     }
 }
