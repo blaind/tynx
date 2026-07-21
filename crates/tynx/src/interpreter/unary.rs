@@ -4,7 +4,7 @@ use burn::tensor::Device;
 use onnx_ir::node::{
     abs::AbsNode, acos::AcosNode, acosh::AcoshNode, asin::AsinNode, asinh::AsinhNode,
     atan::AtanNode, atanh::AtanhNode, ceil::CeilNode, cos::CosNode, cosh::CoshNode, erf::ErfNode,
-    exp::ExpNode, floor::FloorNode, log::LogNode, neg::NegNode, relu::ReluNode,
+    exp::ExpNode, floor::FloorNode, log::LogNode, neg::NegNode, relu::ReluNode, round::RoundNode,
     sigmoid::SigmoidNode, sin::SinNode, sinh::SinhNode, sqrt::SqrtNode, tan::TanNode,
     tanh::TanhNode,
 };
@@ -122,6 +122,11 @@ pub(super) fn floor(node: &FloorNode, env: &Env, device: &Device) -> Result<Vec<
     Ok(vec![Value::Tensor(input.floor())])
 }
 
+pub(super) fn round(node: &RoundNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
+    let input = resolve::first(env, &node.name, &node.inputs, device)?.into_tensor()?;
+    Ok(vec![Value::Tensor(input.round())])
+}
+
 #[cfg(test)]
 mod tests {
     use burn::tensor::TensorData;
@@ -133,8 +138,8 @@ mod tests {
             atanh::AtanhNodeBuilder, ceil::CeilNodeBuilder, cos::CosNodeBuilder,
             cosh::CoshNodeBuilder, erf::ErfNodeBuilder, exp::ExpNodeBuilder,
             floor::FloorNodeBuilder, log::LogNodeBuilder, neg::NegNodeBuilder,
-            relu::ReluNodeBuilder, sigmoid::SigmoidNodeBuilder, sin::SinNodeBuilder,
-            sinh::SinhNodeBuilder, sqrt::SqrtNodeBuilder, tan::TanNodeBuilder,
+            relu::ReluNodeBuilder, round::RoundNodeBuilder, sigmoid::SigmoidNodeBuilder,
+            sin::SinNodeBuilder, sinh::SinhNodeBuilder, sqrt::SqrtNodeBuilder, tan::TanNodeBuilder,
             tanh::TanhNodeBuilder,
         },
     };
@@ -781,5 +786,34 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(output, [-2.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn rounds_halfway_values_to_even() {
+        let node = RoundNodeBuilder::new("round")
+            .input_tensor("x", 1, DType::F32)
+            .output_tensor("y", 1, DType::F32)
+            .build();
+        let device = Device::default();
+        let input = Value::from_tensor_data(
+            TensorData::new(vec![-2.5_f32, -1.5, -0.5, 0.5, 1.5, 2.5], [6]),
+            1,
+            &device,
+        )
+        .unwrap();
+        let mut env = Env::new();
+        env.insert("x".to_string(), input);
+
+        let output = round(&node, &env, &device)
+            .unwrap()
+            .pop()
+            .unwrap()
+            .into_tensor()
+            .unwrap()
+            .into_data()
+            .iter::<f32>()
+            .collect::<Vec<_>>();
+
+        assert_eq!(output, [-2.0, -2.0, 0.0, 0.0, 2.0, 2.0]);
     }
 }

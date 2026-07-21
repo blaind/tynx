@@ -308,6 +308,11 @@ impl DynTensor {
     pub fn floor(self) -> Self {
         map_float!(self, |tensor| tensor.floor())
     }
+
+    /// Round each element to the nearest integer, with ties to even.
+    pub fn round(self) -> Self {
+        map_float!(self, |tensor| tensor.round())
+    }
 }
 
 #[cfg(test)]

@@ -37,6 +37,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Mul(node) => binary::mul(node, env, device),
         Node::Neg(node) => unary::neg(node, env, device),
         Node::Relu(node) => unary::relu(node, env, device),
+        Node::Round(node) => unary::round(node, env, device),
         Node::Sigmoid(node) => unary::sigmoid(node, env, device),
         Node::Sin(node) => unary::sin(node, env, device),
         Node::Sinh(node) => unary::sinh(node, env, device),
@@ -60,7 +61,7 @@ fn operator_kind(node: &Node) -> String {
 mod tests {
     use onnx_ir::{
         DType, Node,
-        node::{identity::IdentityNodeBuilder, round::RoundNodeBuilder},
+        node::{identity::IdentityNodeBuilder, reciprocal::ReciprocalNodeBuilder},
     };
 
     use super::*;
@@ -87,8 +88,8 @@ mod tests {
 
     #[test]
     fn unsupported_errors_name_the_operator() {
-        let node = Node::Round(
-            RoundNodeBuilder::new("")
+        let node = Node::Reciprocal(
+            ReciprocalNodeBuilder::new("")
                 .input_tensor("x", 1, DType::F32)
                 .output_tensor("y", 1, DType::F32)
                 .build(),
@@ -96,6 +97,6 @@ mod tests {
 
         let error = execute(&node, &Env::new(), &Device::default()).unwrap_err();
 
-        assert_eq!(error, TynxError::UnsupportedOp("Round".to_string()));
+        assert_eq!(error, TynxError::UnsupportedOp("Reciprocal".to_string()));
     }
 }
