@@ -703,7 +703,7 @@
     "test_hardsigmoid_example": "pass",
     "test_hardsigmoid_example_expanded_ver18": "runtime_unsupported",
     "test_hardsigmoid_expanded_ver18": "runtime_unsupported",
-    "test_hardswish": "runtime_unsupported",
+    "test_hardswish": "pass",
     "test_hardswish_expanded": "pass",
     "test_identity": "pass",
     "test_identity_opt": "parse_unsupported",

@@ -5,8 +5,8 @@ use onnx_ir::node::{
     abs::AbsNode, acos::AcosNode, acosh::AcoshNode, asin::AsinNode, asinh::AsinhNode,
     atan::AtanNode, atanh::AtanhNode, ceil::CeilNode, celu::CeluNode, cos::CosNode, cosh::CoshNode,
     elu::EluNode, erf::ErfNode, exp::ExpNode, floor::FloorNode, hard_sigmoid::HardSigmoidNode,
-    leaky_relu::LeakyReluNode, log::LogNode, mish::MishNode, neg::NegNode,
-    reciprocal::ReciprocalNode, relu::ReluNode, round::RoundNode, selu::SeluNode,
+    hard_swish::HardSwishNode, leaky_relu::LeakyReluNode, log::LogNode, mish::MishNode,
+    neg::NegNode, reciprocal::ReciprocalNode, relu::ReluNode, round::RoundNode, selu::SeluNode,
     sigmoid::SigmoidNode, sign::SignNode, sin::SinNode, sinh::SinhNode, softplus::SoftplusNode,
     softsign::SoftsignNode, sqrt::SqrtNode, tan::TanNode, tanh::TanhNode,
     thresholded_relu::ThresholdedReluNode,
@@ -199,6 +199,11 @@ pub(super) fn mish(node: &MishNode, env: &Env, device: &Device) -> Result<Vec<Va
     Ok(vec![Value::Tensor(input.mish())])
 }
 
+pub(super) fn hard_swish(node: &HardSwishNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
+    let input = resolve::first(env, &node.name, &node.inputs, device)?.into_tensor()?;
+    Ok(vec![Value::Tensor(input.hard_swish())])
+}
+
 #[cfg(test)]
 mod tests {
     use burn::tensor::TensorData;
@@ -221,6 +226,7 @@ mod tests {
             exp::ExpNodeBuilder,
             floor::FloorNodeBuilder,
             hard_sigmoid::{HardSigmoidConfig, HardSigmoidNodeBuilder},
+            hard_swish::HardSwishNodeBuilder,
             leaky_relu::{LeakyReluConfig, LeakyReluNodeBuilder},
             log::LogNodeBuilder,
             mish::MishNodeBuilder,
@@ -1221,5 +1227,34 @@ mod tests {
         for (actual, expected) in output.into_iter().zip([-0.303_401_47, 0.0, 0.865_098_36]) {
             assert!((actual - expected).abs() < 1e-6);
         }
+    }
+
+    #[test]
+    fn applies_hard_swish() {
+        let node = HardSwishNodeBuilder::new("hard_swish")
+            .input_tensor("x", 1, DType::F32)
+            .output_tensor("y", 1, DType::F32)
+            .build();
+        let device = Device::default();
+        let input = Value::from_tensor_data(
+            TensorData::new(vec![-6.0_f32, -3.0, 0.0, 3.0, 6.0], [5]),
+            1,
+            &device,
+        )
+        .unwrap();
+        let mut env = Env::new();
+        env.insert("x".to_string(), input);
+
+        let output = hard_swish(&node, &env, &device)
+            .unwrap()
+            .pop()
+            .unwrap()
+            .into_tensor()
+            .unwrap()
+            .into_data()
+            .iter::<f32>()
+            .collect::<Vec<_>>();
+
+        assert_eq!(output, [0.0, 0.0, 0.0, 3.0, 6.0]);
     }
 }

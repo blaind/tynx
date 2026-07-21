@@ -35,6 +35,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Exp(node) => unary::exp(node, env, device),
         Node::Floor(node) => unary::floor(node, env, device),
         Node::HardSigmoid(node) => unary::hard_sigmoid(node, env, device),
+        Node::HardSwish(node) => unary::hard_swish(node, env, device),
         Node::Identity(node) => Ok(vec![resolve::first(env, &node.name, &node.inputs, device)?]),
         Node::LeakyRelu(node) => unary::leaky_relu(node, env, device),
         Node::Log(node) => unary::log(node, env, device),
@@ -72,7 +73,7 @@ fn operator_kind(node: &Node) -> String {
 mod tests {
     use onnx_ir::{
         DType, Node,
-        node::{hard_swish::HardSwishNodeBuilder, identity::IdentityNodeBuilder},
+        node::{gelu::GeluNodeBuilder, identity::IdentityNodeBuilder},
     };
 
     use super::*;
@@ -99,8 +100,8 @@ mod tests {
 
     #[test]
     fn unsupported_errors_name_the_operator() {
-        let node = Node::HardSwish(
-            HardSwishNodeBuilder::new("")
+        let node = Node::Gelu(
+            GeluNodeBuilder::new("")
                 .input_tensor("x", 1, DType::F32)
                 .output_tensor("y", 1, DType::F32)
                 .build(),
@@ -108,6 +109,6 @@ mod tests {
 
         let error = execute(&node, &Env::new(), &Device::default()).unwrap_err();
 
-        assert_eq!(error, TynxError::UnsupportedOp("HardSwish".to_string()));
+        assert_eq!(error, TynxError::UnsupportedOp("Gelu".to_string()));
     }
 }

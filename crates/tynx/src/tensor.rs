@@ -369,6 +369,11 @@ impl DynTensor {
     pub fn mish(self) -> Self {
         map_float!(self, |tensor| activation::mish(tensor))
     }
+
+    /// Apply the hard swish activation function element-wise.
+    pub fn hard_swish(self) -> Self {
+        map_float!(self, |tensor| activation::hard_swish(tensor))
+    }
 }
 
 #[cfg(test)]
