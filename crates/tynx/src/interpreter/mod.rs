@@ -2,6 +2,7 @@
 
 mod binary;
 mod clip;
+mod comparison;
 mod pow;
 mod resolve;
 mod unary;
@@ -35,14 +36,19 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Cosh(node) => unary::cosh(node, env, device),
         Node::Div(node) => binary::div(node, env, device),
         Node::Elu(node) => unary::elu(node, env, device),
+        Node::Equal(node) => comparison::equal(node, env, device),
         Node::Erf(node) => unary::erf(node, env, device),
         Node::Exp(node) => unary::exp(node, env, device),
         Node::Floor(node) => unary::floor(node, env, device),
         Node::Gelu(node) => unary::gelu(node, env, device),
+        Node::Greater(node) => comparison::greater(node, env, device),
+        Node::GreaterOrEqual(node) => comparison::greater_or_equal(node, env, device),
         Node::HardSigmoid(node) => unary::hard_sigmoid(node, env, device),
         Node::HardSwish(node) => unary::hard_swish(node, env, device),
         Node::Identity(node) => Ok(vec![resolve::first(env, &node.name, &node.inputs, device)?]),
         Node::LeakyRelu(node) => unary::leaky_relu(node, env, device),
+        Node::Less(node) => comparison::less(node, env, device),
+        Node::LessOrEqual(node) => comparison::less_or_equal(node, env, device),
         Node::Log(node) => unary::log(node, env, device),
         Node::Max(node) => variadic::max(node, env, device),
         Node::Mean(node) => variadic::mean(node, env, device),
