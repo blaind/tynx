@@ -180,6 +180,13 @@ impl DynTensor {
         Ok(zip_float!(left, right, |left, right| left.sub(right)))
     }
 
+    /// Multiply two tensors using ONNX-style multidirectional broadcasting.
+    pub fn mul_broadcast(self, other: Self) -> Result<Self> {
+        let (left, right) = Self::broadcast_pair(self, other)?;
+
+        Ok(zip_float!(left, right, |left, right| left.mul(right)))
+    }
+
     fn broadcast_pair(left: Self, right: Self) -> Result<(Self, Self)> {
         let rank = left.rank().max(right.rank());
         Ok((left.to_rank(rank)?, right.to_rank(rank)?))

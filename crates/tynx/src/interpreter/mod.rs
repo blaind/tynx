@@ -19,6 +19,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
     match node {
         Node::Add(node) => binary::add(node, env, device),
         Node::Identity(node) => Ok(vec![resolve::first(env, &node.name, &node.inputs, device)?]),
+        Node::Mul(node) => binary::mul(node, env, device),
         Node::Relu(node) => unary::relu(node, env, device),
         Node::Sigmoid(node) => unary::sigmoid(node, env, device),
         Node::Sub(node) => binary::sub(node, env, device),
