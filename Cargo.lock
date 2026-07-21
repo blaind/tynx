@@ -5148,6 +5148,7 @@ name = "tynx"
 version = "0.1.0"
 dependencies = [
  "burn",
+ "getrandom 0.4.3",
  "half",
  "log",
  "onnx-ir",
