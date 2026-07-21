@@ -1,0 +1,32 @@
+[package]
+name = "tynx-wasm"
+description = "WebAssembly bindings for the Tynx neural network runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["webgpu"]
+webgpu = []
+
+[dependencies]
+burn = { git = "https://github.com/tracel-ai/burn", rev = "78f10aec1ca6c6ffb1edd17a0fa131ae59ad5403", default-features = false, features = ["flex", "std"] }
+console_error_panic_hook = "0.1"
+js-sys = "0.3"
+tynx-core = { package = "tynx", path = "../tynx", default-features = false, features = ["flex"] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+burn = { git = "https://github.com/tracel-ai/burn", rev = "78f10aec1ca6c6ffb1edd17a0fa131ae59ad5403", default-features = false, features = ["autotune", "wgpu"] }
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"
+
+[lints]
+workspace = true
