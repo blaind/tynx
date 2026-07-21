@@ -333,6 +333,11 @@ impl DynTensor {
     pub fn elu(self, alpha: f64) -> Self {
         map_float!(self, |tensor| activation::elu(tensor, alpha))
     }
+
+    /// Apply the leaky rectified linear unit function element-wise.
+    pub fn leaky_relu(self, alpha: f64) -> Self {
+        map_float!(self, |tensor| activation::leaky_relu(tensor, alpha))
+    }
 }
 
 #[cfg(test)]

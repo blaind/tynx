@@ -34,6 +34,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Exp(node) => unary::exp(node, env, device),
         Node::Floor(node) => unary::floor(node, env, device),
         Node::Identity(node) => Ok(vec![resolve::first(env, &node.name, &node.inputs, device)?]),
+        Node::LeakyRelu(node) => unary::leaky_relu(node, env, device),
         Node::Log(node) => unary::log(node, env, device),
         Node::Mul(node) => binary::mul(node, env, device),
         Node::Neg(node) => unary::neg(node, env, device),
@@ -67,7 +68,7 @@ mod tests {
         DType, Node,
         node::{
             identity::IdentityNodeBuilder,
-            leaky_relu::{LeakyReluConfig, LeakyReluNodeBuilder},
+            selu::{SeluConfig, SeluNodeBuilder},
         },
     };
 
@@ -95,16 +96,16 @@ mod tests {
 
     #[test]
     fn unsupported_errors_name_the_operator() {
-        let node = Node::LeakyRelu(
-            LeakyReluNodeBuilder::new("")
+        let node = Node::Selu(
+            SeluNodeBuilder::new("")
                 .input_tensor("x", 1, DType::F32)
                 .output_tensor("y", 1, DType::F32)
-                .config(LeakyReluConfig::new(0.01))
+                .config(SeluConfig::new(1.673_263_2, 1.050_701))
                 .build(),
         );
 
         let error = execute(&node, &Env::new(), &Device::default()).unwrap_err();
 
-        assert_eq!(error, TynxError::UnsupportedOp("LeakyRelu".to_string()));
+        assert_eq!(error, TynxError::UnsupportedOp("Selu".to_string()));
     }
 }

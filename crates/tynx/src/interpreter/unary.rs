@@ -4,10 +4,10 @@ use burn::tensor::Device;
 use onnx_ir::node::{
     abs::AbsNode, acos::AcosNode, acosh::AcoshNode, asin::AsinNode, asinh::AsinhNode,
     atan::AtanNode, atanh::AtanhNode, ceil::CeilNode, cos::CosNode, cosh::CoshNode, elu::EluNode,
-    erf::ErfNode, exp::ExpNode, floor::FloorNode, log::LogNode, neg::NegNode,
-    reciprocal::ReciprocalNode, relu::ReluNode, round::RoundNode, sigmoid::SigmoidNode,
-    sign::SignNode, sin::SinNode, sinh::SinhNode, softplus::SoftplusNode, sqrt::SqrtNode,
-    tan::TanNode, tanh::TanhNode,
+    erf::ErfNode, exp::ExpNode, floor::FloorNode, leaky_relu::LeakyReluNode, log::LogNode,
+    neg::NegNode, reciprocal::ReciprocalNode, relu::ReluNode, round::RoundNode,
+    sigmoid::SigmoidNode, sign::SignNode, sin::SinNode, sinh::SinhNode, softplus::SoftplusNode,
+    sqrt::SqrtNode, tan::TanNode, tanh::TanhNode,
 };
 
 use super::{Env, resolve};
@@ -148,6 +148,11 @@ pub(super) fn elu(node: &EluNode, env: &Env, device: &Device) -> Result<Vec<Valu
     Ok(vec![Value::Tensor(input.elu(node.config.alpha))])
 }
 
+pub(super) fn leaky_relu(node: &LeakyReluNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
+    let input = resolve::first(env, &node.name, &node.inputs, device)?.into_tensor()?;
+    Ok(vec![Value::Tensor(input.leaky_relu(node.config.alpha))])
+}
+
 #[cfg(test)]
 mod tests {
     use burn::tensor::TensorData;
@@ -168,6 +173,7 @@ mod tests {
             erf::ErfNodeBuilder,
             exp::ExpNodeBuilder,
             floor::FloorNodeBuilder,
+            leaky_relu::{LeakyReluConfig, LeakyReluNodeBuilder},
             log::LogNodeBuilder,
             neg::NegNodeBuilder,
             reciprocal::ReciprocalNodeBuilder,
@@ -968,5 +974,32 @@ mod tests {
         assert!((output[0] + 1.264_241_1).abs() < 1e-6);
         assert_eq!(output[1], 0.0);
         assert_eq!(output[2], 1.0);
+    }
+
+    #[test]
+    fn applies_leaky_relu_with_alpha() {
+        let node = LeakyReluNodeBuilder::new("leaky_relu")
+            .input_tensor("x", 1, DType::F32)
+            .output_tensor("y", 1, DType::F32)
+            .config(LeakyReluConfig::new(0.2))
+            .build();
+        let device = Device::default();
+        let input =
+            Value::from_tensor_data(TensorData::new(vec![-2.0_f32, 0.0, 3.0], [3]), 1, &device)
+                .unwrap();
+        let mut env = Env::new();
+        env.insert("x".to_string(), input);
+
+        let output = leaky_relu(&node, &env, &device)
+            .unwrap()
+            .pop()
+            .unwrap()
+            .into_tensor()
+            .unwrap()
+            .into_data()
+            .iter::<f32>()
+            .collect::<Vec<_>>();
+
+        assert_eq!(output, [-0.4, 0.0, 3.0]);
     }
 }
