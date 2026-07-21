@@ -268,6 +268,11 @@ impl DynTensor {
     pub fn acos(self) -> Self {
         map_float!(self, |tensor| tensor.acos())
     }
+
+    /// Apply the inverse hyperbolic cosine function element-wise.
+    pub fn acosh(self) -> Self {
+        map_float!(self, |tensor| tensor.acosh())
+    }
 }
 
 #[cfg(test)]

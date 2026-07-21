@@ -19,6 +19,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
     match node {
         Node::Abs(node) => unary::abs(node, env, device),
         Node::Acos(node) => unary::acos(node, env, device),
+        Node::Acosh(node) => unary::acosh(node, env, device),
         Node::Add(node) => binary::add(node, env, device),
         Node::Cos(node) => unary::cos(node, env, device),
         Node::Cosh(node) => unary::cosh(node, env, device),
@@ -52,7 +53,7 @@ fn operator_kind(node: &Node) -> String {
 mod tests {
     use onnx_ir::{
         DType, Node,
-        node::{acosh::AcoshNodeBuilder, identity::IdentityNodeBuilder},
+        node::{asin::AsinNodeBuilder, identity::IdentityNodeBuilder},
     };
 
     use super::*;
@@ -79,8 +80,8 @@ mod tests {
 
     #[test]
     fn unsupported_errors_name_the_operator() {
-        let node = Node::Acosh(
-            AcoshNodeBuilder::new("")
+        let node = Node::Asin(
+            AsinNodeBuilder::new("")
                 .input_tensor("x", 1, DType::F32)
                 .output_tensor("y", 1, DType::F32)
                 .build(),
@@ -88,6 +89,6 @@ mod tests {
 
         let error = execute(&node, &Env::new(), &Device::default()).unwrap_err();
 
-        assert_eq!(error, TynxError::UnsupportedOp("Acosh".to_string()));
+        assert_eq!(error, TynxError::UnsupportedOp("Asin".to_string()));
     }
 }
