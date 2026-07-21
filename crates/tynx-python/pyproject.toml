@@ -9,7 +9,13 @@ description = "A lightweight neural network runtime for inference and training"
 requires-python = ">=3.9"
 license = "MIT OR Apache-2.0"
 
+[dependency-groups]
+test = ["pytest>=8,<10", "pytest-xdist>=3,<4"]
+
 [tool.maturin]
 module-name = "tynx._tynx"
 python-source = "python"
 strip = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

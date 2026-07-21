@@ -20,6 +20,9 @@ Build the extension into the active virtual environment, then run its smoke test
 
 ```sh
 cd crates/tynx-python
-maturin develop
-python tests/smoke.py
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install "maturin>=1.9,<2"
+maturin develop --locked --group test
+pytest -n auto --maxprocesses 4
 ```

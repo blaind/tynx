@@ -1,2 +1,6 @@
 /target/
 /.cache/
+.pytest_cache/
+.venv/
+__pycache__/
+/crates/tynx-python/python/tynx/_tynx*.so
