@@ -6,6 +6,7 @@ mod comparison;
 mod logical;
 mod pow;
 mod resolve;
+mod shape;
 mod unary;
 mod variadic;
 mod where_op;
@@ -43,6 +44,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Erf(node) => unary::erf(node, env, device),
         Node::Exp(node) => unary::exp(node, env, device),
         Node::Floor(node) => unary::floor(node, env, device),
+        Node::Flatten(node) => shape::flatten(node, env, device),
         Node::Gelu(node) => unary::gelu(node, env, device),
         Node::Greater(node) => comparison::greater(node, env, device),
         Node::GreaterOrEqual(node) => comparison::greater_or_equal(node, env, device),
@@ -64,6 +66,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::PRelu(node) => binary::prelu(node, env, device),
         Node::Pow(node) => pow::pow(node, env, device),
         Node::Reciprocal(node) => unary::reciprocal(node, env, device),
+        Node::Reshape(node) => shape::reshape(node, env, device),
         Node::Relu(node) => unary::relu(node, env, device),
         Node::Round(node) => unary::round(node, env, device),
         Node::Selu(node) => unary::selu(node, env, device),
@@ -74,11 +77,14 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Softplus(node) => unary::softplus(node, env, device),
         Node::Softsign(node) => unary::softsign(node, env, device),
         Node::Sqrt(node) => unary::sqrt(node, env, device),
+        Node::Squeeze(node) => shape::squeeze(node, env, device),
         Node::Sub(node) => binary::sub(node, env, device),
         Node::Sum(node) => variadic::sum(node, env, device),
         Node::Tan(node) => unary::tan(node, env, device),
         Node::Tanh(node) => unary::tanh(node, env, device),
         Node::ThresholdedRelu(node) => unary::thresholded_relu(node, env, device),
+        Node::Transpose(node) => shape::transpose(node, env, device),
+        Node::Unsqueeze(node) => shape::unsqueeze(node, env, device),
         Node::Where(node) => where_op::where_op(node, env, device),
         Node::Xor(node) => logical::xor(node, env, device),
         _ => Err(TynxError::UnsupportedOp(operator_kind(node))),

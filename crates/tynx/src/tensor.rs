@@ -79,6 +79,20 @@ macro_rules! map_bool {
     };
 }
 
+macro_rules! reshape_dyn {
+    ($tensor:expr, $dims:expr, $kind:ident) => {
+        match $dims.as_slice() {
+            [d0] => $kind::R1($tensor.reshape([*d0])),
+            [d0, d1] => $kind::R2($tensor.reshape([*d0, *d1])),
+            [d0, d1, d2] => $kind::R3($tensor.reshape([*d0, *d1, *d2])),
+            [d0, d1, d2, d3] => $kind::R4($tensor.reshape([*d0, *d1, *d2, *d3])),
+            [d0, d1, d2, d3, d4] => $kind::R5($tensor.reshape([*d0, *d1, *d2, *d3, *d4])),
+            [d0, d1, d2, d3, d4, d5] => $kind::R6($tensor.reshape([*d0, *d1, *d2, *d3, *d4, *d5])),
+            _ => return Err(TynxError::RankOverflow($dims.len())),
+        }
+    };
+}
+
 macro_rules! zip_float {
     ($left:expr, $right:expr, |$a:ident, $b:ident| $body:expr) => {
         match ($left, $right) {
@@ -293,6 +307,41 @@ impl_metadata!(DynInt);
 impl_metadata!(DynBool);
 
 impl DynTensor {
+    /// Reshape the tensor while preserving its elements and dtype.
+    pub fn reshape(self, dims: Vec<usize>) -> Result<Self> {
+        Ok(match self {
+            Self::R1(tensor) => reshape_dyn!(tensor, dims, DynTensor),
+            Self::R2(tensor) => reshape_dyn!(tensor, dims, DynTensor),
+            Self::R3(tensor) => reshape_dyn!(tensor, dims, DynTensor),
+            Self::R4(tensor) => reshape_dyn!(tensor, dims, DynTensor),
+            Self::R5(tensor) => reshape_dyn!(tensor, dims, DynTensor),
+            Self::R6(tensor) => reshape_dyn!(tensor, dims, DynTensor),
+        })
+    }
+
+    /// Permute the tensor dimensions.
+    pub fn permute(self, axes: Vec<usize>) -> Result<Self> {
+        if axes.len() != self.rank() {
+            return Err(TynxError::Shape(format!(
+                "permutation has {} axes for rank {}",
+                axes.len(),
+                self.rank()
+            )));
+        }
+        Ok(match self {
+            Self::R1(tensor) => Self::R1(tensor.permute([axes[0]])),
+            Self::R2(tensor) => Self::R2(tensor.permute([axes[0], axes[1]])),
+            Self::R3(tensor) => Self::R3(tensor.permute([axes[0], axes[1], axes[2]])),
+            Self::R4(tensor) => Self::R4(tensor.permute([axes[0], axes[1], axes[2], axes[3]])),
+            Self::R5(tensor) => {
+                Self::R5(tensor.permute([axes[0], axes[1], axes[2], axes[3], axes[4]]))
+            }
+            Self::R6(tensor) => {
+                Self::R6(tensor.permute([axes[0], axes[1], axes[2], axes[3], axes[4], axes[5]]))
+            }
+        })
+    }
+
     /// Promote the tensor by adding leading singleton dimensions.
     pub fn to_rank(self, target: usize) -> Result<Self> {
         let current = self.rank();
@@ -677,6 +726,41 @@ impl DynTensor {
 }
 
 impl DynInt {
+    /// Reshape the tensor while preserving its elements and dtype.
+    pub fn reshape(self, dims: Vec<usize>) -> Result<Self> {
+        Ok(match self {
+            Self::R1(tensor) => reshape_dyn!(tensor, dims, DynInt),
+            Self::R2(tensor) => reshape_dyn!(tensor, dims, DynInt),
+            Self::R3(tensor) => reshape_dyn!(tensor, dims, DynInt),
+            Self::R4(tensor) => reshape_dyn!(tensor, dims, DynInt),
+            Self::R5(tensor) => reshape_dyn!(tensor, dims, DynInt),
+            Self::R6(tensor) => reshape_dyn!(tensor, dims, DynInt),
+        })
+    }
+
+    /// Permute the tensor dimensions.
+    pub fn permute(self, axes: Vec<usize>) -> Result<Self> {
+        if axes.len() != self.rank() {
+            return Err(TynxError::Shape(format!(
+                "permutation has {} axes for rank {}",
+                axes.len(),
+                self.rank()
+            )));
+        }
+        Ok(match self {
+            Self::R1(tensor) => Self::R1(tensor.permute([axes[0]])),
+            Self::R2(tensor) => Self::R2(tensor.permute([axes[0], axes[1]])),
+            Self::R3(tensor) => Self::R3(tensor.permute([axes[0], axes[1], axes[2]])),
+            Self::R4(tensor) => Self::R4(tensor.permute([axes[0], axes[1], axes[2], axes[3]])),
+            Self::R5(tensor) => {
+                Self::R5(tensor.permute([axes[0], axes[1], axes[2], axes[3], axes[4]]))
+            }
+            Self::R6(tensor) => {
+                Self::R6(tensor.permute([axes[0], axes[1], axes[2], axes[3], axes[4], axes[5]]))
+            }
+        })
+    }
+
     /// Promote the tensor by adding leading singleton dimensions.
     pub fn to_rank(self, target: usize) -> Result<Self> {
         let current = self.rank();
@@ -864,6 +948,41 @@ fn scalar_as_u64(value: crate::Scalar) -> u64 {
 }
 
 impl DynBool {
+    /// Reshape the tensor while preserving its elements and dtype.
+    pub fn reshape(self, dims: Vec<usize>) -> Result<Self> {
+        Ok(match self {
+            Self::R1(tensor) => reshape_dyn!(tensor, dims, DynBool),
+            Self::R2(tensor) => reshape_dyn!(tensor, dims, DynBool),
+            Self::R3(tensor) => reshape_dyn!(tensor, dims, DynBool),
+            Self::R4(tensor) => reshape_dyn!(tensor, dims, DynBool),
+            Self::R5(tensor) => reshape_dyn!(tensor, dims, DynBool),
+            Self::R6(tensor) => reshape_dyn!(tensor, dims, DynBool),
+        })
+    }
+
+    /// Permute the tensor dimensions.
+    pub fn permute(self, axes: Vec<usize>) -> Result<Self> {
+        if axes.len() != self.rank() {
+            return Err(TynxError::Shape(format!(
+                "permutation has {} axes for rank {}",
+                axes.len(),
+                self.rank()
+            )));
+        }
+        Ok(match self {
+            Self::R1(tensor) => Self::R1(tensor.permute([axes[0]])),
+            Self::R2(tensor) => Self::R2(tensor.permute([axes[0], axes[1]])),
+            Self::R3(tensor) => Self::R3(tensor.permute([axes[0], axes[1], axes[2]])),
+            Self::R4(tensor) => Self::R4(tensor.permute([axes[0], axes[1], axes[2], axes[3]])),
+            Self::R5(tensor) => {
+                Self::R5(tensor.permute([axes[0], axes[1], axes[2], axes[3], axes[4]]))
+            }
+            Self::R6(tensor) => {
+                Self::R6(tensor.permute([axes[0], axes[1], axes[2], axes[3], axes[4], axes[5]]))
+            }
+        })
+    }
+
     /// Promote the tensor by adding leading singleton dimensions.
     pub fn to_rank(self, target: usize) -> Result<Self> {
         let current = self.rank();

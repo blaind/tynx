@@ -1,7 +1,7 @@
 //! Resolution of runtime and embedded ONNX inputs.
 
 use burn::tensor::Device;
-use onnx_ir::ir::Argument;
+use onnx_ir::ir::{ArgType, Argument};
 
 use super::Env;
 use crate::{Result, TynxError, Value};
@@ -34,6 +34,9 @@ pub(super) fn input(env: &Env, argument: &Argument, device: &Device) -> Result<V
         return Ok(value.clone());
     }
     if let Some(data) = argument.value() {
+        if matches!(argument.ty, ArgType::Shape(_)) {
+            return Ok(Value::Shape(data.iter::<i64>().collect()));
+        }
         return Value::from_tensor_data(data, argument.ty.rank(), device);
     }
 
