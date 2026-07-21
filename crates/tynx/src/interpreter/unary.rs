@@ -2,7 +2,8 @@
 
 use burn::tensor::Device;
 use onnx_ir::node::{
-    exp::ExpNode, log::LogNode, relu::ReluNode, sigmoid::SigmoidNode, tanh::TanhNode,
+    exp::ExpNode, log::LogNode, relu::ReluNode, sigmoid::SigmoidNode, sqrt::SqrtNode,
+    tanh::TanhNode,
 };
 
 use super::{Env, resolve};
@@ -33,6 +34,11 @@ pub(super) fn log(node: &LogNode, env: &Env, device: &Device) -> Result<Vec<Valu
     Ok(vec![Value::Tensor(input.log())])
 }
 
+pub(super) fn sqrt(node: &SqrtNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
+    let input = resolve::first(env, &node.name, &node.inputs, device)?.into_tensor()?;
+    Ok(vec![Value::Tensor(input.sqrt())])
+}
+
 #[cfg(test)]
 mod tests {
     use burn::tensor::TensorData;
@@ -40,7 +46,7 @@ mod tests {
         DType,
         node::{
             exp::ExpNodeBuilder, log::LogNodeBuilder, relu::ReluNodeBuilder,
-            sigmoid::SigmoidNodeBuilder, tanh::TanhNodeBuilder,
+            sigmoid::SigmoidNodeBuilder, sqrt::SqrtNodeBuilder, tanh::TanhNodeBuilder,
         },
     };
 
@@ -185,5 +191,31 @@ mod tests {
 
         assert_eq!(output[0], 0.0);
         assert!((output[1] - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn takes_square_roots() {
+        let node = SqrtNodeBuilder::new("sqrt")
+            .input_tensor("x", 1, DType::F32)
+            .output_tensor("y", 1, DType::F32)
+            .build();
+        let device = Device::default();
+        let input =
+            Value::from_tensor_data(TensorData::new(vec![0.0_f32, 4.0, 9.0], [3]), 1, &device)
+                .unwrap();
+        let mut env = Env::new();
+        env.insert("x".to_string(), input);
+
+        let output = sqrt(&node, &env, &device)
+            .unwrap()
+            .pop()
+            .unwrap()
+            .into_tensor()
+            .unwrap()
+            .into_data()
+            .iter::<f32>()
+            .collect::<Vec<_>>();
+
+        assert_eq!(output, [0.0, 2.0, 3.0]);
     }
 }

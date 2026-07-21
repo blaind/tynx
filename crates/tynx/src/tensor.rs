@@ -223,6 +223,11 @@ impl DynTensor {
     pub fn log(self) -> Self {
         map_float!(self, |tensor| tensor.log())
     }
+
+    /// Apply the square root function element-wise.
+    pub fn sqrt(self) -> Self {
+        map_float!(self, |tensor| tensor.sqrt())
+    }
 }
 
 #[cfg(test)]
