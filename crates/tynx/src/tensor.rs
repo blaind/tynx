@@ -283,6 +283,11 @@ impl DynTensor {
     pub fn asinh(self) -> Self {
         map_float!(self, |tensor| tensor.asinh())
     }
+
+    /// Apply the inverse tangent function element-wise.
+    pub fn atan(self) -> Self {
+        map_float!(self, |tensor| tensor.atan())
+    }
 }
 
 #[cfg(test)]
