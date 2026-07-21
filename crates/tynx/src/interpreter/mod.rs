@@ -1,6 +1,7 @@
 //! Runtime dispatch for individual ONNX nodes.
 
 mod binary;
+mod clip;
 mod resolve;
 mod unary;
 
@@ -27,6 +28,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Atanh(node) => unary::atanh(node, env, device),
         Node::Ceil(node) => unary::ceil(node, env, device),
         Node::Celu(node) => unary::celu(node, env, device),
+        Node::Clip(node) => clip::clip(node, env, device),
         Node::Cos(node) => unary::cos(node, env, device),
         Node::Cosh(node) => unary::cosh(node, env, device),
         Node::Div(node) => binary::div(node, env, device),
@@ -74,11 +76,8 @@ fn operator_kind(node: &Node) -> String {
 #[cfg(test)]
 mod tests {
     use onnx_ir::{
-        DType, Node,
-        node::{
-            clip::{ClipConfig, ClipNodeBuilder},
-            identity::IdentityNodeBuilder,
-        },
+        BoolStore, DType, Node,
+        node::{identity::IdentityNodeBuilder, is_nan::IsNaNNodeBuilder},
     };
 
     use super::*;
@@ -105,19 +104,15 @@ mod tests {
 
     #[test]
     fn unsupported_errors_name_the_operator() {
-        let node = Node::Clip(
-            ClipNodeBuilder::new("")
+        let node = Node::IsNaN(
+            IsNaNNodeBuilder::new("")
                 .input_tensor("x", 1, DType::F32)
-                .output_tensor("y", 1, DType::F32)
-                .config(ClipConfig {
-                    min: None,
-                    max: None,
-                })
+                .output_tensor("y", 1, DType::Bool(BoolStore::Native))
                 .build(),
         );
 
         let error = execute(&node, &Env::new(), &Device::default()).unwrap_err();
 
-        assert_eq!(error, TynxError::UnsupportedOp("Clip".to_string()));
+        assert_eq!(error, TynxError::UnsupportedOp("IsNaN".to_string()));
     }
 }

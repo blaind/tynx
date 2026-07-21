@@ -53,6 +53,19 @@ macro_rules! map_float {
     };
 }
 
+macro_rules! map_int {
+    ($tensor:expr, |$value:ident| $body:expr) => {
+        match $tensor {
+            DynInt::R1($value) => DynInt::R1($body),
+            DynInt::R2($value) => DynInt::R2($body),
+            DynInt::R3($value) => DynInt::R3($body),
+            DynInt::R4($value) => DynInt::R4($body),
+            DynInt::R5($value) => DynInt::R5($body),
+            DynInt::R6($value) => DynInt::R6($body),
+        }
+    };
+}
+
 macro_rules! zip_float {
     ($left:expr, $right:expr, |$a:ident, $b:ident| $body:expr) => {
         match ($left, $right) {
@@ -397,6 +410,77 @@ impl DynTensor {
     /// Apply the Gaussian error linear unit function element-wise.
     pub fn gelu(self) -> Self {
         map_float!(self, |tensor| activation::gelu(tensor))
+    }
+
+    /// Clamp every element to the optional lower and upper bounds.
+    pub fn clip(self, min: Option<f64>, max: Option<f64>) -> Self {
+        match (min, max) {
+            (Some(min), Some(max)) => {
+                map_float!(self, |tensor| tensor.clamp_min(min).clamp_max(max))
+            }
+            (Some(min), None) => map_float!(self, |tensor| tensor.clamp_min(min)),
+            (None, Some(max)) => map_float!(self, |tensor| tensor.clamp_max(max)),
+            (None, None) => self,
+        }
+    }
+}
+
+impl DynInt {
+    /// Return the tensor's element type.
+    pub fn dtype(&self) -> burn::tensor::DType {
+        match self {
+            Self::R1(tensor) => tensor.dtype(),
+            Self::R2(tensor) => tensor.dtype(),
+            Self::R3(tensor) => tensor.dtype(),
+            Self::R4(tensor) => tensor.dtype(),
+            Self::R5(tensor) => tensor.dtype(),
+            Self::R6(tensor) => tensor.dtype(),
+        }
+    }
+
+    /// Clamp every element to the optional lower and upper bounds.
+    pub fn clip(self, min: Option<crate::Scalar>, max: Option<crate::Scalar>) -> Self {
+        if self.dtype().is_uint() {
+            let min = min.map(scalar_as_u64);
+            let max = max.map(scalar_as_u64);
+            match (min, max) {
+                (Some(min), Some(max)) => {
+                    map_int!(self, |tensor| tensor.clamp_min(min).clamp_max(max))
+                }
+                (Some(min), None) => map_int!(self, |tensor| tensor.clamp_min(min)),
+                (None, Some(max)) => map_int!(self, |tensor| tensor.clamp_max(max)),
+                (None, None) => self,
+            }
+        } else {
+            let min = min.map(scalar_as_i64);
+            let max = max.map(scalar_as_i64);
+            match (min, max) {
+                (Some(min), Some(max)) => {
+                    map_int!(self, |tensor| tensor.clamp_min(min).clamp_max(max))
+                }
+                (Some(min), None) => map_int!(self, |tensor| tensor.clamp_min(min)),
+                (None, Some(max)) => map_int!(self, |tensor| tensor.clamp_max(max)),
+                (None, None) => self,
+            }
+        }
+    }
+}
+
+fn scalar_as_i64(value: crate::Scalar) -> i64 {
+    match value {
+        crate::Scalar::F64(value) => value as i64,
+        crate::Scalar::I64(value) => value,
+        crate::Scalar::U64(value) => value.min(i64::MAX as u64) as i64,
+        crate::Scalar::Bool(value) => i64::from(value),
+    }
+}
+
+fn scalar_as_u64(value: crate::Scalar) -> u64 {
+    match value {
+        crate::Scalar::F64(value) => value as u64,
+        crate::Scalar::I64(value) => value.max(0) as u64,
+        crate::Scalar::U64(value) => value,
+        crate::Scalar::Bool(value) => u64::from(value),
     }
 }
 

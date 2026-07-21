@@ -93,6 +93,14 @@ impl Value {
         }
     }
 
+    /// Consume the value as a host-side scalar.
+    pub fn into_scalar(self) -> Result<Scalar> {
+        match self {
+            Self::Scalar(scalar) => Ok(scalar),
+            other => Err(other.type_mismatch("Scalar")),
+        }
+    }
+
     fn type_mismatch(&self, expected: &str) -> TynxError {
         TynxError::TypeMismatch(format!("expected {expected}, got {}", self.kind()))
     }
