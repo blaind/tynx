@@ -253,6 +253,11 @@ impl DynTensor {
     pub fn tan(self) -> Self {
         map_float!(self, |tensor| tensor.tan())
     }
+
+    /// Apply the hyperbolic cosine function element-wise.
+    pub fn cosh(self) -> Self {
+        map_float!(self, |tensor| tensor.cosh())
+    }
 }
 
 #[cfg(test)]

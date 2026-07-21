@@ -20,6 +20,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Abs(node) => unary::abs(node, env, device),
         Node::Add(node) => binary::add(node, env, device),
         Node::Cos(node) => unary::cos(node, env, device),
+        Node::Cosh(node) => unary::cosh(node, env, device),
         Node::Div(node) => binary::div(node, env, device),
         Node::Exp(node) => unary::exp(node, env, device),
         Node::Identity(node) => Ok(vec![resolve::first(env, &node.name, &node.inputs, device)?]),
@@ -49,7 +50,7 @@ fn operator_kind(node: &Node) -> String {
 mod tests {
     use onnx_ir::{
         DType, Node,
-        node::{cosh::CoshNodeBuilder, identity::IdentityNodeBuilder},
+        node::{identity::IdentityNodeBuilder, sinh::SinhNodeBuilder},
     };
 
     use super::*;
@@ -76,8 +77,8 @@ mod tests {
 
     #[test]
     fn unsupported_errors_name_the_operator() {
-        let node = Node::Cosh(
-            CoshNodeBuilder::new("")
+        let node = Node::Sinh(
+            SinhNodeBuilder::new("")
                 .input_tensor("x", 1, DType::F32)
                 .output_tensor("y", 1, DType::F32)
                 .build(),
@@ -85,6 +86,6 @@ mod tests {
 
         let error = execute(&node, &Env::new(), &Device::default()).unwrap_err();
 
-        assert_eq!(error, TynxError::UnsupportedOp("Cosh".to_string()));
+        assert_eq!(error, TynxError::UnsupportedOp("Sinh".to_string()));
     }
 }
