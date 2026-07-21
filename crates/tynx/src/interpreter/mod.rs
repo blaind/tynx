@@ -19,6 +19,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
     match node {
         Node::Abs(node) => unary::abs(node, env, device),
         Node::Add(node) => binary::add(node, env, device),
+        Node::Cos(node) => unary::cos(node, env, device),
         Node::Div(node) => binary::div(node, env, device),
         Node::Exp(node) => unary::exp(node, env, device),
         Node::Identity(node) => Ok(vec![resolve::first(env, &node.name, &node.inputs, device)?]),
@@ -47,7 +48,7 @@ fn operator_kind(node: &Node) -> String {
 mod tests {
     use onnx_ir::{
         DType, Node,
-        node::{cos::CosNodeBuilder, identity::IdentityNodeBuilder},
+        node::{identity::IdentityNodeBuilder, tan::TanNodeBuilder},
     };
 
     use super::*;
@@ -74,8 +75,8 @@ mod tests {
 
     #[test]
     fn unsupported_errors_name_the_operator() {
-        let node = Node::Cos(
-            CosNodeBuilder::new("")
+        let node = Node::Tan(
+            TanNodeBuilder::new("")
                 .input_tensor("x", 1, DType::F32)
                 .output_tensor("y", 1, DType::F32)
                 .build(),
@@ -83,6 +84,6 @@ mod tests {
 
         let error = execute(&node, &Env::new(), &Device::default()).unwrap_err();
 
-        assert_eq!(error, TynxError::UnsupportedOp("Cos".to_string()));
+        assert_eq!(error, TynxError::UnsupportedOp("Tan".to_string()));
     }
 }

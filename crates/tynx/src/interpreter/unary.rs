@@ -2,8 +2,8 @@
 
 use burn::tensor::Device;
 use onnx_ir::node::{
-    abs::AbsNode, exp::ExpNode, log::LogNode, neg::NegNode, relu::ReluNode, sigmoid::SigmoidNode,
-    sin::SinNode, sqrt::SqrtNode, tanh::TanhNode,
+    abs::AbsNode, cos::CosNode, exp::ExpNode, log::LogNode, neg::NegNode, relu::ReluNode,
+    sigmoid::SigmoidNode, sin::SinNode, sqrt::SqrtNode, tanh::TanhNode,
 };
 
 use super::{Env, resolve};
@@ -54,15 +54,20 @@ pub(super) fn sin(node: &SinNode, env: &Env, device: &Device) -> Result<Vec<Valu
     Ok(vec![Value::Tensor(input.sin())])
 }
 
+pub(super) fn cos(node: &CosNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
+    let input = resolve::first(env, &node.name, &node.inputs, device)?.into_tensor()?;
+    Ok(vec![Value::Tensor(input.cos())])
+}
+
 #[cfg(test)]
 mod tests {
     use burn::tensor::TensorData;
     use onnx_ir::{
         DType,
         node::{
-            abs::AbsNodeBuilder, exp::ExpNodeBuilder, log::LogNodeBuilder, neg::NegNodeBuilder,
-            relu::ReluNodeBuilder, sigmoid::SigmoidNodeBuilder, sin::SinNodeBuilder,
-            sqrt::SqrtNodeBuilder, tanh::TanhNodeBuilder,
+            abs::AbsNodeBuilder, cos::CosNodeBuilder, exp::ExpNodeBuilder, log::LogNodeBuilder,
+            neg::NegNodeBuilder, relu::ReluNodeBuilder, sigmoid::SigmoidNodeBuilder,
+            sin::SinNodeBuilder, sqrt::SqrtNodeBuilder, tanh::TanhNodeBuilder,
         },
     };
 
@@ -321,5 +326,39 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(output, [0.0, 1.0, -1.0]);
+    }
+
+    #[test]
+    fn takes_cosines() {
+        let node = CosNodeBuilder::new("cos")
+            .input_tensor("x", 1, DType::F32)
+            .output_tensor("y", 1, DType::F32)
+            .build();
+        let device = Device::default();
+        let input = Value::from_tensor_data(
+            TensorData::new(
+                vec![0.0_f32, std::f32::consts::PI, std::f32::consts::TAU],
+                [3],
+            ),
+            1,
+            &device,
+        )
+        .unwrap();
+        let mut env = Env::new();
+        env.insert("x".to_string(), input);
+
+        let output = cos(&node, &env, &device)
+            .unwrap()
+            .pop()
+            .unwrap()
+            .into_tensor()
+            .unwrap()
+            .into_data()
+            .iter::<f32>()
+            .collect::<Vec<_>>();
+
+        for (actual, expected) in output.into_iter().zip([1.0, -1.0, 1.0]) {
+            assert!((actual - expected).abs() < 1e-6);
+        }
     }
 }

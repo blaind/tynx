@@ -243,6 +243,11 @@ impl DynTensor {
     pub fn sin(self) -> Self {
         map_float!(self, |tensor| tensor.sin())
     }
+
+    /// Apply the cosine function element-wise.
+    pub fn cos(self) -> Self {
+        map_float!(self, |tensor| tensor.cos())
+    }
 }
 
 #[cfg(test)]
