@@ -10,13 +10,34 @@ permissions:
 jobs:
   coverage:
     runs-on: ubuntu-latest
+    env:
+      RUST_COVERAGE_THRESHOLD: 65
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@cargo-llvm-cov
       - uses: Swatinem/rust-cache@v2
-      - run: cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
+      - name: Run coverage tests
+        run: cargo llvm-cov --workspace --all-features --no-report
+      - name: Generate LCOV report
+        run: cargo llvm-cov report --lcov --output-path lcov.info
+      - name: Check coverage threshold
+        run: |
+          set -o pipefail
+          cargo llvm-cov report --fail-under-lines "$RUST_COVERAGE_THRESHOLD" | tee coverage-summary.txt
+      - name: Add coverage to job summary
+        if: always()
+        run: |
+          echo '## Rust coverage' >> "$GITHUB_STEP_SUMMARY"
+          if [[ -f coverage-summary.txt ]]; then
+            echo '```text' >> "$GITHUB_STEP_SUMMARY"
+            cat coverage-summary.txt >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'Coverage summary unavailable.' >> "$GITHUB_STEP_SUMMARY"
+          fi
       - uses: actions/upload-artifact@v7
+        if: always()
         with:
           name: coverage
           path: lcov.info
