@@ -1,5 +1,7 @@
 //! Values that flow through a model at runtime.
 
+use burn::tensor::{DType, Device, TensorData};
+
 use crate::error::{Result, TynxError};
 use crate::tensor::{DynBool, DynInt, DynTensor};
 
@@ -41,6 +43,30 @@ pub enum Value {
 }
 
 impl Value {
+    /// Materialize tensor data as the corresponding runtime value.
+    pub fn from_tensor_data(data: TensorData, rank: usize, device: &Device) -> Result<Self> {
+        let dtype = data.dtype;
+
+        if rank == 0 && !matches!(dtype, DType::Bool(_)) {
+            let value = data
+                .iter::<f64>()
+                .next()
+                .ok_or_else(|| TynxError::Shape("empty rank-0 tensor".to_string()))?;
+
+            return Ok(if is_integer(dtype) {
+                Self::Scalar(Scalar::I64(value as i64))
+            } else {
+                Self::Scalar(Scalar::F64(value))
+            });
+        }
+
+        Ok(match dtype {
+            DType::Bool(_) => Self::Bool(DynBool::from_data(data, rank, device)?),
+            dtype if is_integer(dtype) => Self::Int(DynInt::from_data(data, rank, device)?),
+            _ => Self::Tensor(DynTensor::from_data(data, rank, device)?),
+        })
+    }
+
     /// Borrow the value as a floating-point tensor.
     pub fn as_tensor(&self) -> Result<&DynTensor> {
         match self {
@@ -88,8 +114,24 @@ impl Value {
     }
 }
 
+fn is_integer(dtype: DType) -> bool {
+    matches!(
+        dtype,
+        DType::I8
+            | DType::I16
+            | DType::I32
+            | DType::I64
+            | DType::U8
+            | DType::U16
+            | DType::U32
+            | DType::U64
+    )
+}
+
 #[cfg(test)]
 mod tests {
+    use burn::tensor::Device;
+
     use super::*;
 
     #[test]
@@ -108,5 +150,21 @@ mod tests {
             error,
             TynxError::TypeMismatch("expected Tensor, got Shape".to_string())
         );
+    }
+
+    #[test]
+    fn materializes_data_by_kind() {
+        let device = Device::default();
+
+        let float =
+            Value::from_tensor_data(TensorData::new(vec![1.0_f32, 2.0], [2]), 1, &device).unwrap();
+        let integer =
+            Value::from_tensor_data(TensorData::new(vec![1_i64, 2], [2]), 1, &device).unwrap();
+        let boolean =
+            Value::from_tensor_data(TensorData::new(vec![true, false], [2]), 1, &device).unwrap();
+
+        assert!(matches!(float, Value::Tensor(DynTensor::R1(_))));
+        assert!(matches!(integer, Value::Int(DynInt::R1(_))));
+        assert!(matches!(boolean, Value::Bool(DynBool::R1(_))));
     }
 }

@@ -1,6 +1,8 @@
 //! Rank-erased tensor containers used by the runtime.
 
-use burn::tensor::{Bool, Int, Tensor};
+use burn::tensor::{Bool, Device, Int, Tensor, TensorData};
+
+use crate::error::{Result, TynxError};
 
 /// Highest tensor rank represented by Tynx.
 pub const MAX_RANK: usize = 6;
@@ -62,6 +64,37 @@ macro_rules! impl_metadata {
                     Self::R4(tensor) => tensor.dims().to_vec(),
                     Self::R5(tensor) => tensor.dims().to_vec(),
                     Self::R6(tensor) => tensor.dims().to_vec(),
+                }
+            }
+
+            /// Create a rank-erased tensor from host data.
+            pub fn from_data(data: TensorData, rank: usize, device: &Device) -> Result<Self> {
+                let dtype = data.dtype;
+                Ok(match rank {
+                    1 => Self::R1(Tensor::from_data(data, (device, dtype))),
+                    2 => Self::R2(Tensor::from_data(data, (device, dtype))),
+                    3 => Self::R3(Tensor::from_data(data, (device, dtype))),
+                    4 => Self::R4(Tensor::from_data(data, (device, dtype))),
+                    5 => Self::R5(Tensor::from_data(data, (device, dtype))),
+                    6 => Self::R6(Tensor::from_data(data, (device, dtype))),
+                    0 => {
+                        return Err(TynxError::UnsupportedOp(
+                            "rank-0 tensor must be represented as a scalar".to_string(),
+                        ));
+                    }
+                    rank => return Err(TynxError::RankOverflow(rank)),
+                })
+            }
+
+            /// Read the tensor back into host data.
+            pub fn into_data(self) -> TensorData {
+                match self {
+                    Self::R1(tensor) => tensor.into_data(),
+                    Self::R2(tensor) => tensor.into_data(),
+                    Self::R3(tensor) => tensor.into_data(),
+                    Self::R4(tensor) => tensor.into_data(),
+                    Self::R5(tensor) => tensor.into_data(),
+                    Self::R6(tensor) => tensor.into_data(),
                 }
             }
         }
