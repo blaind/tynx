@@ -31,6 +31,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Div(node) => binary::div(node, env, device),
         Node::Erf(node) => unary::erf(node, env, device),
         Node::Exp(node) => unary::exp(node, env, device),
+        Node::Floor(node) => unary::floor(node, env, device),
         Node::Identity(node) => Ok(vec![resolve::first(env, &node.name, &node.inputs, device)?]),
         Node::Log(node) => unary::log(node, env, device),
         Node::Mul(node) => binary::mul(node, env, device),
@@ -59,7 +60,7 @@ fn operator_kind(node: &Node) -> String {
 mod tests {
     use onnx_ir::{
         DType, Node,
-        node::{floor::FloorNodeBuilder, identity::IdentityNodeBuilder},
+        node::{identity::IdentityNodeBuilder, round::RoundNodeBuilder},
     };
 
     use super::*;
@@ -86,8 +87,8 @@ mod tests {
 
     #[test]
     fn unsupported_errors_name_the_operator() {
-        let node = Node::Floor(
-            FloorNodeBuilder::new("")
+        let node = Node::Round(
+            RoundNodeBuilder::new("")
                 .input_tensor("x", 1, DType::F32)
                 .output_tensor("y", 1, DType::F32)
                 .build(),
@@ -95,6 +96,6 @@ mod tests {
 
         let error = execute(&node, &Env::new(), &Device::default()).unwrap_err();
 
-        assert_eq!(error, TynxError::UnsupportedOp("Floor".to_string()));
+        assert_eq!(error, TynxError::UnsupportedOp("Round".to_string()));
     }
 }

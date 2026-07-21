@@ -4,8 +4,9 @@ use burn::tensor::Device;
 use onnx_ir::node::{
     abs::AbsNode, acos::AcosNode, acosh::AcoshNode, asin::AsinNode, asinh::AsinhNode,
     atan::AtanNode, atanh::AtanhNode, ceil::CeilNode, cos::CosNode, cosh::CoshNode, erf::ErfNode,
-    exp::ExpNode, log::LogNode, neg::NegNode, relu::ReluNode, sigmoid::SigmoidNode, sin::SinNode,
-    sinh::SinhNode, sqrt::SqrtNode, tan::TanNode, tanh::TanhNode,
+    exp::ExpNode, floor::FloorNode, log::LogNode, neg::NegNode, relu::ReluNode,
+    sigmoid::SigmoidNode, sin::SinNode, sinh::SinhNode, sqrt::SqrtNode, tan::TanNode,
+    tanh::TanhNode,
 };
 
 use super::{Env, resolve};
@@ -116,6 +117,11 @@ pub(super) fn ceil(node: &CeilNode, env: &Env, device: &Device) -> Result<Vec<Va
     Ok(vec![Value::Tensor(input.ceil())])
 }
 
+pub(super) fn floor(node: &FloorNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
+    let input = resolve::first(env, &node.name, &node.inputs, device)?.into_tensor()?;
+    Ok(vec![Value::Tensor(input.floor())])
+}
+
 #[cfg(test)]
 mod tests {
     use burn::tensor::TensorData;
@@ -125,9 +131,10 @@ mod tests {
             abs::AbsNodeBuilder, acos::AcosNodeBuilder, acosh::AcoshNodeBuilder,
             asin::AsinNodeBuilder, asinh::AsinhNodeBuilder, atan::AtanNodeBuilder,
             atanh::AtanhNodeBuilder, ceil::CeilNodeBuilder, cos::CosNodeBuilder,
-            cosh::CoshNodeBuilder, erf::ErfNodeBuilder, exp::ExpNodeBuilder, log::LogNodeBuilder,
-            neg::NegNodeBuilder, relu::ReluNodeBuilder, sigmoid::SigmoidNodeBuilder,
-            sin::SinNodeBuilder, sinh::SinhNodeBuilder, sqrt::SqrtNodeBuilder, tan::TanNodeBuilder,
+            cosh::CoshNodeBuilder, erf::ErfNodeBuilder, exp::ExpNodeBuilder,
+            floor::FloorNodeBuilder, log::LogNodeBuilder, neg::NegNodeBuilder,
+            relu::ReluNodeBuilder, sigmoid::SigmoidNodeBuilder, sin::SinNodeBuilder,
+            sinh::SinhNodeBuilder, sqrt::SqrtNodeBuilder, tan::TanNodeBuilder,
             tanh::TanhNodeBuilder,
         },
     };
@@ -748,5 +755,31 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(output, [-1.0, 0.0, 2.0]);
+    }
+
+    #[test]
+    fn rounds_toward_negative_infinity() {
+        let node = FloorNodeBuilder::new("floor")
+            .input_tensor("x", 1, DType::F32)
+            .output_tensor("y", 1, DType::F32)
+            .build();
+        let device = Device::default();
+        let input =
+            Value::from_tensor_data(TensorData::new(vec![-1.2_f32, 0.0, 1.2], [3]), 1, &device)
+                .unwrap();
+        let mut env = Env::new();
+        env.insert("x".to_string(), input);
+
+        let output = floor(&node, &env, &device)
+            .unwrap()
+            .pop()
+            .unwrap()
+            .into_tensor()
+            .unwrap()
+            .into_data()
+            .iter::<f32>()
+            .collect::<Vec<_>>();
+
+        assert_eq!(output, [-2.0, 0.0, 1.0]);
     }
 }

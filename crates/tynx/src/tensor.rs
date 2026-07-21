@@ -303,6 +303,11 @@ impl DynTensor {
     pub fn ceil(self) -> Self {
         map_float!(self, |tensor| tensor.ceil())
     }
+
+    /// Round each element toward negative infinity.
+    pub fn floor(self) -> Self {
+        map_float!(self, |tensor| tensor.floor())
+    }
 }
 
 #[cfg(test)]
