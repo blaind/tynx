@@ -580,7 +580,7 @@
     "test_equal_uint32": "runtime_unsupported",
     "test_equal_uint64": "runtime_unsupported",
     "test_equal_uint8": "runtime_unsupported",
-    "test_erf": "runtime_unsupported",
+    "test_erf": "pass",
     "test_exp": "pass",
     "test_exp_example": "pass",
     "test_expand_dim_changed": "runtime_unsupported",

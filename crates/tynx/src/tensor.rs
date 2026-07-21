@@ -293,6 +293,11 @@ impl DynTensor {
     pub fn atanh(self) -> Self {
         map_float!(self, |tensor| tensor.atanh())
     }
+
+    /// Apply the error function element-wise.
+    pub fn erf(self) -> Self {
+        map_float!(self, |tensor| tensor.erf())
+    }
 }
 
 #[cfg(test)]

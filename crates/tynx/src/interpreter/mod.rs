@@ -28,6 +28,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Cos(node) => unary::cos(node, env, device),
         Node::Cosh(node) => unary::cosh(node, env, device),
         Node::Div(node) => binary::div(node, env, device),
+        Node::Erf(node) => unary::erf(node, env, device),
         Node::Exp(node) => unary::exp(node, env, device),
         Node::Identity(node) => Ok(vec![resolve::first(env, &node.name, &node.inputs, device)?]),
         Node::Log(node) => unary::log(node, env, device),
@@ -57,7 +58,7 @@ fn operator_kind(node: &Node) -> String {
 mod tests {
     use onnx_ir::{
         DType, Node,
-        node::{erf::ErfNodeBuilder, identity::IdentityNodeBuilder},
+        node::{ceil::CeilNodeBuilder, identity::IdentityNodeBuilder},
     };
 
     use super::*;
@@ -84,8 +85,8 @@ mod tests {
 
     #[test]
     fn unsupported_errors_name_the_operator() {
-        let node = Node::Erf(
-            ErfNodeBuilder::new("")
+        let node = Node::Ceil(
+            CeilNodeBuilder::new("")
                 .input_tensor("x", 1, DType::F32)
                 .output_tensor("y", 1, DType::F32)
                 .build(),
@@ -93,6 +94,6 @@ mod tests {
 
         let error = execute(&node, &Env::new(), &Device::default()).unwrap_err();
 
-        assert_eq!(error, TynxError::UnsupportedOp("Erf".to_string()));
+        assert_eq!(error, TynxError::UnsupportedOp("Ceil".to_string()));
     }
 }

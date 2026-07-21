@@ -3,8 +3,8 @@
 use burn::tensor::Device;
 use onnx_ir::node::{
     abs::AbsNode, acos::AcosNode, acosh::AcoshNode, asin::AsinNode, asinh::AsinhNode,
-    atan::AtanNode, atanh::AtanhNode, cos::CosNode, cosh::CoshNode, exp::ExpNode, log::LogNode,
-    neg::NegNode, relu::ReluNode, sigmoid::SigmoidNode, sin::SinNode, sinh::SinhNode,
+    atan::AtanNode, atanh::AtanhNode, cos::CosNode, cosh::CoshNode, erf::ErfNode, exp::ExpNode,
+    log::LogNode, neg::NegNode, relu::ReluNode, sigmoid::SigmoidNode, sin::SinNode, sinh::SinhNode,
     sqrt::SqrtNode, tan::TanNode, tanh::TanhNode,
 };
 
@@ -106,6 +106,11 @@ pub(super) fn atanh(node: &AtanhNode, env: &Env, device: &Device) -> Result<Vec<
     Ok(vec![Value::Tensor(input.atanh())])
 }
 
+pub(super) fn erf(node: &ErfNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
+    let input = resolve::first(env, &node.name, &node.inputs, device)?.into_tensor()?;
+    Ok(vec![Value::Tensor(input.erf())])
+}
+
 #[cfg(test)]
 mod tests {
     use burn::tensor::TensorData;
@@ -115,9 +120,10 @@ mod tests {
             abs::AbsNodeBuilder, acos::AcosNodeBuilder, acosh::AcoshNodeBuilder,
             asin::AsinNodeBuilder, asinh::AsinhNodeBuilder, atan::AtanNodeBuilder,
             atanh::AtanhNodeBuilder, cos::CosNodeBuilder, cosh::CoshNodeBuilder,
-            exp::ExpNodeBuilder, log::LogNodeBuilder, neg::NegNodeBuilder, relu::ReluNodeBuilder,
-            sigmoid::SigmoidNodeBuilder, sin::SinNodeBuilder, sinh::SinhNodeBuilder,
-            sqrt::SqrtNodeBuilder, tan::TanNodeBuilder, tanh::TanhNodeBuilder,
+            erf::ErfNodeBuilder, exp::ExpNodeBuilder, log::LogNodeBuilder, neg::NegNodeBuilder,
+            relu::ReluNodeBuilder, sigmoid::SigmoidNodeBuilder, sin::SinNodeBuilder,
+            sinh::SinhNodeBuilder, sqrt::SqrtNodeBuilder, tan::TanNodeBuilder,
+            tanh::TanhNodeBuilder,
         },
     };
 
@@ -681,6 +687,34 @@ mod tests {
             .collect::<Vec<_>>();
 
         for (actual, expected) in output.into_iter().zip([-0.549_306_15, 0.0, 0.549_306_15]) {
+            assert!((actual - expected).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn applies_error_function() {
+        let node = ErfNodeBuilder::new("erf")
+            .input_tensor("x", 1, DType::F32)
+            .output_tensor("y", 1, DType::F32)
+            .build();
+        let device = Device::default();
+        let input =
+            Value::from_tensor_data(TensorData::new(vec![-1.0_f32, 0.0, 1.0], [3]), 1, &device)
+                .unwrap();
+        let mut env = Env::new();
+        env.insert("x".to_string(), input);
+
+        let output = erf(&node, &env, &device)
+            .unwrap()
+            .pop()
+            .unwrap()
+            .into_tensor()
+            .unwrap()
+            .into_data()
+            .iter::<f32>()
+            .collect::<Vec<_>>();
+
+        for (actual, expected) in output.into_iter().zip([-0.842_700_8, 0.0, 0.842_700_8]) {
             assert!((actual - expected).abs() < 1e-6);
         }
     }
