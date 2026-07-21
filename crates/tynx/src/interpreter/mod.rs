@@ -26,6 +26,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Atan(node) => unary::atan(node, env, device),
         Node::Atanh(node) => unary::atanh(node, env, device),
         Node::Ceil(node) => unary::ceil(node, env, device),
+        Node::Celu(node) => unary::celu(node, env, device),
         Node::Cos(node) => unary::cos(node, env, device),
         Node::Cosh(node) => unary::cosh(node, env, device),
         Node::Div(node) => binary::div(node, env, device),
@@ -70,10 +71,7 @@ fn operator_kind(node: &Node) -> String {
 mod tests {
     use onnx_ir::{
         DType, Node,
-        node::{
-            celu::{CeluConfig, CeluNodeBuilder},
-            identity::IdentityNodeBuilder,
-        },
+        node::{identity::IdentityNodeBuilder, mish::MishNodeBuilder},
     };
 
     use super::*;
@@ -100,16 +98,15 @@ mod tests {
 
     #[test]
     fn unsupported_errors_name_the_operator() {
-        let node = Node::Celu(
-            CeluNodeBuilder::new("")
+        let node = Node::Mish(
+            MishNodeBuilder::new("")
                 .input_tensor("x", 1, DType::F32)
                 .output_tensor("y", 1, DType::F32)
-                .config(CeluConfig::new(1.0))
                 .build(),
         );
 
         let error = execute(&node, &Env::new(), &Device::default()).unwrap_err();
 
-        assert_eq!(error, TynxError::UnsupportedOp("Celu".to_string()));
+        assert_eq!(error, TynxError::UnsupportedOp("Mish".to_string()));
     }
 }

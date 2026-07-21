@@ -359,6 +359,11 @@ impl DynTensor {
     pub fn thresholded_relu(self, alpha: f64) -> Self {
         map_float!(self, |tensor| activation::thresholded_relu(tensor, alpha))
     }
+
+    /// Apply the continuously differentiable exponential linear unit function element-wise.
+    pub fn celu(self, alpha: f64) -> Self {
+        map_float!(self, |tensor| activation::celu(tensor, alpha))
+    }
 }
 
 #[cfg(test)]

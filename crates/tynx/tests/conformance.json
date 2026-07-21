@@ -416,7 +416,7 @@
     "test_castlike_no_saturate_FLOAT_to_FLOAT8E5M2_expanded": "parse_unsupported",
     "test_ceil": "pass",
     "test_ceil_example": "pass",
-    "test_celu": "runtime_unsupported",
+    "test_celu": "pass",
     "test_celu_expanded": "runtime_unsupported",
     "test_center_crop_pad_crop": "parse_unsupported",
     "test_center_crop_pad_crop_and_pad": "parse_unsupported",

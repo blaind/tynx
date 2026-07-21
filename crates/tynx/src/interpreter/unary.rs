@@ -3,8 +3,8 @@
 use burn::tensor::Device;
 use onnx_ir::node::{
     abs::AbsNode, acos::AcosNode, acosh::AcoshNode, asin::AsinNode, asinh::AsinhNode,
-    atan::AtanNode, atanh::AtanhNode, ceil::CeilNode, cos::CosNode, cosh::CoshNode, elu::EluNode,
-    erf::ErfNode, exp::ExpNode, floor::FloorNode, hard_sigmoid::HardSigmoidNode,
+    atan::AtanNode, atanh::AtanhNode, ceil::CeilNode, celu::CeluNode, cos::CosNode, cosh::CoshNode,
+    elu::EluNode, erf::ErfNode, exp::ExpNode, floor::FloorNode, hard_sigmoid::HardSigmoidNode,
     leaky_relu::LeakyReluNode, log::LogNode, neg::NegNode, reciprocal::ReciprocalNode,
     relu::ReluNode, round::RoundNode, selu::SeluNode, sigmoid::SigmoidNode, sign::SignNode,
     sin::SinNode, sinh::SinhNode, softplus::SoftplusNode, softsign::SoftsignNode, sqrt::SqrtNode,
@@ -188,6 +188,11 @@ pub(super) fn thresholded_relu(
     )])
 }
 
+pub(super) fn celu(node: &CeluNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
+    let input = resolve::first(env, &node.name, &node.inputs, device)?.into_tensor()?;
+    Ok(vec![Value::Tensor(input.celu(node.config.alpha))])
+}
+
 #[cfg(test)]
 mod tests {
     use burn::tensor::TensorData;
@@ -202,6 +207,7 @@ mod tests {
             atan::AtanNodeBuilder,
             atanh::AtanhNodeBuilder,
             ceil::CeilNodeBuilder,
+            celu::{CeluConfig, CeluNodeBuilder},
             cos::CosNodeBuilder,
             cosh::CoshNodeBuilder,
             elu::{EluConfig, EluNodeBuilder},
@@ -1151,5 +1157,34 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(output, [0.0, 0.0, 2.0]);
+    }
+
+    #[test]
+    fn applies_celu_with_custom_alpha() {
+        let node = CeluNodeBuilder::new("celu")
+            .input_tensor("x", 1, DType::F32)
+            .output_tensor("y", 1, DType::F32)
+            .config(CeluConfig::new(2.0))
+            .build();
+        let device = Device::default();
+        let input =
+            Value::from_tensor_data(TensorData::new(vec![-2.0_f32, 0.0, 1.0], [3]), 1, &device)
+                .unwrap();
+        let mut env = Env::new();
+        env.insert("x".to_string(), input);
+
+        let output = celu(&node, &env, &device)
+            .unwrap()
+            .pop()
+            .unwrap()
+            .into_tensor()
+            .unwrap()
+            .into_data()
+            .iter::<f32>()
+            .collect::<Vec<_>>();
+
+        assert!((output[0] + 1.264_241_1).abs() < 1e-6);
+        assert_eq!(output[1], 0.0);
+        assert_eq!(output[2], 1.0);
     }
 }
