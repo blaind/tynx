@@ -3,9 +3,9 @@
 use burn::tensor::Device;
 use onnx_ir::node::{
     abs::AbsNode, acos::AcosNode, acosh::AcoshNode, asin::AsinNode, asinh::AsinhNode,
-    atan::AtanNode, atanh::AtanhNode, cos::CosNode, cosh::CoshNode, erf::ErfNode, exp::ExpNode,
-    log::LogNode, neg::NegNode, relu::ReluNode, sigmoid::SigmoidNode, sin::SinNode, sinh::SinhNode,
-    sqrt::SqrtNode, tan::TanNode, tanh::TanhNode,
+    atan::AtanNode, atanh::AtanhNode, ceil::CeilNode, cos::CosNode, cosh::CoshNode, erf::ErfNode,
+    exp::ExpNode, log::LogNode, neg::NegNode, relu::ReluNode, sigmoid::SigmoidNode, sin::SinNode,
+    sinh::SinhNode, sqrt::SqrtNode, tan::TanNode, tanh::TanhNode,
 };
 
 use super::{Env, resolve};
@@ -111,6 +111,11 @@ pub(super) fn erf(node: &ErfNode, env: &Env, device: &Device) -> Result<Vec<Valu
     Ok(vec![Value::Tensor(input.erf())])
 }
 
+pub(super) fn ceil(node: &CeilNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
+    let input = resolve::first(env, &node.name, &node.inputs, device)?.into_tensor()?;
+    Ok(vec![Value::Tensor(input.ceil())])
+}
+
 #[cfg(test)]
 mod tests {
     use burn::tensor::TensorData;
@@ -119,10 +124,10 @@ mod tests {
         node::{
             abs::AbsNodeBuilder, acos::AcosNodeBuilder, acosh::AcoshNodeBuilder,
             asin::AsinNodeBuilder, asinh::AsinhNodeBuilder, atan::AtanNodeBuilder,
-            atanh::AtanhNodeBuilder, cos::CosNodeBuilder, cosh::CoshNodeBuilder,
-            erf::ErfNodeBuilder, exp::ExpNodeBuilder, log::LogNodeBuilder, neg::NegNodeBuilder,
-            relu::ReluNodeBuilder, sigmoid::SigmoidNodeBuilder, sin::SinNodeBuilder,
-            sinh::SinhNodeBuilder, sqrt::SqrtNodeBuilder, tan::TanNodeBuilder,
+            atanh::AtanhNodeBuilder, ceil::CeilNodeBuilder, cos::CosNodeBuilder,
+            cosh::CoshNodeBuilder, erf::ErfNodeBuilder, exp::ExpNodeBuilder, log::LogNodeBuilder,
+            neg::NegNodeBuilder, relu::ReluNodeBuilder, sigmoid::SigmoidNodeBuilder,
+            sin::SinNodeBuilder, sinh::SinhNodeBuilder, sqrt::SqrtNodeBuilder, tan::TanNodeBuilder,
             tanh::TanhNodeBuilder,
         },
     };
@@ -717,5 +722,31 @@ mod tests {
         for (actual, expected) in output.into_iter().zip([-0.842_700_8, 0.0, 0.842_700_8]) {
             assert!((actual - expected).abs() < 1e-6);
         }
+    }
+
+    #[test]
+    fn rounds_toward_positive_infinity() {
+        let node = CeilNodeBuilder::new("ceil")
+            .input_tensor("x", 1, DType::F32)
+            .output_tensor("y", 1, DType::F32)
+            .build();
+        let device = Device::default();
+        let input =
+            Value::from_tensor_data(TensorData::new(vec![-1.2_f32, 0.0, 1.2], [3]), 1, &device)
+                .unwrap();
+        let mut env = Env::new();
+        env.insert("x".to_string(), input);
+
+        let output = ceil(&node, &env, &device)
+            .unwrap()
+            .pop()
+            .unwrap()
+            .into_tensor()
+            .unwrap()
+            .into_data()
+            .iter::<f32>()
+            .collect::<Vec<_>>();
+
+        assert_eq!(output, [-1.0, 0.0, 2.0]);
     }
 }

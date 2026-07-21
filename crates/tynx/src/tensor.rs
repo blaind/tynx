@@ -298,6 +298,11 @@ impl DynTensor {
     pub fn erf(self) -> Self {
         map_float!(self, |tensor| tensor.erf())
     }
+
+    /// Round each element toward positive infinity.
+    pub fn ceil(self) -> Self {
+        map_float!(self, |tensor| tensor.ceil())
+    }
 }
 
 #[cfg(test)]

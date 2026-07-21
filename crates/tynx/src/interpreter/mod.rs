@@ -25,6 +25,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Asinh(node) => unary::asinh(node, env, device),
         Node::Atan(node) => unary::atan(node, env, device),
         Node::Atanh(node) => unary::atanh(node, env, device),
+        Node::Ceil(node) => unary::ceil(node, env, device),
         Node::Cos(node) => unary::cos(node, env, device),
         Node::Cosh(node) => unary::cosh(node, env, device),
         Node::Div(node) => binary::div(node, env, device),
@@ -58,7 +59,7 @@ fn operator_kind(node: &Node) -> String {
 mod tests {
     use onnx_ir::{
         DType, Node,
-        node::{ceil::CeilNodeBuilder, identity::IdentityNodeBuilder},
+        node::{floor::FloorNodeBuilder, identity::IdentityNodeBuilder},
     };
 
     use super::*;
@@ -85,8 +86,8 @@ mod tests {
 
     #[test]
     fn unsupported_errors_name_the_operator() {
-        let node = Node::Ceil(
-            CeilNodeBuilder::new("")
+        let node = Node::Floor(
+            FloorNodeBuilder::new("")
                 .input_tensor("x", 1, DType::F32)
                 .output_tensor("y", 1, DType::F32)
                 .build(),
@@ -94,6 +95,6 @@ mod tests {
 
         let error = execute(&node, &Env::new(), &Device::default()).unwrap_err();
 
-        assert_eq!(error, TynxError::UnsupportedOp("Ceil".to_string()));
+        assert_eq!(error, TynxError::UnsupportedOp("Floor".to_string()));
     }
 }
