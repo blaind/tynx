@@ -288,6 +288,11 @@ impl DynTensor {
     pub fn atan(self) -> Self {
         map_float!(self, |tensor| tensor.atan())
     }
+
+    /// Apply the inverse hyperbolic tangent function element-wise.
+    pub fn atanh(self) -> Self {
+        map_float!(self, |tensor| tensor.atanh())
+    }
 }
 
 #[cfg(test)]

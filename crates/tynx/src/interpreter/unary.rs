@@ -3,9 +3,9 @@
 use burn::tensor::Device;
 use onnx_ir::node::{
     abs::AbsNode, acos::AcosNode, acosh::AcoshNode, asin::AsinNode, asinh::AsinhNode,
-    atan::AtanNode, cos::CosNode, cosh::CoshNode, exp::ExpNode, log::LogNode, neg::NegNode,
-    relu::ReluNode, sigmoid::SigmoidNode, sin::SinNode, sinh::SinhNode, sqrt::SqrtNode,
-    tan::TanNode, tanh::TanhNode,
+    atan::AtanNode, atanh::AtanhNode, cos::CosNode, cosh::CoshNode, exp::ExpNode, log::LogNode,
+    neg::NegNode, relu::ReluNode, sigmoid::SigmoidNode, sin::SinNode, sinh::SinhNode,
+    sqrt::SqrtNode, tan::TanNode, tanh::TanhNode,
 };
 
 use super::{Env, resolve};
@@ -101,6 +101,11 @@ pub(super) fn atan(node: &AtanNode, env: &Env, device: &Device) -> Result<Vec<Va
     Ok(vec![Value::Tensor(input.atan())])
 }
 
+pub(super) fn atanh(node: &AtanhNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
+    let input = resolve::first(env, &node.name, &node.inputs, device)?.into_tensor()?;
+    Ok(vec![Value::Tensor(input.atanh())])
+}
+
 #[cfg(test)]
 mod tests {
     use burn::tensor::TensorData;
@@ -109,10 +114,10 @@ mod tests {
         node::{
             abs::AbsNodeBuilder, acos::AcosNodeBuilder, acosh::AcoshNodeBuilder,
             asin::AsinNodeBuilder, asinh::AsinhNodeBuilder, atan::AtanNodeBuilder,
-            cos::CosNodeBuilder, cosh::CoshNodeBuilder, exp::ExpNodeBuilder, log::LogNodeBuilder,
-            neg::NegNodeBuilder, relu::ReluNodeBuilder, sigmoid::SigmoidNodeBuilder,
-            sin::SinNodeBuilder, sinh::SinhNodeBuilder, sqrt::SqrtNodeBuilder, tan::TanNodeBuilder,
-            tanh::TanhNodeBuilder,
+            atanh::AtanhNodeBuilder, cos::CosNodeBuilder, cosh::CoshNodeBuilder,
+            exp::ExpNodeBuilder, log::LogNodeBuilder, neg::NegNodeBuilder, relu::ReluNodeBuilder,
+            sigmoid::SigmoidNodeBuilder, sin::SinNodeBuilder, sinh::SinhNodeBuilder,
+            sqrt::SqrtNodeBuilder, tan::TanNodeBuilder, tanh::TanhNodeBuilder,
         },
     };
 
@@ -648,6 +653,34 @@ mod tests {
             0.0,
             std::f32::consts::FRAC_PI_4,
         ]) {
+            assert!((actual - expected).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn takes_inverse_hyperbolic_tangents() {
+        let node = AtanhNodeBuilder::new("atanh")
+            .input_tensor("x", 1, DType::F32)
+            .output_tensor("y", 1, DType::F32)
+            .build();
+        let device = Device::default();
+        let input =
+            Value::from_tensor_data(TensorData::new(vec![-0.5_f32, 0.0, 0.5], [3]), 1, &device)
+                .unwrap();
+        let mut env = Env::new();
+        env.insert("x".to_string(), input);
+
+        let output = atanh(&node, &env, &device)
+            .unwrap()
+            .pop()
+            .unwrap()
+            .into_tensor()
+            .unwrap()
+            .into_data()
+            .iter::<f32>()
+            .collect::<Vec<_>>();
+
+        for (actual, expected) in output.into_iter().zip([-0.549_306_15, 0.0, 0.549_306_15]) {
             assert!((actual - expected).abs() < 1e-6);
         }
     }
