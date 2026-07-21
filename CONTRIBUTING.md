@@ -13,3 +13,13 @@ cargo xtask conformance --case test_relu
 
 When an intentional runtime change alters the results, inspect `target/conformance-report.json`
 and update the committed baseline with `cargo xtask conformance bless`.
+
+## Python bindings
+
+Build the extension into the active virtual environment, then run its smoke test:
+
+```sh
+cd crates/tynx-python
+maturin develop
+python tests/smoke.py
+```

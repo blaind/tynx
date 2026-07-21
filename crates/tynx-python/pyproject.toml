@@ -1,0 +1,15 @@
+[build-system]
+requires = ["maturin>=1.9,<2"]
+build-backend = "maturin"
+
+[project]
+name = "tynx"
+dynamic = ["version"]
+description = "A lightweight neural network runtime for inference and training"
+requires-python = ">=3.9"
+license = "MIT OR Apache-2.0"
+
+[tool.maturin]
+module-name = "tynx._tynx"
+python-source = "python"
+strip = true
