@@ -8,6 +8,46 @@ permissions:
   contents: read
 
 jobs:
+  conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Read corpus revision
+        id: corpus
+        run: echo "revision=$(jq -r .source.revision crates/tynx/tests/conformance.json)" >> "$GITHUB_OUTPUT"
+      - name: Cache ONNX corpus
+        id: corpus-cache
+        uses: actions/cache@v5
+        with:
+          path: .cache/onnx-corpus/${{ steps.corpus.outputs.revision }}
+          key: onnx-corpus-${{ steps.corpus.outputs.revision }}
+      - name: Fetch ONNX corpus
+        if: steps.corpus-cache.outputs.cache-hit != 'true'
+        uses: actions/checkout@v7
+        with:
+          repository: tracel-ai/burn-onnx
+          ref: ${{ steps.corpus.outputs.revision }}
+          path: .cache/onnx-corpus/${{ steps.corpus.outputs.revision }}
+          sparse-checkout: crates/onnx-official-tests/vendor/node
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: conformance
+      - name: Run ONNX conformance tests
+        run: cargo xtask conformance
+      - name: Add conformance to job summary
+        if: always() && hashFiles('target/conformance-report.json') != ''
+        run: |
+          echo '## ONNX conformance' >> "$GITHUB_STEP_SUMMARY"
+          echo '| Status | Cases |' >> "$GITHUB_STEP_SUMMARY"
+          echo '| --- | ---: |' >> "$GITHUB_STEP_SUMMARY"
+          jq -r '.summary | to_entries[] | "| \(.key) | \(.value) |"' target/conformance-report.json >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        if: always() && hashFiles('target/conformance-report.json') != ''
+        with:
+          name: onnx-conformance
+          path: target/conformance-report.json
+
   coverage:
     runs-on: ubuntu-latest
     env:
