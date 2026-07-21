@@ -24,6 +24,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Relu(node) => unary::relu(node, env, device),
         Node::Sigmoid(node) => unary::sigmoid(node, env, device),
         Node::Sub(node) => binary::sub(node, env, device),
+        Node::Tanh(node) => unary::tanh(node, env, device),
         _ => Err(TynxError::UnsupportedOp(operator_kind(node))),
     }
 }
@@ -40,7 +41,7 @@ fn operator_kind(node: &Node) -> String {
 mod tests {
     use onnx_ir::{
         DType, Node,
-        node::{identity::IdentityNodeBuilder, tanh::TanhNodeBuilder},
+        node::{exp::ExpNodeBuilder, identity::IdentityNodeBuilder},
     };
 
     use super::*;
@@ -67,8 +68,8 @@ mod tests {
 
     #[test]
     fn unsupported_errors_name_the_operator() {
-        let node = Node::Tanh(
-            TanhNodeBuilder::new("")
+        let node = Node::Exp(
+            ExpNodeBuilder::new("")
                 .input_tensor("x", 1, DType::F32)
                 .output_tensor("y", 1, DType::F32)
                 .build(),
@@ -76,6 +77,6 @@ mod tests {
 
         let error = execute(&node, &Env::new(), &Device::default()).unwrap_err();
 
-        assert_eq!(error, TynxError::UnsupportedOp("Tanh".to_string()));
+        assert_eq!(error, TynxError::UnsupportedOp("Exp".to_string()));
     }
 }

@@ -208,6 +208,11 @@ impl DynTensor {
     pub fn sigmoid(self) -> Self {
         map_float!(self, activation::sigmoid)
     }
+
+    /// Apply the hyperbolic tangent function element-wise.
+    pub fn tanh(self) -> Self {
+        map_float!(self, activation::tanh)
+    }
 }
 
 #[cfg(test)]
