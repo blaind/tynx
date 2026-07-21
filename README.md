@@ -6,8 +6,8 @@ Tynx is an early-stage ONNX runtime for Rust, Python, and WebAssembly, built on 
 [Burn](https://github.com/tracel-ai/burn) deep-learning framework.
 
 Unlike [Burn-ONNX](https://github.com/tracel-ai/burn-onnx), which generates Rust code and weight
-files, Tynx loads and executes ONNX graphs directly at runtime—no model-specific code generation
-or recompilation.
+files, Tynx loads and executes ONNX graphs directly at runtime without model-specific code
+generation or recompilation.
 
 ## Backends
 
