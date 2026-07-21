@@ -17,6 +17,7 @@ pub type Env = HashMap<String, Value>;
 /// Execute one ONNX node using values from the runtime environment.
 pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
     match node {
+        Node::Abs(node) => unary::abs(node, env, device),
         Node::Add(node) => binary::add(node, env, device),
         Node::Div(node) => binary::div(node, env, device),
         Node::Exp(node) => unary::exp(node, env, device),
@@ -44,7 +45,7 @@ fn operator_kind(node: &Node) -> String {
 mod tests {
     use onnx_ir::{
         DType, Node,
-        node::{abs::AbsNodeBuilder, identity::IdentityNodeBuilder},
+        node::{identity::IdentityNodeBuilder, neg::NegNodeBuilder},
     };
 
     use super::*;
@@ -71,8 +72,8 @@ mod tests {
 
     #[test]
     fn unsupported_errors_name_the_operator() {
-        let node = Node::Abs(
-            AbsNodeBuilder::new("")
+        let node = Node::Neg(
+            NegNodeBuilder::new("")
                 .input_tensor("x", 1, DType::F32)
                 .output_tensor("y", 1, DType::F32)
                 .build(),
@@ -80,6 +81,6 @@ mod tests {
 
         let error = execute(&node, &Env::new(), &Device::default()).unwrap_err();
 
-        assert_eq!(error, TynxError::UnsupportedOp("Abs".to_string()));
+        assert_eq!(error, TynxError::UnsupportedOp("Neg".to_string()));
     }
 }

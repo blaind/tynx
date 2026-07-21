@@ -6,7 +6,7 @@
     "path": "crates/onnx-official-tests/vendor/node"
   },
   "cases": {
-    "test_abs": "runtime_unsupported",
+    "test_abs": "pass",
     "test_acos": "runtime_unsupported",
     "test_acos_example": "runtime_unsupported",
     "test_acosh": "runtime_unsupported",

@@ -228,6 +228,11 @@ impl DynTensor {
     pub fn sqrt(self) -> Self {
         map_float!(self, |tensor| tensor.sqrt())
     }
+
+    /// Apply the absolute value function element-wise.
+    pub fn abs(self) -> Self {
+        map_float!(self, |tensor| tensor.abs())
+    }
 }
 
 #[cfg(test)]
