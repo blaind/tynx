@@ -10,8 +10,10 @@ use crate::tensor::{DynBool, DynInt, DynTensor};
 pub enum Scalar {
     /// A floating-point scalar.
     F64(f64),
-    /// An integer scalar.
+    /// A signed integer scalar.
     I64(i64),
+    /// An unsigned integer scalar.
+    U64(u64),
     /// A boolean scalar.
     Bool(bool),
 }
@@ -22,6 +24,7 @@ impl Scalar {
         match self {
             Self::F64(value) => *value,
             Self::I64(value) => *value as f64,
+            Self::U64(value) => *value as f64,
             Self::Bool(value) => u8::from(*value) as f64,
         }
     }
@@ -47,17 +50,8 @@ impl Value {
     pub fn from_tensor_data(data: TensorData, rank: usize, device: &Device) -> Result<Self> {
         let dtype = data.dtype;
 
-        if rank == 0 && !matches!(dtype, DType::Bool(_)) {
-            let value = data
-                .iter::<f64>()
-                .next()
-                .ok_or_else(|| TynxError::Shape("empty rank-0 tensor".to_string()))?;
-
-            return Ok(if is_integer(dtype) {
-                Self::Scalar(Scalar::I64(value as i64))
-            } else {
-                Self::Scalar(Scalar::F64(value))
-            });
+        if rank == 0 {
+            return Ok(Self::Scalar(scalar_from_tensor_data(&data)?));
         }
 
         Ok(match dtype {
@@ -115,17 +109,22 @@ impl Value {
 }
 
 fn is_integer(dtype: DType) -> bool {
-    matches!(
-        dtype,
-        DType::I8
-            | DType::I16
-            | DType::I32
-            | DType::I64
-            | DType::U8
-            | DType::U16
-            | DType::U32
-            | DType::U64
-    )
+    dtype.is_int() || dtype.is_uint()
+}
+
+fn scalar_from_tensor_data(data: &TensorData) -> Result<Scalar> {
+    let empty = || TynxError::Shape("empty rank-0 tensor".to_string());
+
+    match data.dtype {
+        DType::Bool(_) => data
+            .iter::<bool>()
+            .next()
+            .map(Scalar::Bool)
+            .ok_or_else(empty),
+        dtype if dtype.is_int() => data.iter::<i64>().next().map(Scalar::I64).ok_or_else(empty),
+        dtype if dtype.is_uint() => data.iter::<u64>().next().map(Scalar::U64).ok_or_else(empty),
+        _ => data.iter::<f64>().next().map(Scalar::F64).ok_or_else(empty),
+    }
 }
 
 #[cfg(test)]
@@ -138,6 +137,7 @@ mod tests {
     fn converts_scalars_to_f64() {
         assert_eq!(Scalar::F64(1.5).as_f64(), 1.5);
         assert_eq!(Scalar::I64(2).as_f64(), 2.0);
+        assert_eq!(Scalar::U64(3).as_f64(), 3.0);
         assert_eq!(Scalar::Bool(true).as_f64(), 1.0);
         assert_eq!(Scalar::Bool(false).as_f64(), 0.0);
     }
@@ -166,5 +166,37 @@ mod tests {
         assert!(matches!(float, Value::Tensor(DynTensor::R1(_))));
         assert!(matches!(integer, Value::Int(DynInt::R1(_))));
         assert!(matches!(boolean, Value::Bool(DynBool::R1(_))));
+    }
+
+    #[test]
+    fn materializes_rank_zero_booleans() {
+        let value = Value::from_tensor_data(
+            TensorData::new(vec![true], Vec::<usize>::new()),
+            0,
+            &Device::default(),
+        )
+        .unwrap();
+
+        assert!(matches!(value, Value::Scalar(Scalar::Bool(true))));
+    }
+
+    #[test]
+    fn materializes_integer_scalars_without_losing_precision() {
+        let device = Device::default();
+        let signed = Value::from_tensor_data(
+            TensorData::new(vec![i64::MAX], Vec::<usize>::new()),
+            0,
+            &device,
+        )
+        .unwrap();
+        let unsigned = Value::from_tensor_data(
+            TensorData::new(vec![u64::MAX], Vec::<usize>::new()),
+            0,
+            &device,
+        )
+        .unwrap();
+
+        assert!(matches!(signed, Value::Scalar(Scalar::I64(i64::MAX))));
+        assert!(matches!(unsigned, Value::Scalar(Scalar::U64(u64::MAX))));
     }
 }
