@@ -2,6 +2,7 @@
 
 mod binary;
 mod clip;
+mod pow;
 mod resolve;
 mod unary;
 
@@ -46,6 +47,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Mul(node) => binary::mul(node, env, device),
         Node::Neg(node) => unary::neg(node, env, device),
         Node::PRelu(node) => binary::prelu(node, env, device),
+        Node::Pow(node) => pow::pow(node, env, device),
         Node::Reciprocal(node) => unary::reciprocal(node, env, device),
         Node::Relu(node) => unary::relu(node, env, device),
         Node::Round(node) => unary::round(node, env, device),

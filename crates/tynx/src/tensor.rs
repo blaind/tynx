@@ -1,6 +1,6 @@
 //! Rank-erased tensor containers used by the runtime.
 
-use burn::tensor::{Bool, Device, Int, Tensor, TensorData, activation};
+use burn::tensor::{Bool, DType, Device, Int, Tensor, TensorData, activation};
 
 use crate::error::{Result, TynxError};
 
@@ -75,6 +75,20 @@ macro_rules! zip_float {
             (DynTensor::R4($a), DynTensor::R4($b)) => DynTensor::R4($body),
             (DynTensor::R5($a), DynTensor::R5($b)) => DynTensor::R5($body),
             (DynTensor::R6($a), DynTensor::R6($b)) => DynTensor::R6($body),
+            _ => unreachable!("tensor ranks were promoted before the operation"),
+        }
+    };
+}
+
+macro_rules! zip_int {
+    ($left:expr, $right:expr, |$a:ident, $b:ident| $body:expr) => {
+        match ($left, $right) {
+            (DynInt::R1($a), DynInt::R1($b)) => DynInt::R1($body),
+            (DynInt::R2($a), DynInt::R2($b)) => DynInt::R2($body),
+            (DynInt::R3($a), DynInt::R3($b)) => DynInt::R3($body),
+            (DynInt::R4($a), DynInt::R4($b)) => DynInt::R4($body),
+            (DynInt::R5($a), DynInt::R5($b)) => DynInt::R5($body),
+            (DynInt::R6($a), DynInt::R6($b)) => DynInt::R6($body),
             _ => unreachable!("tensor ranks were promoted before the operation"),
         }
     };
@@ -224,6 +238,52 @@ impl DynTensor {
                 .clamp_min(0.0)
                 .add(slope.mul(input.clamp_max(0.0)))
         }))
+    }
+
+    /// Raise every element to a broadcastable floating-point exponent.
+    pub fn powf_broadcast(self, exponent: Self) -> Result<Self> {
+        let dtype = self.dtype();
+        let (base, exponent) = Self::broadcast_pair(self, exponent.cast(dtype))?;
+        Ok(zip_float!(base, exponent, |base, exponent| base.powf(exponent)))
+    }
+
+    /// Raise every element to a floating-point scalar exponent.
+    pub fn powf_scalar(self, exponent: f64) -> Self {
+        map_float!(self, |tensor| tensor.powf_scalar(exponent))
+    }
+
+    /// Raise every element to an integer scalar exponent.
+    pub fn powi_scalar(self, exponent: i64) -> Self {
+        map_float!(self, |tensor| tensor.powi_scalar(exponent))
+    }
+
+    /// Return the tensor's element type.
+    pub fn dtype(&self) -> DType {
+        match self {
+            Self::R1(tensor) => tensor.dtype(),
+            Self::R2(tensor) => tensor.dtype(),
+            Self::R3(tensor) => tensor.dtype(),
+            Self::R4(tensor) => tensor.dtype(),
+            Self::R5(tensor) => tensor.dtype(),
+            Self::R6(tensor) => tensor.dtype(),
+        }
+    }
+
+    /// Cast the tensor while preserving its rank.
+    pub fn cast(self, dtype: DType) -> Self {
+        map_float!(self, |tensor| tensor.cast(dtype))
+    }
+
+    /// Convert the tensor to an integer tensor with an explicit dtype.
+    pub fn to_int(self, dtype: DType) -> DynInt {
+        match self {
+            Self::R1(tensor) => DynInt::R1(tensor.int().cast(dtype)),
+            Self::R2(tensor) => DynInt::R2(tensor.int().cast(dtype)),
+            Self::R3(tensor) => DynInt::R3(tensor.int().cast(dtype)),
+            Self::R4(tensor) => DynInt::R4(tensor.int().cast(dtype)),
+            Self::R5(tensor) => DynInt::R5(tensor.int().cast(dtype)),
+            Self::R6(tensor) => DynInt::R6(tensor.int().cast(dtype)),
+        }
     }
 
     fn broadcast_pair(left: Self, right: Self) -> Result<(Self, Self)> {
@@ -426,6 +486,39 @@ impl DynTensor {
 }
 
 impl DynInt {
+    /// Promote the tensor by adding leading singleton dimensions.
+    pub fn to_rank(self, target: usize) -> Result<Self> {
+        let current = self.rank();
+        if current == target {
+            return Ok(self);
+        }
+        if current > target || target > MAX_RANK {
+            return Err(TynxError::RankPromote {
+                from: current,
+                to: target,
+            });
+        }
+
+        Ok(match (self, target) {
+            (Self::R1(tensor), 2) => Self::R2(tensor.unsqueeze()),
+            (Self::R1(tensor), 3) => Self::R3(tensor.unsqueeze()),
+            (Self::R1(tensor), 4) => Self::R4(tensor.unsqueeze()),
+            (Self::R1(tensor), 5) => Self::R5(tensor.unsqueeze()),
+            (Self::R1(tensor), 6) => Self::R6(tensor.unsqueeze()),
+            (Self::R2(tensor), 3) => Self::R3(tensor.unsqueeze()),
+            (Self::R2(tensor), 4) => Self::R4(tensor.unsqueeze()),
+            (Self::R2(tensor), 5) => Self::R5(tensor.unsqueeze()),
+            (Self::R2(tensor), 6) => Self::R6(tensor.unsqueeze()),
+            (Self::R3(tensor), 4) => Self::R4(tensor.unsqueeze()),
+            (Self::R3(tensor), 5) => Self::R5(tensor.unsqueeze()),
+            (Self::R3(tensor), 6) => Self::R6(tensor.unsqueeze()),
+            (Self::R4(tensor), 5) => Self::R5(tensor.unsqueeze()),
+            (Self::R4(tensor), 6) => Self::R6(tensor.unsqueeze()),
+            (Self::R5(tensor), 6) => Self::R6(tensor.unsqueeze()),
+            (_, target) => return Err(TynxError::RankOverflow(target)),
+        })
+    }
+
     /// Return the tensor's element type.
     pub fn dtype(&self) -> burn::tensor::DType {
         match self {
@@ -436,6 +529,37 @@ impl DynInt {
             Self::R5(tensor) => tensor.dtype(),
             Self::R6(tensor) => tensor.dtype(),
         }
+    }
+
+    /// Cast the tensor while preserving its rank.
+    pub fn cast(self, dtype: DType) -> Self {
+        map_int!(self, |tensor| tensor.cast(dtype))
+    }
+
+    /// Convert the tensor to a floating-point tensor with an explicit dtype.
+    pub fn to_float(self, dtype: DType) -> DynTensor {
+        match self {
+            Self::R1(tensor) => DynTensor::R1(tensor.float().cast(dtype)),
+            Self::R2(tensor) => DynTensor::R2(tensor.float().cast(dtype)),
+            Self::R3(tensor) => DynTensor::R3(tensor.float().cast(dtype)),
+            Self::R4(tensor) => DynTensor::R4(tensor.float().cast(dtype)),
+            Self::R5(tensor) => DynTensor::R5(tensor.float().cast(dtype)),
+            Self::R6(tensor) => DynTensor::R6(tensor.float().cast(dtype)),
+        }
+    }
+
+    /// Raise every element to a broadcastable integer exponent.
+    pub fn powi_broadcast(self, exponent: Self) -> Result<Self> {
+        let dtype = self.dtype();
+        let rank = self.rank().max(exponent.rank());
+        let base = self.to_rank(rank)?;
+        let exponent = exponent.cast(dtype).to_rank(rank)?;
+        Ok(zip_int!(base, exponent, |base, exponent| base.powi(exponent)))
+    }
+
+    /// Raise every element to an integer scalar exponent.
+    pub fn powi_scalar(self, exponent: i64) -> Self {
+        map_int!(self, |tensor| tensor.powi_scalar(exponent))
     }
 
     /// Clamp every element to the optional lower and upper bounds.
