@@ -6,7 +6,8 @@ use std::fs;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 
-use burn::tensor::{Device, TensorData};
+use burn::tensor::{BoolStore, DType, Device, TensorData};
+use half::{bf16, f16};
 use protobuf::Message;
 use serde::{Deserialize, Serialize};
 use tynx::onnx_ir::TensorProto;
@@ -57,46 +58,74 @@ struct Report {
 }
 
 enum Reference {
+    F16(Vec<f16>, Vec<usize>),
+    BF16(Vec<bf16>, Vec<usize>),
     F32(Vec<f32>, Vec<usize>),
     F64(Vec<f64>, Vec<usize>),
+    I8(Vec<i8>, Vec<usize>),
+    I16(Vec<i16>, Vec<usize>),
     I32(Vec<i32>, Vec<usize>),
     I64(Vec<i64>, Vec<usize>),
+    U8(Vec<u8>, Vec<usize>),
+    U16(Vec<u16>, Vec<usize>),
+    U32(Vec<u32>, Vec<usize>),
+    U64(Vec<u64>, Vec<usize>),
     Bool(Vec<bool>, Vec<usize>),
 }
 
 impl Reference {
     fn shape(&self) -> &[usize] {
         match self {
-            Self::F32(_, shape)
+            Self::F16(_, shape)
+            | Self::BF16(_, shape)
+            | Self::F32(_, shape)
             | Self::F64(_, shape)
+            | Self::I8(_, shape)
+            | Self::I16(_, shape)
             | Self::I32(_, shape)
             | Self::I64(_, shape)
+            | Self::U8(_, shape)
+            | Self::U16(_, shape)
+            | Self::U32(_, shape)
+            | Self::U64(_, shape)
             | Self::Bool(_, shape) => shape,
         }
     }
 
-    fn values(&self) -> Vec<f64> {
+    fn dtype(&self) -> DType {
         match self {
-            Self::F32(values, _) => values.iter().map(|&value| f64::from(value)).collect(),
-            Self::F64(values, _) => values.clone(),
-            Self::I32(values, _) => values.iter().map(|&value| f64::from(value)).collect(),
-            Self::I64(values, _) => values.iter().map(|&value| value as f64).collect(),
-            Self::Bool(values, _) => values.iter().map(|&value| u8::from(value) as f64).collect(),
+            Self::F16(..) => DType::F16,
+            Self::BF16(..) => DType::BF16,
+            Self::F32(..) => DType::F32,
+            Self::F64(..) => DType::F64,
+            Self::I8(..) => DType::I8,
+            Self::I16(..) => DType::I16,
+            Self::I32(..) => DType::I32,
+            Self::I64(..) => DType::I64,
+            Self::U8(..) => DType::U8,
+            Self::U16(..) => DType::U16,
+            Self::U32(..) => DType::U32,
+            Self::U64(..) => DType::U64,
+            Self::Bool(..) => DType::Bool(BoolStore::Native),
         }
-    }
-
-    fn is_float(&self) -> bool {
-        matches!(self, Self::F32(..) | Self::F64(..))
     }
 
     fn to_value(&self, device: &Device) -> Result<Value, String> {
         let shape = self.shape().to_vec();
         let rank = shape.len();
         let data = match self {
+            Self::F16(values, _) => TensorData::new(values.clone(), shape),
+            Self::BF16(values, _) => TensorData::new(values.clone(), shape),
             Self::F32(values, _) => TensorData::new(values.clone(), shape),
             Self::F64(values, _) => TensorData::new(values.clone(), shape),
+            Self::I8(values, _) => TensorData::new(values.clone(), shape),
+            Self::I16(values, _) => TensorData::new(values.clone(), shape),
             Self::I32(values, _) => TensorData::new(values.clone(), shape),
             Self::I64(values, _) => TensorData::new(values.clone(), shape),
+            Self::U8(values, _) => TensorData::new(values.clone(), shape),
+            Self::U16(values, _) => TensorData::new(values.clone(), shape),
+            Self::U32(values, _) => TensorData::new(values.clone(), shape),
+            Self::U64(values, _) => TensorData::new(values.clone(), shape),
             Self::Bool(values, _) => TensorData::new(values.clone(), shape),
         };
         Value::from_tensor_data(data, rank, device).map_err(|error| error.to_string())
@@ -256,50 +285,11 @@ fn run_case(directory: &Path, device: &Device) -> Observation {
                 format!("output '{}' is missing", argument.name),
             );
         };
-        let Some((shape, values)) = value_data(value) else {
-            return observed(
-                CaseStatus::OutputUnsupported,
-                format!("output '{}' cannot be materialized", argument.name),
-            );
-        };
-        if shape != reference.shape() {
+        if let Err(error) = compare_value(reference, value) {
             return observed(
                 CaseStatus::Mismatch,
-                format!(
-                    "output '{}' shape {shape:?} != {:?}",
-                    argument.name,
-                    reference.shape()
-                ),
+                format!("output '{}': {error}", argument.name),
             );
-        }
-        let expected = reference.values();
-        if values.len() != expected.len() {
-            return observed(
-                CaseStatus::Mismatch,
-                format!(
-                    "output '{}' length {} != {}",
-                    argument.name,
-                    values.len(),
-                    expected.len()
-                ),
-            );
-        }
-        for (index, (&actual, &expected)) in values.iter().zip(&expected).enumerate() {
-            let matches = if reference.is_float() {
-                actual.is_nan() == expected.is_nan()
-                    && (actual - expected).abs() <= 1e-3 + 1e-3 * expected.abs()
-            } else {
-                actual == expected
-            };
-            if !matches {
-                return observed(
-                    CaseStatus::Mismatch,
-                    format!(
-                        "output '{}' value {index}: {actual} != {expected}",
-                        argument.name
-                    ),
-                );
-            }
         }
     }
 
@@ -388,36 +378,80 @@ fn load_tensor(path: &Path) -> Result<Reference, String> {
             },
             shape,
         )),
-        2 => Ok(Reference::I64(
-            small_int(raw, &tensor.int32_data, count, 1, |bytes| {
-                i64::from(bytes[0])
-            }),
+        2 => Ok(Reference::U8(
+            small_int(
+                raw,
+                &tensor.int32_data,
+                count,
+                1,
+                |bytes| bytes[0],
+                |value| value as u8,
+            ),
             shape,
         )),
-        3 => Ok(Reference::I64(
-            small_int(raw, &tensor.int32_data, count, 1, |bytes| {
-                i64::from(bytes[0] as i8)
-            }),
+        3 => Ok(Reference::I8(
+            small_int(
+                raw,
+                &tensor.int32_data,
+                count,
+                1,
+                |bytes| bytes[0] as i8,
+                |value| value as i8,
+            ),
             shape,
         )),
-        4 => Ok(Reference::I64(
-            small_int(raw, &tensor.int32_data, count, 2, |bytes| {
-                i64::from(u16::from_le_bytes([bytes[0], bytes[1]]))
-            }),
+        4 => Ok(Reference::U16(
+            small_int(
+                raw,
+                &tensor.int32_data,
+                count,
+                2,
+                |bytes| u16::from_le_bytes([bytes[0], bytes[1]]),
+                |value| value as u16,
+            ),
             shape,
         )),
-        5 => Ok(Reference::I64(
-            small_int(raw, &tensor.int32_data, count, 2, |bytes| {
-                i64::from(i16::from_le_bytes([bytes[0], bytes[1]]))
-            }),
+        5 => Ok(Reference::I16(
+            small_int(
+                raw,
+                &tensor.int32_data,
+                count,
+                2,
+                |bytes| i16::from_le_bytes([bytes[0], bytes[1]]),
+                |value| value as i16,
+            ),
             shape,
         )),
-        10 => Ok(Reference::F32(
-            half_values(raw, &tensor.int32_data, half::f16::from_bits),
+        10 => Ok(Reference::F16(
+            half_values(raw, &tensor.int32_data, f16::from_bits),
             shape,
         )),
-        16 => Ok(Reference::F32(
-            half_values(raw, &tensor.int32_data, half::bf16::from_bits),
+        12 => Ok(Reference::U32(
+            if tensor.uint64_data.is_empty() {
+                raw.chunks_exact(4)
+                    .map(|bytes| u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+                    .collect()
+            } else {
+                tensor
+                    .uint64_data
+                    .iter()
+                    .map(|&value| value as u32)
+                    .collect()
+            },
+            shape,
+        )),
+        13 => Ok(Reference::U64(
+            if tensor.uint64_data.is_empty() {
+                raw.chunks_exact(8)
+                    .map(|bytes| u64::from_le_bytes(bytes.try_into().expect("eight-byte chunk")))
+                    .collect()
+            } else {
+                tensor.uint64_data.clone()
+            },
+            shape,
+        )),
+        16 => Ok(Reference::BF16(
+            half_values(raw, &tensor.int32_data, bf16::from_bits),
             shape,
         )),
         data_type => Err(format!(
@@ -427,68 +461,220 @@ fn load_tensor(path: &Path) -> Result<Reference, String> {
     }
 }
 
-fn small_int(
+fn small_int<T>(
     raw: &[u8],
     typed: &[i32],
     count: usize,
     width: usize,
-    decode: impl Fn(&[u8]) -> i64,
-) -> Vec<i64> {
+    decode_raw: impl Fn(&[u8]) -> T,
+    decode_typed: impl Fn(i32) -> T,
+) -> Vec<T> {
     if raw.is_empty() {
-        typed.iter().map(|&value| i64::from(value)).collect()
+        typed.iter().copied().map(decode_typed).collect()
     } else {
-        raw.chunks_exact(width).take(count).map(decode).collect()
+        raw.chunks_exact(width)
+            .take(count)
+            .map(decode_raw)
+            .collect()
     }
 }
 
-fn half_values<T: Copy>(raw: &[u8], typed: &[i32], from_bits: impl Fn(u16) -> T) -> Vec<f32>
-where
-    f32: From<T>,
-{
+fn half_values<T>(raw: &[u8], typed: &[i32], from_bits: impl Fn(u16) -> T) -> Vec<T> {
     if raw.is_empty() {
-        typed
-            .iter()
-            .map(|&value| f32::from(from_bits(value as u16)))
-            .collect()
+        typed.iter().map(|&value| from_bits(value as u16)).collect()
     } else {
         raw.chunks_exact(2)
-            .map(|bytes| f32::from(from_bits(u16::from_le_bytes([bytes[0], bytes[1]]))))
+            .map(|bytes| from_bits(u16::from_le_bytes([bytes[0], bytes[1]])))
             .collect()
     }
 }
 
-fn value_data(value: &Value) -> Option<(Vec<usize>, Vec<f64>)> {
+fn compare_value(reference: &Reference, value: &Value) -> Result<(), String> {
+    let actual_shape = value_shape(value);
+    if actual_shape != reference.shape() {
+        return Err(format!("shape {actual_shape:?} != {:?}", reference.shape()));
+    }
+
+    match reference {
+        Reference::F16(expected, _) => compare_float(
+            &float_values(value, reference.dtype())?,
+            &expected
+                .iter()
+                .map(|value| value.to_f64())
+                .collect::<Vec<_>>(),
+        ),
+        Reference::BF16(expected, _) => compare_float(
+            &float_values(value, reference.dtype())?,
+            &expected
+                .iter()
+                .map(|value| value.to_f64())
+                .collect::<Vec<_>>(),
+        ),
+        Reference::F32(expected, _) => compare_float(
+            &float_values(value, reference.dtype())?,
+            &expected
+                .iter()
+                .map(|&value| f64::from(value))
+                .collect::<Vec<_>>(),
+        ),
+        Reference::F64(expected, _) => {
+            compare_float(&float_values(value, reference.dtype())?, expected)
+        }
+        Reference::I8(expected, _) => compare_exact(
+            &signed_values(value, reference.dtype())?,
+            &expected
+                .iter()
+                .map(|&value| i64::from(value))
+                .collect::<Vec<_>>(),
+        ),
+        Reference::I16(expected, _) => compare_exact(
+            &signed_values(value, reference.dtype())?,
+            &expected
+                .iter()
+                .map(|&value| i64::from(value))
+                .collect::<Vec<_>>(),
+        ),
+        Reference::I32(expected, _) => compare_exact(
+            &signed_values(value, reference.dtype())?,
+            &expected
+                .iter()
+                .map(|&value| i64::from(value))
+                .collect::<Vec<_>>(),
+        ),
+        Reference::I64(expected, _) => {
+            compare_exact(&signed_values(value, reference.dtype())?, expected)
+        }
+        Reference::U8(expected, _) => compare_exact(
+            &unsigned_values(value, reference.dtype())?,
+            &expected
+                .iter()
+                .map(|&value| u64::from(value))
+                .collect::<Vec<_>>(),
+        ),
+        Reference::U16(expected, _) => compare_exact(
+            &unsigned_values(value, reference.dtype())?,
+            &expected
+                .iter()
+                .map(|&value| u64::from(value))
+                .collect::<Vec<_>>(),
+        ),
+        Reference::U32(expected, _) => compare_exact(
+            &unsigned_values(value, reference.dtype())?,
+            &expected
+                .iter()
+                .map(|&value| u64::from(value))
+                .collect::<Vec<_>>(),
+        ),
+        Reference::U64(expected, _) => {
+            compare_exact(&unsigned_values(value, reference.dtype())?, expected)
+        }
+        Reference::Bool(expected, _) => {
+            compare_exact(&bool_values(value, reference.dtype())?, expected)
+        }
+    }
+}
+
+fn value_shape(value: &Value) -> Vec<usize> {
+    match value {
+        Value::Tensor(tensor) => tensor.dims(),
+        Value::Int(tensor) => tensor.dims(),
+        Value::Bool(tensor) => tensor.dims(),
+        Value::Scalar(_) => Vec::new(),
+        Value::Shape(shape) => vec![shape.len()],
+    }
+}
+
+fn float_values(value: &Value, expected_dtype: DType) -> Result<Vec<f64>, String> {
     match value {
         Value::Tensor(tensor) => {
-            let shape = tensor.dims();
-            let values = tensor.clone().into_data().iter::<f64>().collect();
-            Some((shape, values))
+            let data = tensor.clone().into_data();
+            require_dtype(data.dtype, expected_dtype)?;
+            Ok(data.iter::<f64>().collect())
         }
+        Value::Scalar(tynx::Scalar::F64(value)) => Ok(vec![*value]),
+        _ => Err("expected a floating-point value".to_string()),
+    }
+}
+
+fn signed_values(value: &Value, expected_dtype: DType) -> Result<Vec<i64>, String> {
+    match value {
         Value::Int(tensor) => {
-            let shape = tensor.dims();
-            let values = tensor
-                .clone()
-                .into_data()
-                .iter::<i64>()
-                .map(|value| value as f64)
-                .collect();
-            Some((shape, values))
+            let data = tensor.clone().into_data();
+            require_dtype(data.dtype, expected_dtype)?;
+            Ok(data.iter::<i64>().collect())
         }
+        Value::Scalar(tynx::Scalar::I64(value)) => Ok(vec![*value]),
+        Value::Shape(shape) if expected_dtype == DType::I64 => Ok(shape.clone()),
+        _ => Err("expected a signed integer value".to_string()),
+    }
+}
+
+fn unsigned_values(value: &Value, expected_dtype: DType) -> Result<Vec<u64>, String> {
+    match value {
+        Value::Int(tensor) => {
+            let data = tensor.clone().into_data();
+            require_dtype(data.dtype, expected_dtype)?;
+            Ok(data.iter::<u64>().collect())
+        }
+        Value::Scalar(tynx::Scalar::U64(value)) => Ok(vec![*value]),
+        _ => Err("expected an unsigned integer value".to_string()),
+    }
+}
+
+fn bool_values(value: &Value, expected_dtype: DType) -> Result<Vec<bool>, String> {
+    match value {
         Value::Bool(tensor) => {
-            let shape = tensor.dims();
-            let values = tensor
-                .clone()
-                .into_data()
-                .iter::<bool>()
-                .map(|value| u8::from(value) as f64)
-                .collect();
-            Some((shape, values))
+            let data = tensor.clone().into_data();
+            require_dtype(data.dtype, expected_dtype)?;
+            Ok(data.iter::<bool>().collect())
         }
-        Value::Scalar(scalar) => Some((Vec::new(), vec![scalar.as_f64()])),
-        Value::Shape(shape) => Some((
-            vec![shape.len()],
-            shape.iter().map(|&value| value as f64).collect(),
-        )),
+        Value::Scalar(tynx::Scalar::Bool(value)) => Ok(vec![*value]),
+        _ => Err("expected a boolean value".to_string()),
+    }
+}
+
+fn require_dtype(actual: DType, expected: DType) -> Result<(), String> {
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(format!("dtype {actual:?} != {expected:?}"))
+    }
+}
+
+fn compare_exact<T: PartialEq + std::fmt::Display>(
+    actual: &[T],
+    expected: &[T],
+) -> Result<(), String> {
+    if actual.len() != expected.len() {
+        return Err(format!("length {} != {}", actual.len(), expected.len()));
+    }
+    for (index, (actual, expected)) in actual.iter().zip(expected).enumerate() {
+        if actual != expected {
+            return Err(format!("value {index}: {actual} != {expected}"));
+        }
+    }
+    Ok(())
+}
+
+fn compare_float(actual: &[f64], expected: &[f64]) -> Result<(), String> {
+    if actual.len() != expected.len() {
+        return Err(format!("length {} != {}", actual.len(), expected.len()));
+    }
+    for (index, (&actual, &expected)) in actual.iter().zip(expected).enumerate() {
+        if !float_matches(actual, expected) {
+            return Err(format!("value {index}: {actual} != {expected}"));
+        }
+    }
+    Ok(())
+}
+
+fn float_matches(actual: f64, expected: f64) -> bool {
+    if expected.is_nan() {
+        actual.is_nan()
+    } else if expected.is_infinite() {
+        actual == expected
+    } else {
+        actual.is_finite() && (actual - expected).abs() <= 1e-3 + 1e-3 * expected.abs()
     }
 }
 
@@ -582,4 +768,56 @@ fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
         .map(|message| (*message).to_string())
         .or_else(|| payload.downcast_ref::<String>().cloned())
         .unwrap_or_else(|| "non-string panic payload".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compares_large_integers_exactly() {
+        let device = Device::default();
+        let reference = Reference::I64(vec![9_007_199_254_740_993], vec![1]);
+        let actual = Value::from_tensor_data(
+            TensorData::new(vec![9_007_199_254_740_992_i64], [1]),
+            1,
+            &device,
+        )
+        .unwrap();
+
+        assert!(compare_value(&reference, &actual).is_err());
+    }
+
+    #[test]
+    fn preserves_integer_input_dtypes() {
+        let device = Device::default();
+        let reference = Reference::U8(vec![255], vec![1]);
+        let actual = reference.to_value(&device).unwrap();
+        let widened =
+            Value::from_tensor_data(TensorData::new(vec![255_i64], [1]), 1, &device).unwrap();
+
+        assert!(compare_value(&reference, &actual).is_ok());
+        assert!(compare_value(&reference, &widened).is_err());
+    }
+
+    #[test]
+    fn preserves_half_input_dtypes() {
+        let device = Device::default();
+        let reference = Reference::F16(vec![f16::from_f32(1.5)], vec![1]);
+        let actual = reference.to_value(&device).unwrap();
+        let widened =
+            Value::from_tensor_data(TensorData::new(vec![1.5_f32], [1]), 1, &device).unwrap();
+
+        assert!(compare_value(&reference, &actual).is_ok());
+        assert!(compare_value(&reference, &widened).is_err());
+    }
+
+    #[test]
+    fn compares_non_finite_floats() {
+        assert!(float_matches(f64::NAN, f64::NAN));
+        assert!(float_matches(f64::INFINITY, f64::INFINITY));
+        assert!(float_matches(f64::NEG_INFINITY, f64::NEG_INFINITY));
+        assert!(!float_matches(f64::INFINITY, f64::NEG_INFINITY));
+        assert!(!float_matches(0.0, f64::NAN));
+    }
 }
