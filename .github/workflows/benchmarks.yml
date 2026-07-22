@@ -42,6 +42,18 @@ jobs:
         run: cargo run --manifest-path benchmarks/Cargo.toml --locked --release -p burn-aot-bench > benchmarks/results/burn-aot-cpu.json
       - name: Benchmark ONNX Runtime CPU
         run: cargo run --manifest-path benchmarks/Cargo.toml --locked --release -p ort-bench > benchmarks/results/ort-cpu.json
+      - name: Benchmark Tynx MatMul CPU
+        run: cargo run --manifest-path benchmarks/Cargo.toml --locked --release -p tynx-bench > benchmarks/results/tynx-matmul-cpu.json
+        env:
+          TYNX_BENCH_CASE: matmul-64x64
+      - name: Benchmark burn-onnx AOT MatMul CPU
+        run: cargo run --manifest-path benchmarks/Cargo.toml --locked --release -p burn-aot-bench > benchmarks/results/burn-aot-matmul-cpu.json
+        env:
+          TYNX_BENCH_CASE: matmul-64x64
+      - name: Benchmark ONNX Runtime MatMul CPU
+        run: cargo run --manifest-path benchmarks/Cargo.toml --locked --release -p ort-bench > benchmarks/results/ort-matmul-cpu.json
+        env:
+          TYNX_BENCH_CASE: matmul-64x64
       - uses: actions/upload-artifact@v7
         if: always()
         with:

@@ -1,13 +1,60 @@
 {
-  "schema": 1,
+  "schema": 2,
   "cases": [
     {
       "id": "sign-11",
       "model": "models/sign.onnx.hex",
-      "input_shape": [11],
-      "input": [-5.0, -4.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0],
-      "expected": [-1.0, -1.0, -1.0, -1.0, -1.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+      "inputs": [
+        {
+          "name": "x",
+          "shape": [11],
+          "data": {
+            "kind": "explicit",
+            "values": [-5.0, -4.0, -3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0]
+          }
+        }
+      ],
+      "expected": {
+        "shape": [11],
+        "data": {
+          "kind": "explicit",
+          "values": [-1.0, -1.0, -1.0, -1.0, -1.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+        }
+      },
       "tolerance": 0.000001,
+      "warmup": 20,
+      "iterations": 200
+    },
+    {
+      "id": "matmul-64x64",
+      "model": "models/matmul64.onnx.hex",
+      "inputs": [
+        {
+          "name": "a",
+          "shape": [64, 64],
+          "data": {
+            "kind": "linear",
+            "start": -1.0,
+            "step": 0.0005
+          }
+        },
+        {
+          "name": "b",
+          "shape": [64, 64],
+          "data": {
+            "kind": "identity"
+          }
+        }
+      ],
+      "expected": {
+        "shape": [64, 64],
+        "data": {
+          "kind": "linear",
+          "start": -1.0,
+          "step": 0.0005
+        }
+      },
+      "tolerance": 0.00001,
       "warmup": 20,
       "iterations": 200
     }
