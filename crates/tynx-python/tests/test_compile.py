@@ -278,3 +278,44 @@ def test_whole_sgd_step_replay_matches_eager_updates() -> None:
     assert captured_step.compile_count == 1
     assert captured_step.replay_count == 39
     assert captured_weight.item() == pytest.approx(2.0, abs=0.05)
+
+
+def test_whole_adam_step_replay_matches_eager_updates() -> None:
+    eager_weight = tynx.Parameter([[0.5]], name="weight")
+    captured_weight = tynx.Parameter([[0.5]], name="weight")
+    eager_optimizer = tynx.optim.Adam(
+        [eager_weight], lr=0.03, betas=(0.8, 0.95), eps=1.0e-6, amsgrad=True
+    )
+    captured_optimizer = tynx.optim.Adam(
+        [captured_weight], lr=0.03, betas=(0.8, 0.95), eps=1.0e-6, amsgrad=True
+    )
+    calls = 0
+
+    def eager_step(input: tynx.Tensor, target: tynx.Tensor) -> tynx.Tensor:
+        eager_optimizer.zero_grad()
+        loss = tynx.nn.functional.mse_loss(input @ eager_weight, target)
+        loss.backward()
+        eager_optimizer.step()
+        return loss
+
+    @tynx.compile(fullgraph=True)
+    def captured_step(input: tynx.Tensor, target: tynx.Tensor) -> tynx.Tensor:
+        nonlocal calls
+        calls += 1
+        captured_optimizer.zero_grad()
+        loss = tynx.nn.functional.mse_loss(input @ captured_weight, target)
+        loss.backward()
+        captured_optimizer.step()
+        return loss
+
+    input = tynx.Tensor([[1.0], [2.0], [3.0]])
+    target = tynx.Tensor([[2.0], [4.0], [6.0]])
+    for _ in range(50):
+        eager_loss = eager_step(input, target)
+        captured_loss = captured_step(input, target)
+        assert captured_loss.item() == pytest.approx(eager_loss.item(), abs=1.0e-6)
+        assert captured_weight.item() == pytest.approx(eager_weight.item(), abs=1.0e-6)
+
+    assert calls == 1
+    assert captured_step.replay_count == 49
+    assert captured_optimizer.state_size == eager_optimizer.state_size == 1

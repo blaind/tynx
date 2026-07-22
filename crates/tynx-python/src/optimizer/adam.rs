@@ -1,18 +1,25 @@
 //! CPython Adam-family optimizers over stable Rust parameter slots.
 
+use std::{cell::RefCell, rc::Rc};
+
 use pyo3::{
     prelude::*,
     types::{PyAny, PyDict},
 };
+use tynx_capture::CapturedOptimizer;
+use tynx_core::Result;
 use tynx_train::{Adam, AdamConfig, AdamStateKind, AdamW, AdamWConfig, ParameterSlot};
 
 use super::{parameters::collect_parameters, require_named_parameters, state, zero_grad};
-use crate::to_python_error;
+use crate::{
+    capture::{record_optimizer_step, record_zero_grad},
+    to_python_error,
+};
 
 /// Adam with coupled L2 weight decay over an explicit parameter list.
 #[pyclass(name = "Adam", unsendable)]
 pub(crate) struct PyAdam {
-    inner: Adam,
+    inner: Rc<RefCell<Adam>>,
     parameters: Vec<ParameterSlot>,
     named_parameters: Option<tynx_train::ParameterStore>,
 }
@@ -44,20 +51,27 @@ impl PyAdam {
             .with_amsgrad(amsgrad);
         let inner = Adam::with_config(config).map_err(to_python_error)?;
         Ok(Self {
-            inner,
+            inner: Rc::new(RefCell::new(inner)),
             parameters: collected.slots,
             named_parameters: collected.named,
         })
     }
 
     /// Clear every managed parameter's persistent gradient.
-    fn zero_grad(&self) {
+    fn zero_grad(&self) -> PyResult<()> {
+        record_zero_grad(&self.parameters)?;
         zero_grad(&self.parameters);
+        Ok(())
     }
 
     /// Apply one serialized off-tape update without clearing gradients.
     fn step(&mut self) -> PyResult<()> {
+        record_optimizer_step(Rc::new(CapturedAdam {
+            inner: self.inner.clone(),
+            parameters: self.parameters.clone(),
+        }))?;
         self.inner
+            .borrow_mut()
             .step_slots(&self.parameters)
             .map(|_| ())
             .map_err(to_python_error)
@@ -65,25 +79,30 @@ impl PyAdam {
 
     fn state_dict(&self, py: Python<'_>) -> PyResult<Py<PyDict>> {
         let parameters = require_named_parameters(&self.named_parameters, "Adam")?;
-        state::adam_to_python(py, &self.inner.state_dict(parameters))
+        let state_dict = self.inner.borrow().state_dict(parameters);
+        state::adam_to_python(py, &state_dict)
     }
 
     fn load_state_dict(&mut self, state_dict: &Bound<'_, PyAny>) -> PyResult<()> {
         let parameters = require_named_parameters(&self.named_parameters, "Adam")?;
         let state_dict = state::adam_from_python(state_dict, AdamStateKind::Adam)?;
         self.inner
+            .borrow_mut()
             .load_state_dict(parameters, &state_dict)
             .map_err(to_python_error)
     }
 
     #[getter]
     fn lr(&self) -> f64 {
-        self.inner.config().learning_rate()
+        self.inner.borrow().config().learning_rate()
     }
 
     #[setter]
     fn set_lr(&mut self, value: f64) -> PyResult<()> {
-        self.inner.set_learning_rate(value).map_err(to_python_error)
+        self.inner
+            .borrow_mut()
+            .set_learning_rate(value)
+            .map_err(to_python_error)
     }
 
     #[getter]
@@ -105,6 +124,7 @@ impl PyAdam {
         amsgrad: bool,
     ) -> PyResult<()> {
         self.inner
+            .borrow_mut()
             .set_config(
                 AdamConfig::new(lr)
                     .with_betas(betas.0, betas.1)
@@ -117,22 +137,22 @@ impl PyAdam {
 
     #[getter]
     fn betas(&self) -> (f64, f64) {
-        self.inner.config().betas()
+        self.inner.borrow().config().betas()
     }
 
     #[getter]
     fn eps(&self) -> f64 {
-        self.inner.config().epsilon()
+        self.inner.borrow().config().epsilon()
     }
 
     #[getter]
     fn weight_decay(&self) -> f64 {
-        self.inner.config().weight_decay()
+        self.inner.borrow().config().weight_decay()
     }
 
     #[getter]
     fn amsgrad(&self) -> bool {
-        self.inner.config().is_amsgrad()
+        self.inner.borrow().config().is_amsgrad()
     }
 
     #[getter]
@@ -142,11 +162,11 @@ impl PyAdam {
 
     #[getter]
     fn state_size(&self) -> usize {
-        self.inner.state_len()
+        self.inner.borrow().state_len()
     }
 
     fn __repr__(&self) -> String {
-        let config = self.inner.config();
+        let config = self.inner.borrow().config();
         format!(
             "Adam(lr={}, betas={:?}, eps={}, weight_decay={}, amsgrad={})",
             config.learning_rate(),
@@ -161,7 +181,7 @@ impl PyAdam {
 /// AdamW with decoupled weight decay over an explicit parameter list.
 #[pyclass(name = "AdamW", unsendable)]
 pub(crate) struct PyAdamW {
-    inner: AdamW,
+    inner: Rc<RefCell<AdamW>>,
     parameters: Vec<ParameterSlot>,
     named_parameters: Option<tynx_train::ParameterStore>,
 }
@@ -193,20 +213,27 @@ impl PyAdamW {
             .with_amsgrad(amsgrad);
         let inner = AdamW::with_config(config).map_err(to_python_error)?;
         Ok(Self {
-            inner,
+            inner: Rc::new(RefCell::new(inner)),
             parameters: collected.slots,
             named_parameters: collected.named,
         })
     }
 
     /// Clear every managed parameter's persistent gradient.
-    fn zero_grad(&self) {
+    fn zero_grad(&self) -> PyResult<()> {
+        record_zero_grad(&self.parameters)?;
         zero_grad(&self.parameters);
+        Ok(())
     }
 
     /// Apply one serialized off-tape update without clearing gradients.
     fn step(&mut self) -> PyResult<()> {
+        record_optimizer_step(Rc::new(CapturedAdamW {
+            inner: self.inner.clone(),
+            parameters: self.parameters.clone(),
+        }))?;
         self.inner
+            .borrow_mut()
             .step_slots(&self.parameters)
             .map(|_| ())
             .map_err(to_python_error)
@@ -214,25 +241,30 @@ impl PyAdamW {
 
     fn state_dict(&self, py: Python<'_>) -> PyResult<Py<PyDict>> {
         let parameters = require_named_parameters(&self.named_parameters, "AdamW")?;
-        state::adam_to_python(py, &self.inner.state_dict(parameters))
+        let state_dict = self.inner.borrow().state_dict(parameters);
+        state::adam_to_python(py, &state_dict)
     }
 
     fn load_state_dict(&mut self, state_dict: &Bound<'_, PyAny>) -> PyResult<()> {
         let parameters = require_named_parameters(&self.named_parameters, "AdamW")?;
         let state_dict = state::adam_from_python(state_dict, AdamStateKind::AdamW)?;
         self.inner
+            .borrow_mut()
             .load_state_dict(parameters, &state_dict)
             .map_err(to_python_error)
     }
 
     #[getter]
     fn lr(&self) -> f64 {
-        self.inner.config().learning_rate()
+        self.inner.borrow().config().learning_rate()
     }
 
     #[setter]
     fn set_lr(&mut self, value: f64) -> PyResult<()> {
-        self.inner.set_learning_rate(value).map_err(to_python_error)
+        self.inner
+            .borrow_mut()
+            .set_learning_rate(value)
+            .map_err(to_python_error)
     }
 
     #[getter]
@@ -254,6 +286,7 @@ impl PyAdamW {
         amsgrad: bool,
     ) -> PyResult<()> {
         self.inner
+            .borrow_mut()
             .set_config(
                 AdamWConfig::new(lr)
                     .with_betas(betas.0, betas.1)
@@ -266,22 +299,22 @@ impl PyAdamW {
 
     #[getter]
     fn betas(&self) -> (f64, f64) {
-        self.inner.config().betas()
+        self.inner.borrow().config().betas()
     }
 
     #[getter]
     fn eps(&self) -> f64 {
-        self.inner.config().epsilon()
+        self.inner.borrow().config().epsilon()
     }
 
     #[getter]
     fn weight_decay(&self) -> f64 {
-        self.inner.config().weight_decay()
+        self.inner.borrow().config().weight_decay()
     }
 
     #[getter]
     fn amsgrad(&self) -> bool {
-        self.inner.config().is_amsgrad()
+        self.inner.borrow().config().is_amsgrad()
     }
 
     #[getter]
@@ -291,11 +324,11 @@ impl PyAdamW {
 
     #[getter]
     fn state_size(&self) -> usize {
-        self.inner.state_len()
+        self.inner.borrow().state_len()
     }
 
     fn __repr__(&self) -> String {
-        let config = self.inner.config();
+        let config = self.inner.borrow().config();
         format!(
             "AdamW(lr={}, betas={:?}, eps={}, weight_decay={}, amsgrad={})",
             config.learning_rate(),
@@ -304,5 +337,35 @@ impl PyAdamW {
             config.weight_decay(),
             config.is_amsgrad()
         )
+    }
+}
+
+#[derive(Debug)]
+struct CapturedAdam {
+    inner: Rc<RefCell<Adam>>,
+    parameters: Vec<ParameterSlot>,
+}
+
+impl CapturedOptimizer for CapturedAdam {
+    fn step(&self) -> Result<()> {
+        self.inner
+            .borrow_mut()
+            .step_slots(&self.parameters)
+            .map(|_| ())
+    }
+}
+
+#[derive(Debug)]
+struct CapturedAdamW {
+    inner: Rc<RefCell<AdamW>>,
+    parameters: Vec<ParameterSlot>,
+}
+
+impl CapturedOptimizer for CapturedAdamW {
+    fn step(&self) -> Result<()> {
+        self.inner
+            .borrow_mut()
+            .step_slots(&self.parameters)
+            .map(|_| ())
     }
 }
