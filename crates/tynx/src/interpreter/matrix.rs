@@ -17,12 +17,21 @@ pub(super) fn matmul(node: &MatMulNode, env: &Env, device: &Device) -> Result<Ve
 
 pub(super) fn det(node: &DetNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
     let input = resolve::first(env, &node.name, &node.inputs, device)?.into_tensor()?;
+    let dims = input.dims();
+    if dims.len() < 2 {
+        return Err(TynxError::Shape(
+            "Det requires a tensor with rank at least 2".to_string(),
+        ));
+    }
+    if dims[dims.len() - 2] != dims[dims.len() - 1] {
+        return Err(TynxError::Shape(format!(
+            "Det requires square matrices, got trailing dimensions {} and {}",
+            dims[dims.len() - 2],
+            dims[dims.len() - 1]
+        )));
+    }
     let output = match input {
-        DynTensor::R1(_) => {
-            return Err(TynxError::Shape(
-                "Det requires a tensor with rank at least 2".to_string(),
-            ));
-        }
+        DynTensor::R1(_) => return Err(TynxError::Shape("Det rank invariant".to_string())),
         DynTensor::R2(tensor) => {
             let [rows, columns] = tensor.dims();
             let determinant = burn_det::<3, 2, 1>(tensor.reshape([1, rows, columns]));
@@ -121,12 +130,19 @@ pub(super) fn matmul_integer(
         .cast(DType::I32);
     let left_zero = optional_zero_point(node, env, device, 2)?;
     let right_zero = optional_zero_point(node, env, device, 3)?;
+    let left = subtract_zero_point(left, left_zero, 2)?;
+    let right = subtract_zero_point(right, right_zero, 1)?;
 
     Ok(vec![matmul_values(
-        Value::Int(left.sub_scalar(left_zero)),
-        Value::Int(right.sub_scalar(right_zero)),
+        Value::Int(left),
+        Value::Int(right),
         device,
     )?])
+}
+
+enum MatMulZeroPoint {
+    Scalar(i64),
+    Tensor(DynInt),
 }
 
 fn optional_zero_point(
@@ -134,28 +150,87 @@ fn optional_zero_point(
     env: &Env,
     device: &Device,
     index: usize,
-) -> Result<i64> {
+) -> Result<Option<MatMulZeroPoint>> {
     if !node
         .inputs
         .get(index)
         .is_some_and(|input| !input.is_optional())
     {
-        return Ok(0);
+        return Ok(None);
     }
     let value = resolve::at(env, &node.name, &node.inputs, index, device)?;
     match value {
-        Value::Scalar(Scalar::I64(value)) => Ok(value),
+        Value::Scalar(Scalar::I64(value)) => Ok(Some(MatMulZeroPoint::Scalar(value))),
         Value::Scalar(Scalar::U64(value)) => i64::try_from(value)
+            .map(MatMulZeroPoint::Scalar)
+            .map(Some)
             .map_err(|_| TynxError::Shape(format!("zero point {value} exceeds i64"))),
-        Value::Int(tensor) if tensor.dims().iter().product::<usize>() == 1 => tensor
-            .into_data()
-            .iter::<i64>()
-            .next()
-            .ok_or_else(|| TynxError::Shape("empty zero-point tensor".to_string())),
+        Value::Int(tensor) if tensor.dims().iter().product::<usize>() == 1 => {
+            let value = tensor
+                .into_data()
+                .iter::<i64>()
+                .next()
+                .ok_or_else(|| TynxError::Shape("empty zero-point tensor".to_string()))?;
+            Ok(Some(MatMulZeroPoint::Scalar(value)))
+        }
+        Value::Int(tensor) => Ok(Some(MatMulZeroPoint::Tensor(tensor.cast(DType::I32)))),
         other => Err(TynxError::TypeMismatch(format!(
-            "MatMulInteger zero point must be scalar, got {other:?}"
+            "MatMulInteger zero point must be an integer scalar or tensor, got {other:?}"
         ))),
     }
+}
+
+fn subtract_zero_point(
+    input: DynInt,
+    zero_point: Option<MatMulZeroPoint>,
+    matrix_axis_from_end: usize,
+) -> Result<DynInt> {
+    let Some(zero_point) = zero_point else {
+        return Ok(input);
+    };
+    let mut zero_point = match zero_point {
+        MatMulZeroPoint::Scalar(zero_point) => return Ok(input.sub_scalar(zero_point)),
+        MatMulZeroPoint::Tensor(zero_point) => zero_point,
+    };
+
+    let input_dims = input.dims();
+    let rank = input_dims.len();
+    let matrix_axis = rank.checked_sub(matrix_axis_from_end).ok_or_else(|| {
+        TynxError::Shape(format!(
+            "MatMulInteger input rank {rank} is too small for a matrix"
+        ))
+    })?;
+    let zero_dims = zero_point.dims();
+    if zero_dims.len() == 1 {
+        if zero_dims[0] != input_dims[matrix_axis] {
+            return Err(TynxError::Shape(format!(
+                "MatMulInteger zero point length {} does not match matrix dimension {}",
+                zero_dims[0], input_dims[matrix_axis]
+            )));
+        }
+        let mut broadcast_dims = vec![1; rank];
+        broadcast_dims[matrix_axis] = zero_dims[0];
+        zero_point = zero_point.reshape(broadcast_dims)?;
+    } else if zero_dims.len() == rank {
+        let singleton_axis = if matrix_axis_from_end == 2 {
+            rank - 1
+        } else {
+            rank - 2
+        };
+        if zero_dims[singleton_axis] != 1 {
+            return Err(TynxError::Shape(format!(
+                "MatMulInteger zero point dimension {singleton_axis} must be 1, got {}",
+                zero_dims[singleton_axis]
+            )));
+        }
+    } else {
+        return Err(TynxError::Shape(format!(
+            "MatMulInteger zero point rank {} must be 1 or match input rank {rank}",
+            zero_dims.len()
+        )));
+    }
+
+    input.sub_broadcast(zero_point)
 }
 
 pub(super) fn matmul_values(left: Value, right: Value, device: &Device) -> Result<Value> {

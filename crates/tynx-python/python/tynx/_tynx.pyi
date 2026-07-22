@@ -1,9 +1,10 @@
 from os import PathLike
-from typing import TypeAlias
+
+from typing_extensions import TypeAlias
 
 __version__: str
 
-TensorData: TypeAlias = float | list[TensorData] | tuple[TensorData, ...]
+TensorData: TypeAlias = float | list["TensorData"] | tuple["TensorData", ...]
 
 class _NoGrad:
     def __enter__(self) -> None: ...
@@ -40,6 +41,11 @@ class Tensor:
     def __truediv__(self, other: Tensor) -> Tensor: ...
     def __matmul__(self, other: Tensor) -> Tensor: ...
     def __neg__(self) -> Tensor: ...
+
+class Parameter(Tensor):
+    def __init__(self, data: TensorData, *, name: str | None = None) -> None: ...
+    @property
+    def name(self) -> str | None: ...
 
 class Session:
     def __init__(self, path: str | PathLike[str], *, simplify: bool = True) -> None: ...

@@ -12,6 +12,7 @@ use pyo3::{
     types::{PyAny, PyList, PyListMethods, PyTuple, PyTupleMethods},
 };
 use tynx_core::{Device, DynTensor, Gradients, TensorData};
+use tynx_train::ParameterSlot;
 
 use crate::{grad_mode::is_grad_enabled, to_python_error};
 
@@ -19,11 +20,65 @@ use crate::{grad_mode::is_grad_enabled, to_python_error};
 ///
 /// Burn-owned tensor state stays in a Rust heap allocation and the initial binding is explicitly
 /// unsendable. Operations return new tensors and delegate numerical semantics to `DynTensor`.
-#[pyclass(name = "Tensor", frozen, unsendable)]
+#[pyclass(name = "Tensor", frozen, unsendable, subclass)]
 pub(crate) struct PyTensor {
-    inner: Box<DynTensor>,
-    leaves: Vec<Weak<LeafState>>,
+    source: TensorSource,
+    targets: Vec<GradTarget>,
     leaf: Option<Rc<LeafState>>,
+}
+
+#[derive(Debug)]
+enum TensorSource {
+    Owned(Box<DynTensor>),
+    Parameter(ParameterSlot),
+}
+
+impl TensorSource {
+    fn value(&self) -> DynTensor {
+        match self {
+            Self::Owned(value) => value.as_ref().clone(),
+            Self::Parameter(slot) => slot.value(),
+        }
+    }
+
+    fn operation_input(&self, tracking: bool) -> DynTensor {
+        match self {
+            Self::Owned(value) if tracking => value.as_ref().clone(),
+            Self::Owned(value) => value.as_ref().clone().detach(),
+            Self::Parameter(slot) if tracking => slot.read(),
+            Self::Parameter(slot) => slot.value(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum GradTarget {
+    Tensor(Weak<LeafState>),
+    Parameter(ParameterSlot),
+}
+
+impl GradTarget {
+    fn same_identity(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Tensor(left), Self::Tensor(right)) => left.ptr_eq(right),
+            (Self::Parameter(left), Self::Parameter(right)) => left.id() == right.id(),
+            _ => false,
+        }
+    }
+
+    fn accumulate(&self, gradients: &Gradients) -> tynx_core::Result<()> {
+        match self {
+            Self::Tensor(leaf) => {
+                if let Some(leaf) = leaf.upgrade() {
+                    leaf.accumulate(gradients)?;
+                }
+            }
+            Self::Parameter(slot) => {
+                slot.accumulate_grad(gradients)?;
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -50,8 +105,8 @@ impl LeafState {
 impl PyTensor {
     fn from_inner(inner: DynTensor) -> Self {
         Self {
-            inner: Box::new(inner),
-            leaves: Vec::new(),
+            source: TensorSource::Owned(Box::new(inner)),
+            targets: Vec::new(),
             leaf: None,
         }
     }
@@ -63,24 +118,35 @@ impl PyTensor {
             grad: RefCell::new(None),
         });
         Self {
-            inner: Box::new(inner),
-            leaves: vec![Rc::downgrade(&leaf)],
+            source: TensorSource::Owned(Box::new(inner)),
+            targets: vec![GradTarget::Tensor(Rc::downgrade(&leaf))],
             leaf: Some(leaf),
         }
     }
 
+    pub(crate) fn from_parameter(slot: ParameterSlot) -> Self {
+        Self {
+            source: TensorSource::Parameter(slot.clone()),
+            targets: vec![GradTarget::Parameter(slot)],
+            leaf: None,
+        }
+    }
+
     fn from_operation(inner: DynTensor, sources: &[&Self]) -> Self {
-        let mut leaves: Vec<Weak<LeafState>> = Vec::new();
+        let mut targets: Vec<GradTarget> = Vec::new();
         for source in sources {
-            for leaf in &source.leaves {
-                if !leaves.iter().any(|existing| existing.ptr_eq(leaf)) {
-                    leaves.push(leaf.clone());
+            for target in &source.targets {
+                if !targets
+                    .iter()
+                    .any(|existing| existing.same_identity(target))
+                {
+                    targets.push(target.clone());
                 }
             }
         }
         Self {
-            inner: Box::new(inner),
-            leaves,
+            source: TensorSource::Owned(Box::new(inner)),
+            targets,
             leaf: None,
         }
     }
@@ -91,12 +157,8 @@ impl PyTensor {
         operation: impl FnOnce(DynTensor, DynTensor) -> tynx_core::Result<DynTensor>,
     ) -> PyResult<Self> {
         let tracking = is_grad_enabled();
-        let mut left = self.inner.as_ref().clone();
-        let mut right = other.inner.as_ref().clone();
-        if !tracking {
-            left = left.detach();
-            right = right.detach();
-        }
+        let left = self.source.operation_input(tracking);
+        let right = other.source.operation_input(tracking);
         let inner = operation(left, right).map_err(to_python_error)?;
         Ok(if tracking {
             Self::from_operation(inner, &[self, other])
@@ -110,16 +172,31 @@ impl PyTensor {
         operation: impl FnOnce(DynTensor) -> tynx_core::Result<DynTensor>,
     ) -> PyResult<Self> {
         let tracking = is_grad_enabled();
-        let mut input = self.inner.as_ref().clone();
-        if !tracking {
-            input = input.detach();
-        }
+        let input = self.source.operation_input(tracking);
         let inner = operation(input).map_err(to_python_error)?;
         Ok(if tracking {
             Self::from_operation(inner, &[self])
         } else {
             Self::from_inner(inner)
         })
+    }
+
+    pub(crate) fn tensor_from_python(data: &Bound<'_, PyAny>) -> PyResult<DynTensor> {
+        let mut values = Vec::new();
+        let mut shape = parse_value(data, &mut values)?;
+        if shape.is_empty() {
+            shape.push(1);
+        }
+        let device = Device::autodiff(Device::default());
+        DynTensor::from_data(TensorData::new(values, shape.clone()), shape.len(), &device)
+            .map_err(to_python_error)
+    }
+
+    pub(crate) fn parameter_name(&self) -> Option<String> {
+        match &self.source {
+            TensorSource::Parameter(slot) => slot.name(),
+            TensorSource::Owned(_) => None,
+        }
     }
 }
 
@@ -129,15 +206,7 @@ impl PyTensor {
     #[new]
     #[pyo3(signature = (data, *, requires_grad=false))]
     fn new(data: &Bound<'_, PyAny>, requires_grad: bool) -> PyResult<Self> {
-        let mut values = Vec::new();
-        let mut shape = parse_value(data, &mut values)?;
-        if shape.is_empty() {
-            shape.push(1);
-        }
-        let device = Device::autodiff(Device::default());
-        let tensor =
-            DynTensor::from_data(TensorData::new(values, shape.clone()), shape.len(), &device)
-                .map_err(to_python_error)?;
+        let tensor = Self::tensor_from_python(data)?;
         Ok(if requires_grad {
             Self::from_leaf(tensor)
         } else {
@@ -148,19 +217,19 @@ impl PyTensor {
     /// Tensor dimensions as a Python tuple.
     #[getter]
     fn shape(&self, py: Python<'_>) -> PyResult<Py<PyTuple>> {
-        Ok(PyTuple::new(py, self.inner.dims())?.unbind())
+        Ok(PyTuple::new(py, self.source.value().dims())?.unbind())
     }
 
     /// Number of tensor dimensions.
     #[getter]
     fn ndim(&self) -> usize {
-        self.inner.rank()
+        self.source.value().rank()
     }
 
     /// Number of tensor elements.
     #[getter]
     fn numel(&self) -> usize {
-        self.inner.dims().into_iter().product()
+        self.source.value().dims().into_iter().product()
     }
 
     /// Element dtype. The initial eager constructor is f32-only.
@@ -172,34 +241,33 @@ impl PyTensor {
     /// Whether this tensor participates in an autodiff graph.
     #[getter]
     fn requires_grad(&self) -> bool {
-        !self.leaves.is_empty()
+        !self.targets.is_empty()
     }
 
     /// Whether this object is a user-created autodiff leaf.
     #[getter]
     fn is_leaf(&self) -> bool {
-        self.leaf.is_some()
+        self.leaf.is_some() || matches!(self.source, TensorSource::Parameter(_))
     }
 
     /// Return the accumulated gradient for a leaf tensor.
     #[getter]
     fn grad(&self) -> Option<Self> {
-        self.leaf
-            .as_ref()
-            .and_then(|leaf| leaf.grad.borrow().clone())
-            .map(Self::from_inner)
+        let gradient = match &self.source {
+            TensorSource::Parameter(slot) => slot.grad(),
+            TensorSource::Owned(_) => self
+                .leaf
+                .as_ref()
+                .and_then(|leaf| leaf.grad.borrow().clone()),
+        };
+        gradient.map(Self::from_inner)
     }
 
     /// Copy tensor values to nested Python lists.
     fn tolist(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let shape = self.inner.dims();
-        let values = self
-            .inner
-            .as_ref()
-            .clone()
-            .into_data()
-            .iter::<f32>()
-            .collect::<Vec<_>>();
+        let value = self.source.value();
+        let shape = value.dims();
+        let values = value.into_data().iter::<f32>().collect::<Vec<_>>();
         nested_list(py, &values, &shape)
     }
 
@@ -208,13 +276,12 @@ impl PyTensor {
         if self.numel() != 1 {
             return Err(PyValueError::new_err(format!(
                 "item() requires a one-element tensor, got shape {:?}",
-                self.inner.dims()
+                self.source.value().dims()
             )));
         }
         Ok(self
-            .inner
-            .as_ref()
-            .clone()
+            .source
+            .value()
             .into_data()
             .iter::<f32>()
             .next()
@@ -223,13 +290,18 @@ impl PyTensor {
 
     /// Return an off-tape tensor sharing the current numerical value.
     fn detach(&self) -> Self {
-        Self::from_inner(self.inner.as_ref().clone().detach())
+        Self::from_inner(self.source.value().detach())
     }
 
     /// Clear this leaf tensor's accumulated gradient.
     fn zero_grad(&self) {
-        if let Some(leaf) = &self.leaf {
-            *leaf.grad.borrow_mut() = None;
+        match &self.source {
+            TensorSource::Parameter(slot) => slot.zero_grad(),
+            TensorSource::Owned(_) => {
+                if let Some(leaf) = &self.leaf {
+                    *leaf.grad.borrow_mut() = None;
+                }
+            }
         }
     }
 
@@ -239,7 +311,7 @@ impl PyTensor {
         if gradient.is_none() && self.numel() != 1 {
             return Err(PyValueError::new_err(format!(
                 "backward() without an explicit gradient requires a one-element tensor, got shape {:?}",
-                self.inner.dims()
+                self.source.value().dims()
             )));
         }
         if !self.requires_grad() {
@@ -247,41 +319,39 @@ impl PyTensor {
                 "backward() requires a tensor attached to an autodiff graph",
             ));
         }
+        let output = self.source.operation_input(true);
         let root = match gradient {
             Some(gradient) => {
-                if gradient.inner.dims() != self.inner.dims() {
+                let seed = gradient.source.value();
+                if seed.dims() != output.dims() {
                     return Err(PyValueError::new_err(format!(
                         "backward() gradient shape {:?} does not match output shape {:?}",
-                        gradient.inner.dims(),
-                        self.inner.dims()
+                        seed.dims(),
+                        output.dims()
                     )));
                 }
-                let dims = (0..self.inner.rank()).collect::<Vec<_>>();
-                self.inner
-                    .as_ref()
-                    .clone()
-                    .mul_broadcast(gradient.inner.as_ref().clone().detach())
+                let dims = (0..output.rank()).collect::<Vec<_>>();
+                output
+                    .mul_broadcast(seed.detach())
                     .map_err(to_python_error)?
                     .sum_dims(&dims)
                     .reshape(vec![1])
                     .map_err(to_python_error)?
             }
-            None => self.inner.as_ref().clone(),
+            None => output,
         };
         let gradients = catch_unwind(AssertUnwindSafe(|| root.backward())).map_err(|_| {
             PyValueError::new_err("backward() could not traverse the autodiff graph")
         })?;
-        for leaf in &self.leaves {
-            if let Some(leaf) = leaf.upgrade() {
-                leaf.accumulate(&gradients).map_err(to_python_error)?;
-            }
+        for target in &self.targets {
+            target.accumulate(&gradients).map_err(to_python_error)?;
         }
         Ok(())
     }
 
     /// Reduce all dimensions to the v1 one-element `(1,)` tensor shape.
     fn mean(&self) -> PyResult<Self> {
-        let dims = (0..self.inner.rank()).collect::<Vec<_>>();
+        let dims = (0..self.source.value().rank()).collect::<Vec<_>>();
         self.unary(|input| input.mean_dims(&dims).reshape(vec![1]))
     }
 
@@ -312,7 +382,7 @@ impl PyTensor {
     fn __repr__(&self) -> String {
         format!(
             "Tensor(shape={:?}, dtype=float32, requires_grad={})",
-            self.inner.dims().as_slice(),
+            self.source.value().dims().as_slice(),
             self.requires_grad()
         )
     }

@@ -10,6 +10,7 @@ def test_module_metadata() -> None:
     assert tynx.__version__
     assert callable(tynx.Session)
     assert callable(tynx.Tensor)
+    assert callable(tynx.Parameter)
 
 
 def test_tensor_metadata_and_host_conversion() -> None:
@@ -120,6 +121,32 @@ def test_no_grad_is_nested_and_restores_tracking() -> None:
 
     assert tynx.is_grad_enabled()
     assert (value * value).requires_grad
+
+
+def test_parameter_is_a_named_trainable_tensor() -> None:
+    parameter = tynx.Parameter([2.0], name="weight")
+
+    assert isinstance(parameter, tynx.Tensor)
+    assert parameter.name == "weight"
+    assert parameter.requires_grad
+    assert parameter.is_leaf
+    assert parameter.tolist() == pytest.approx([2.0])
+
+
+def test_parameter_accumulates_and_zeros_gradients() -> None:
+    parameter = tynx.Parameter([2.0])
+
+    (parameter * parameter).mean().backward()
+    assert parameter.grad is not None
+    assert parameter.grad.tolist() == pytest.approx([4.0])
+
+    # One target entry still carries the full derivative from both uses of the slot.
+    (parameter + parameter).mean().backward()
+    assert parameter.grad is not None
+    assert parameter.grad.tolist() == pytest.approx([6.0])
+
+    parameter.zero_grad()
+    assert parameter.grad is None
 
 
 def test_missing_model_raises_os_error(tmp_path: Path) -> None:

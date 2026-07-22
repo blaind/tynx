@@ -224,7 +224,12 @@ impl ParameterSlot {
         Ok(())
     }
 
-    pub(crate) fn accumulate_from(&self, gradients: &Gradients) -> Result<bool> {
+    /// Accumulate this slot's current leaf gradient from a Burn backward result.
+    ///
+    /// Returns `false` when the current value generation has no live leaf or did not participate in
+    /// the graph. This is the binding-neutral bridge used by eager frontends with their own leaf
+    /// registries.
+    pub fn accumulate_grad(&self, gradients: &Gradients) -> Result<bool> {
         let leaf = {
             let state = self.state.borrow();
             match &state.leaf {

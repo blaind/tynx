@@ -58,7 +58,7 @@ pub fn backward(loss: &DynTensor, parameters: &ParameterStore) -> Result<Backwar
     })?;
     let mut parameters_with_grad = 0;
     for parameter in parameters.trainable() {
-        if parameter.accumulate_from(&gradients)? {
+        if parameter.accumulate_grad(&gradients)? {
             parameters_with_grad += 1;
         }
     }

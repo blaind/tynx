@@ -16,6 +16,7 @@ doctest = false
 [dependencies]
 pyo3 = { version = "0.29", features = ["abi3-py39", "extension-module"] }
 tynx-core = { package = "tynx", path = "../tynx", features = ["training"] }
+tynx-train = { path = "../tynx-train" }
 
 [features]
 vulkan = ["tynx-core/vulkan"]

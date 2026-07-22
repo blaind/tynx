@@ -1,6 +1,7 @@
 //! Python bindings for Tynx.
 
 mod grad_mode;
+mod parameter;
 mod tensor;
 
 use std::path::PathBuf;
@@ -10,6 +11,7 @@ use pyo3::prelude::*;
 use tynx_core::Session;
 
 use grad_mode::{PyNoGrad, is_grad_enabled_py, no_grad};
+use parameter::PyParameter;
 use tensor::PyTensor;
 
 /// A parsed ONNX model.
@@ -73,6 +75,7 @@ fn _tynx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
     module.add_class::<PySession>()?;
     module.add_class::<PyTensor>()?;
+    module.add_class::<PyParameter>()?;
     module.add_class::<PyNoGrad>()?;
     module.add_function(wrap_pyfunction!(no_grad, module)?)?;
     module.add_function(wrap_pyfunction!(is_grad_enabled_py, module)?)?;
