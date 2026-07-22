@@ -5307,6 +5307,7 @@ version = "0.1.1"
 dependencies = [
  "pyo3",
  "tynx",
+ "tynx-capture",
  "tynx-train",
 ]
 

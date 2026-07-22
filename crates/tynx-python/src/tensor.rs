@@ -19,10 +19,12 @@ use pyo3::{
     prelude::*,
     types::{PyAny, PyTuple},
 };
+use tynx_capture::{BinaryOp, UnaryOp};
 use tynx_core::{Device, DynInt, DynTensor, Gradients};
 use tynx_train::ParameterSlot;
 
 use crate::{
+    capture::{TraceValue, record_binary},
     device::{PyDevice, raise_pending_device_error},
     grad_mode::is_grad_enabled,
     to_python_error,
@@ -42,6 +44,7 @@ pub(crate) struct PyTensor {
     targets: Vec<GradTarget>,
     leaf: Option<Rc<LeafState>>,
     backward_graphs: Vec<Rc<BackwardGraph>>,
+    trace: Option<TraceValue>,
 }
 
 #[derive(Debug, Default)]
@@ -154,6 +157,7 @@ impl PyTensor {
             targets: Vec::new(),
             leaf: None,
             backward_graphs: Vec::new(),
+            trace: None,
         }
     }
 
@@ -167,6 +171,7 @@ impl PyTensor {
             targets: Vec::new(),
             leaf: None,
             backward_graphs: Vec::new(),
+            trace: None,
         }
     }
 
@@ -182,6 +187,7 @@ impl PyTensor {
             targets: vec![GradTarget::Tensor(Rc::downgrade(&leaf))],
             leaf: Some(leaf),
             backward_graphs: Vec::new(),
+            trace: None,
         }
     }
 
@@ -196,6 +202,7 @@ impl PyTensor {
             targets,
             leaf: None,
             backward_graphs: Vec::new(),
+            trace: None,
         }
     }
 
@@ -226,6 +233,7 @@ impl PyTensor {
             targets,
             leaf: None,
             backward_graphs,
+            trace: None,
         }
     }
 
@@ -258,27 +266,31 @@ impl PyTensor {
     fn binary(
         &self,
         other: &Self,
+        capture_op: BinaryOp,
         operation: impl FnOnce(DynTensor, DynTensor) -> tynx_core::Result<DynTensor>,
     ) -> PyResult<Self> {
         let tracking = is_grad_enabled();
         let left = self.operation_input(tracking, "arithmetic")?;
         let right = other.operation_input(tracking, "arithmetic")?;
         let inner = operation(left, right).map_err(to_python_error)?;
-        Ok(if tracking {
+        let mut result = if tracking {
             Self::from_operation(inner, &[self, other])
         } else {
             Self::from_inner(inner)
-        })
+        };
+        result.trace = record_binary(self, other, capture_op)?;
+        Ok(result)
     }
 
     fn arithmetic(
         &self,
         other: &Bound<'_, PyAny>,
+        capture_op: BinaryOp,
         tensor_operation: impl FnOnce(DynTensor, DynTensor) -> tynx_core::Result<DynTensor>,
         scalar_operation: impl FnOnce(DynTensor, f64) -> DynTensor,
     ) -> PyResult<Self> {
         if let Ok(other) = other.extract::<PyRef<'_, Self>>() {
-            return self.binary(&other, tensor_operation);
+            return self.binary(&other, capture_op, tensor_operation);
         }
         let scalar = extract_scalar_operand(other)?;
         self.unary(|input| Ok(scalar_operation(input, scalar)))
@@ -291,11 +303,38 @@ impl PyTensor {
         let tracking = is_grad_enabled();
         let input = self.operation_input(tracking, "operation")?;
         let inner = operation(input).map_err(to_python_error)?;
-        Ok(if tracking {
+        let mut result = if tracking {
             Self::from_operation(inner, &[self])
         } else {
             Self::from_inner(inner)
-        })
+        };
+        if let Some(trace) = &self.trace {
+            trace.unsupported("this tensor operation")?;
+        }
+        result.trace = None;
+        Ok(result)
+    }
+
+    fn unary_captured(
+        &self,
+        capture_op: UnaryOp,
+        operation: impl FnOnce(DynTensor) -> tynx_core::Result<DynTensor>,
+    ) -> PyResult<Self> {
+        let tracking = is_grad_enabled();
+        let input = self.operation_input(tracking, "operation")?;
+        let inner = operation(input).map_err(to_python_error)?;
+        let mut result = if tracking {
+            Self::from_operation(inner, &[self])
+        } else {
+            Self::from_inner(inner)
+        };
+        result.trace = self
+            .trace
+            .as_ref()
+            .map(|trace| trace.unary(capture_op))
+            .transpose()?
+            .flatten();
+        Ok(result)
     }
 
     fn compare(&self, other: &Bound<'_, PyAny>, comparison: Comparison) -> PyResult<Self> {
@@ -450,6 +489,30 @@ impl PyTensor {
         match &self.source {
             TensorSource::Parameter(slot) => Some(slot.clone()),
             TensorSource::Owned(_) => None,
+        }
+    }
+
+    pub(crate) fn trace(&self) -> Option<&TraceValue> {
+        self.trace.as_ref()
+    }
+
+    pub(crate) fn with_trace(&self, trace: TraceValue) -> Self {
+        Self {
+            source: TensorSource::Owned(Box::new(self.source.value())),
+            targets: self.targets.clone(),
+            leaf: self.leaf.clone(),
+            backward_graphs: self.backward_graphs.clone(),
+            trace: Some(trace),
+        }
+    }
+
+    pub(crate) fn without_trace(&self) -> Self {
+        Self {
+            source: TensorSource::Owned(Box::new(self.source.value())),
+            targets: self.targets.clone(),
+            leaf: self.leaf.clone(),
+            backward_graphs: self.backward_graphs.clone(),
+            trace: None,
         }
     }
 
@@ -706,37 +769,37 @@ impl PyTensor {
 
     /// Apply rectified linear activation element-wise.
     fn relu(&self) -> PyResult<Self> {
-        self.unary(|input| Ok(input.relu()))
+        self.unary_captured(UnaryOp::Relu, |input| Ok(input.relu()))
     }
 
     /// Apply logistic sigmoid activation element-wise.
     fn sigmoid(&self) -> PyResult<Self> {
-        self.unary(|input| Ok(input.sigmoid()))
+        self.unary_captured(UnaryOp::Sigmoid, |input| Ok(input.sigmoid()))
     }
 
     /// Apply hyperbolic tangent element-wise.
     fn tanh(&self) -> PyResult<Self> {
-        self.unary(|input| Ok(input.tanh()))
+        self.unary_captured(UnaryOp::Tanh, |input| Ok(input.tanh()))
     }
 
     /// Apply the exponential function element-wise.
     fn exp(&self) -> PyResult<Self> {
-        self.unary(|input| Ok(input.exp()))
+        self.unary_captured(UnaryOp::Exp, |input| Ok(input.exp()))
     }
 
     /// Apply the natural logarithm element-wise.
     fn log(&self) -> PyResult<Self> {
-        self.unary(|input| Ok(input.log()))
+        self.unary_captured(UnaryOp::Log, |input| Ok(input.log()))
     }
 
     /// Apply the square root element-wise.
     fn sqrt(&self) -> PyResult<Self> {
-        self.unary(|input| Ok(input.sqrt()))
+        self.unary_captured(UnaryOp::Sqrt, |input| Ok(input.sqrt()))
     }
 
     /// Apply Gaussian error linear unit activation element-wise.
     fn gelu(&self) -> PyResult<Self> {
-        self.unary(|input| Ok(input.gelu()))
+        self.unary_captured(UnaryOp::Gelu, |input| Ok(input.gelu()))
     }
 
     /// Normalize values into probabilities along one dimension.
@@ -787,14 +850,18 @@ impl PyTensor {
         let dim1 = shape::axis(dim1, rank, false, "transpose")?;
         let mut axes = (0..rank).collect::<Vec<_>>();
         axes.swap(dim0, dim1);
-        self.unary(move |input| input.permute(axes))
+        self.unary_captured(UnaryOp::Permute(axes.clone()), move |input| {
+            input.permute(axes)
+        })
     }
 
     /// Reorder all tensor dimensions.
     #[pyo3(signature = (*dims))]
     fn permute(&self, dims: &Bound<'_, PyTuple>) -> PyResult<Self> {
         let axes = shape::permutation(dims, self.ndim())?;
-        self.unary(move |input| input.permute(axes))
+        self.unary_captured(UnaryOp::Permute(axes.clone()), move |input| {
+            input.permute(axes)
+        })
     }
 
     /// Remove singleton dimensions, or one selected singleton dimension.
@@ -836,11 +903,21 @@ impl PyTensor {
     }
 
     fn __add__(&self, other: &Bound<'_, PyAny>) -> PyResult<Self> {
-        self.arithmetic(other, DynTensor::add_broadcast, DynTensor::add_scalar)
+        self.arithmetic(
+            other,
+            BinaryOp::Add,
+            DynTensor::add_broadcast,
+            DynTensor::add_scalar,
+        )
     }
 
     fn __radd__(&self, other: &Bound<'_, PyAny>) -> PyResult<Self> {
-        self.arithmetic(other, DynTensor::add_broadcast, DynTensor::add_scalar)
+        self.arithmetic(
+            other,
+            BinaryOp::Add,
+            DynTensor::add_broadcast,
+            DynTensor::add_scalar,
+        )
     }
 
     fn __iadd__(&self, _other: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -848,7 +925,12 @@ impl PyTensor {
     }
 
     fn __sub__(&self, other: &Bound<'_, PyAny>) -> PyResult<Self> {
-        self.arithmetic(other, DynTensor::sub_broadcast, DynTensor::sub_scalar)
+        self.arithmetic(
+            other,
+            BinaryOp::Subtract,
+            DynTensor::sub_broadcast,
+            DynTensor::sub_scalar,
+        )
     }
 
     fn __rsub__(&self, other: &Bound<'_, PyAny>) -> PyResult<Self> {
@@ -861,11 +943,21 @@ impl PyTensor {
     }
 
     fn __mul__(&self, other: &Bound<'_, PyAny>) -> PyResult<Self> {
-        self.arithmetic(other, DynTensor::mul_broadcast, DynTensor::mul_scalar)
+        self.arithmetic(
+            other,
+            BinaryOp::Multiply,
+            DynTensor::mul_broadcast,
+            DynTensor::mul_scalar,
+        )
     }
 
     fn __rmul__(&self, other: &Bound<'_, PyAny>) -> PyResult<Self> {
-        self.arithmetic(other, DynTensor::mul_broadcast, DynTensor::mul_scalar)
+        self.arithmetic(
+            other,
+            BinaryOp::Multiply,
+            DynTensor::mul_broadcast,
+            DynTensor::mul_scalar,
+        )
     }
 
     fn __imul__(&self, _other: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -873,7 +965,12 @@ impl PyTensor {
     }
 
     fn __truediv__(&self, other: &Bound<'_, PyAny>) -> PyResult<Self> {
-        self.arithmetic(other, DynTensor::div_broadcast, DynTensor::div_scalar)
+        self.arithmetic(
+            other,
+            BinaryOp::Divide,
+            DynTensor::div_broadcast,
+            DynTensor::div_scalar,
+        )
     }
 
     fn __rtruediv__(&self, other: &Bound<'_, PyAny>) -> PyResult<Self> {
@@ -892,7 +989,7 @@ impl PyTensor {
             ([left], [right]) => {
                 let left = *left;
                 let right = *right;
-                self.binary(&other, move |left_value, right_value| {
+                self.binary(&other, BinaryOp::Matmul, move |left_value, right_value| {
                     left_value
                         .reshape(vec![1, left])?
                         .matmul(right_value.reshape(vec![right, 1])?)?
@@ -903,7 +1000,7 @@ impl PyTensor {
                 let rows = *rows;
                 let _inner = *inner;
                 let right = *right;
-                self.binary(&other, move |left_value, right_value| {
+                self.binary(&other, BinaryOp::Matmul, move |left_value, right_value| {
                     left_value
                         .matmul(right_value.reshape(vec![right, 1])?)?
                         .reshape(vec![rows])
@@ -913,14 +1010,14 @@ impl PyTensor {
                 let left = *left;
                 let _inner = *inner;
                 let columns = *columns;
-                self.binary(&other, move |left_value, right_value| {
+                self.binary(&other, BinaryOp::Matmul, move |left_value, right_value| {
                     left_value
                         .reshape(vec![1, left])?
                         .matmul(right_value)?
                         .reshape(vec![columns])
                 })
             }
-            _ => self.binary(&other, DynTensor::matmul),
+            _ => self.binary(&other, BinaryOp::Matmul, DynTensor::matmul),
         }
     }
 
@@ -952,9 +1049,12 @@ impl PyTensor {
                 "Tensor power does not support a modulo argument",
             ));
         }
-        self.arithmetic(exponent, DynTensor::powf_broadcast, |base, exponent| {
-            base.powf_scalar(exponent)
-        })
+        self.arithmetic(
+            exponent,
+            BinaryOp::Power,
+            DynTensor::powf_broadcast,
+            |base, exponent| base.powf_scalar(exponent),
+        )
     }
 
     fn __rpow__(
@@ -1036,7 +1136,10 @@ impl PyTensor {
 impl PyTensor {
     fn reshape_value(&self, output: Vec<usize>) -> PyResult<Self> {
         match self.source.value() {
-            TensorValue::Float(_) => self.unary(move |input| input.reshape(output)),
+            TensorValue::Float(_) => self
+                .unary_captured(UnaryOp::Reshape(output.clone()), move |input| {
+                    input.reshape(output)
+                }),
             value => value.reshape(output).map(Self::from_value),
         }
     }

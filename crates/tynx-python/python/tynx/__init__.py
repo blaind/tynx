@@ -24,6 +24,7 @@ from ._tynx import (
     where,
 )
 from .checkpoint import load_checkpoint, save_checkpoint
+from .compiler import CompiledFunction, compile
 
 
 @overload
@@ -73,6 +74,7 @@ def load(
 
 __all__ = [
     "Buffer",
+    "CompiledFunction",
     "Device",
     "ImportedModel",
     "Parameter",
@@ -80,6 +82,7 @@ __all__ = [
     "Tensor",
     "TrainabilityReport",
     "__version__",
+    "compile",
     "distributions",
     "get_default_device",
     "is_grad_enabled",

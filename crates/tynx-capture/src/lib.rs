@@ -103,6 +103,8 @@ pub enum BinaryOp {
     Divide,
     /// Matrix multiplication.
     Matmul,
+    /// Elementwise floating-point exponentiation.
+    Power,
 }
 
 #[derive(Debug, Clone)]
@@ -259,18 +261,7 @@ impl Graph {
     /// When `tracking` is true, parameter nodes read the current generation's autodiff leaf.
     /// Ordinary optimizer value updates do not invalidate the graph; structural changes do.
     pub fn run(&self, inputs: &[DynTensor], tracking: bool) -> Result<Vec<DynTensor>> {
-        if inputs.len() != self.input_signatures.len() {
-            return Err(TynxError::TypeMismatch(format!(
-                "captured graph expected {} inputs, got {}",
-                self.input_signatures.len(),
-                inputs.len()
-            )));
-        }
-        for (index, (signature, input)) in
-            self.input_signatures.iter().zip(inputs.iter()).enumerate()
-        {
-            signature.validate(input, &format!("input {index}"))?;
-        }
+        self.validate_inputs(inputs)?;
 
         let mut values = Vec::with_capacity(self.nodes.len());
         for (index, node) in self.nodes.iter().enumerate() {
@@ -297,6 +288,28 @@ impl Graph {
             .iter()
             .map(|output| value(&values, *output))
             .collect()
+    }
+
+    /// Validate exact input signatures and stable parameter structures without executing nodes.
+    pub fn validate_inputs(&self, inputs: &[DynTensor]) -> Result<()> {
+        if inputs.len() != self.input_signatures.len() {
+            return Err(TynxError::TypeMismatch(format!(
+                "captured graph expected {} inputs, got {}",
+                self.input_signatures.len(),
+                inputs.len()
+            )));
+        }
+        for (index, (signature, input)) in
+            self.input_signatures.iter().zip(inputs.iter()).enumerate()
+        {
+            signature.validate(input, &format!("input {index}"))?;
+        }
+        for node in &self.nodes {
+            if let Node::Parameter(guard) = node {
+                guard.validate()?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -328,5 +341,6 @@ fn execute_binary(op: BinaryOp, left: DynTensor, right: DynTensor) -> Result<Dyn
         BinaryOp::Multiply => left.mul_broadcast(right),
         BinaryOp::Divide => left.div_broadcast(right),
         BinaryOp::Matmul => left.matmul(right),
+        BinaryOp::Power => left.powf_broadcast(right),
     }
 }

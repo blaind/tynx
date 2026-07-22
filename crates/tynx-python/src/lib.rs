@@ -1,5 +1,6 @@
 //! Python bindings for Tynx.
 
+mod capture;
 mod device;
 mod grad_mode;
 mod gradient;
@@ -12,6 +13,7 @@ mod tensor;
 
 use std::path::PathBuf;
 
+use capture::{PyCaptureSession, PyCapturedGraph};
 use pyo3::exceptions::{PyOSError, PyValueError};
 use pyo3::prelude::*;
 use tynx_core::Session;
@@ -108,6 +110,8 @@ fn _tynx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyParameter>()?;
     module.add_class::<PyBuffer>()?;
     module.add_class::<PyNoGrad>()?;
+    module.add_class::<PyCaptureSession>()?;
+    module.add_class::<PyCapturedGraph>()?;
     module.add_class::<PySgd>()?;
     module.add_class::<PyAdam>()?;
     module.add_class::<PyAdamW>()?;
