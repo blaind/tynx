@@ -7,6 +7,52 @@ use serde::{Deserialize, Serialize};
 pub type BenchError = Box<dyn Error>;
 pub type BenchResult<T> = Result<T, BenchError>;
 
+/// Requested CPU thread configuration for a benchmark process.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ThreadRequest {
+    /// Let the runtime choose its thread count.
+    Auto,
+    /// Use exactly this many threads.
+    Fixed(usize),
+}
+
+impl ThreadRequest {
+    /// Return the fixed thread count, or `None` for automatic selection.
+    pub fn fixed(self) -> Option<usize> {
+        match self {
+            Self::Auto => None,
+            Self::Fixed(threads) => Some(threads),
+        }
+    }
+
+    /// Create report metadata after a runtime has been configured.
+    pub fn report(self, runtime: &str, actual: Option<usize>) -> Threading {
+        Threading {
+            runtime: runtime.to_string(),
+            mode: if matches!(self, Self::Auto) {
+                "auto"
+            } else {
+                "fixed"
+            },
+            requested: self.fixed(),
+            actual,
+        }
+    }
+}
+
+/// CPU threading metadata attached to a benchmark report.
+#[derive(Clone, Debug, Serialize)]
+pub struct Threading {
+    /// Threading implementation used by the engine.
+    pub runtime: String,
+    /// Either `auto` or `fixed`.
+    pub mode: &'static str,
+    /// Explicitly requested thread count, if any.
+    pub requested: Option<usize>,
+    /// Runtime thread count when it can be queried reliably.
+    pub actual: Option<usize>,
+}
+
 #[derive(Clone, Debug)]
 pub struct Input {
     pub name: String,
@@ -107,6 +153,8 @@ pub struct Report {
     pub dtype: &'static str,
     pub warmup: usize,
     pub iterations: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub threading: Option<Threading>,
     pub load_ms: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prepare_ms: Option<f64>,
@@ -120,6 +168,41 @@ pub struct Report {
     pub throughput_items_per_second: Option<f64>,
     pub estimated_gflops: Option<f64>,
     pub output_checksum: f64,
+}
+
+impl Report {
+    /// Attach the process's CPU thread configuration.
+    pub fn with_threading(mut self, threading: Threading) -> Self {
+        self.threading = Some(threading);
+        self
+    }
+}
+
+/// Read `TYNX_BENCH_THREADS` as `auto`, `single`, or a positive integer.
+pub fn thread_request() -> BenchResult<ThreadRequest> {
+    let value = match env::var("TYNX_BENCH_THREADS") {
+        Ok(value) => value,
+        Err(env::VarError::NotPresent) => return Ok(ThreadRequest::Auto),
+        Err(error) => return Err(error.into()),
+    };
+    parse_thread_request(&value)
+}
+
+fn parse_thread_request(value: &str) -> BenchResult<ThreadRequest> {
+    let value = value.trim();
+    if value.is_empty() || value.eq_ignore_ascii_case("auto") {
+        return Ok(ThreadRequest::Auto);
+    }
+    if value.eq_ignore_ascii_case("single") {
+        return Ok(ThreadRequest::Fixed(1));
+    }
+    let threads = value.parse::<usize>().map_err(|_| {
+        format!("TYNX_BENCH_THREADS must be 'auto', 'single', or a positive integer; got '{value}'")
+    })?;
+    if threads == 0 {
+        return Err("TYNX_BENCH_THREADS must be greater than zero".into());
+    }
+    Ok(ThreadRequest::Fixed(threads))
 }
 
 pub fn load_cases() -> BenchResult<Vec<Case>> {
@@ -303,6 +386,7 @@ where
         dtype: "f32",
         warmup: case.warmup,
         iterations: case.iterations,
+        threading: None,
         load_ms,
         prepare_ms,
         cold_ms,
@@ -547,5 +631,18 @@ mod tests {
         )
         .unwrap();
         assert!(validate(&case, &[-1.0; 11]).is_err());
+    }
+
+    #[test]
+    fn parses_thread_requests() {
+        assert_eq!(parse_thread_request("").unwrap(), ThreadRequest::Auto);
+        assert_eq!(parse_thread_request("auto").unwrap(), ThreadRequest::Auto);
+        assert_eq!(
+            parse_thread_request("single").unwrap(),
+            ThreadRequest::Fixed(1)
+        );
+        assert_eq!(parse_thread_request("8").unwrap(), ThreadRequest::Fixed(8));
+        assert!(parse_thread_request("0").is_err());
+        assert!(parse_thread_request("many").is_err());
     }
 }

@@ -5,7 +5,7 @@ use burn::{
     tensor::{Bytes, TensorData},
 };
 use tynx_bench_protocol::{
-    BenchResult, Case, Report, load_cases, measure, print_reports, require_release,
+    BenchResult, Case, Report, Threading, load_cases, measure, print_reports, require_release,
 };
 
 #[allow(dead_code)]
@@ -40,10 +40,19 @@ mod mobilenetv2 {
 fn main() -> BenchResult<()> {
     require_release()?;
     let cases = load_cases()?;
+    let threading = cpu_threading()?;
     let (backend, device, device_name) = device();
     let reports = cases
         .iter()
-        .map(|case| run_case(case, backend, &device, device_name.clone()))
+        .map(|case| {
+            run_case(
+                case,
+                backend,
+                &device,
+                device_name.clone(),
+                threading.as_ref(),
+            )
+        })
         .collect::<BenchResult<Vec<_>>>()?;
     print_reports(&reports)
 }
@@ -53,8 +62,9 @@ fn run_case(
     backend: &str,
     device: &Device,
     device_name: Option<String>,
+    threading: Option<&Threading>,
 ) -> BenchResult<Report> {
-    match case.model.as_str() {
+    let report = match case.model.as_str() {
         "models/sign.onnx.hex" => run_sign(case, backend, device, device_name),
         "models/matmul64.onnx.hex" => run_matmul64(case, backend, device, device_name),
         "models/matmul_dynamic.onnx.hex" => run_matmul_dynamic(case, backend, device, device_name),
@@ -67,7 +77,37 @@ fn run_case(
             run_mobilenet(case, backend, device, device_name)
         }
         model => Err(format!("burn AOT runner does not embed model '{model}'").into()),
+    }?;
+    Ok(match threading {
+        Some(threading) => report.with_threading(threading.clone()),
+        None => report,
+    })
+}
+
+#[cfg(feature = "wgpu")]
+fn cpu_threading() -> BenchResult<Option<Threading>> {
+    Ok(None)
+}
+
+#[cfg(all(not(feature = "wgpu"), feature = "multithread"))]
+fn cpu_threading() -> BenchResult<Option<Threading>> {
+    let request = tynx_bench_protocol::thread_request()?;
+    if let tynx_bench_protocol::ThreadRequest::Fixed(threads) = request {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build_global()?;
     }
+    let actual = rayon::current_num_threads();
+    Ok(Some(request.report("rayon", Some(actual))))
+}
+
+#[cfg(all(not(feature = "wgpu"), not(feature = "multithread")))]
+fn cpu_threading() -> BenchResult<Option<Threading>> {
+    let request = tynx_bench_protocol::thread_request()?;
+    if request.fixed().is_some_and(|threads| threads != 1) {
+        return Err("multi-thread CPU benchmarks require the 'multithread' feature".into());
+    }
+    Ok(Some(request.report("serial", Some(1))))
 }
 
 fn run_sign(

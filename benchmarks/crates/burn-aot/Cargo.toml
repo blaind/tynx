@@ -10,6 +10,7 @@ build = "build.rs"
 default = ["flex"]
 flex = ["burn/flex"]
 mobilenet = ["tynx-bench-protocol/mobilenet"]
+multithread = ["dep:burn-flex", "burn-flex/rayon", "dep:rayon"]
 wgpu = [
     "burn/autotune",
     "burn/fusion",
@@ -20,7 +21,9 @@ wgpu = [
 
 [dependencies]
 burn.workspace = true
+burn-flex = { workspace = true, optional = true }
 burn-store.workspace = true
+rayon = { workspace = true, optional = true }
 tynx-bench-protocol.workspace = true
 
 [build-dependencies]

@@ -36,10 +36,30 @@ cargo run --manifest-path benchmarks/Cargo.toml --locked --release -p burn-aot-b
 
 ORT downloads its official CPU binary for the default configuration.
 
+Set `TYNX_BENCH_THREADS` to `1` for a matched single-thread run or `auto` for each runtime's
+all-core default. Tynx and burn-onnx AOT need the `multithread` feature in both modes so the
+single-thread and all-core measurements use the same Rayon-enabled build:
+
+```sh
+TYNX_BENCH_THREADS=1 cargo run --manifest-path benchmarks/Cargo.toml --locked --release \
+  -p tynx-bench --features multithread
+TYNX_BENCH_THREADS=auto cargo run --manifest-path benchmarks/Cargo.toml --locked --release \
+  -p tynx-bench --features multithread
+TYNX_BENCH_THREADS=1 cargo run --manifest-path benchmarks/Cargo.toml --locked --release \
+  -p ort-bench
+TYNX_BENCH_THREADS=auto cargo run --manifest-path benchmarks/Cargo.toml --locked --release \
+  -p ort-bench
+```
+
+Numeric values other than `1` request an exact thread count. JSON reports include the threading
+runtime, requested mode, and actual pool size where it can be queried. Without `multithread`, the
+Burn runners remain serial and reject explicit counts greater than one.
+
 Each runner executes every registered case by default and emits one JSON report array. Set
-`TYNX_BENCH_CASE` to limit a run to one case. The manual GitHub workflow invokes each engine once,
-adds a comparison table to the job summary, and uploads its JSON reports. Leave the workflow
-iteration inputs blank to use the per-case defaults.
+`TYNX_BENCH_CASE` to limit a run to one case. The manual GitHub workflow invokes each engine in
+matched single-thread and automatic all-core modes, adds a comparison table to the job summary,
+and uploads its JSON reports. Leave the workflow iteration inputs blank to use the per-case
+defaults.
 
 ## MobileNetV2
 
