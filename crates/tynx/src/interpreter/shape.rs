@@ -10,6 +10,7 @@ use onnx_ir::{
         flatten::FlattenNode,
         reshape::{ReshapeInput, ReshapeNode},
         shape::ShapeNode,
+        size::SizeNode,
         squeeze::{SqueezeInput, SqueezeNode},
         transpose::TransposeNode,
         unsqueeze::{UnsqueezeConfig, UnsqueezeNode},
@@ -39,6 +40,14 @@ pub(super) fn shape_of(node: &ShapeNode, env: &Env, device: &Device) -> Result<V
     let end = node.config.end.min(dims.len());
     let start = node.config.start.min(end);
     Ok(vec![Value::Shape(dims[start..end].to_vec())])
+}
+
+pub(super) fn size(node: &SizeNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
+    let input = resolve::first(env, &node.name, &node.inputs, device)?;
+    let count = checked_product(&value_dims(&input))?;
+    let count = i64::try_from(count)
+        .map_err(|_| TynxError::Shape(format!("Size result {count} exceeds i64")))?;
+    Ok(vec![Value::Scalar(Scalar::I64(count))])
 }
 
 pub(super) fn constant_of_shape(
@@ -423,6 +432,7 @@ mod tests {
             },
             flatten::{FlattenConfig, FlattenNodeBuilder},
             shape::{ShapeConfig, ShapeNodeBuilder},
+            size::SizeNodeBuilder,
         },
     };
 
@@ -488,6 +498,28 @@ mod tests {
         let output = shape_of(&node, &env, &device).unwrap();
 
         assert!(matches!(output.as_slice(), [Value::Shape(dims)] if dims == &[3, 4]));
+    }
+
+    #[test]
+    fn counts_tensor_elements() {
+        let node = SizeNodeBuilder::new("size")
+            .input_tensor("x", 3, DType::F32)
+            .output_scalar("y", DType::I64)
+            .build();
+        let device = Device::default();
+        let mut env = Env::new();
+        env.insert(
+            "x".into(),
+            Value::from_tensor_data(TensorData::new(vec![0.0_f32; 24], [2, 3, 4]), 3, &device)
+                .unwrap(),
+        );
+
+        let output = size(&node, &env, &device).unwrap();
+
+        assert!(matches!(
+            output.as_slice(),
+            [Value::Scalar(Scalar::I64(24))]
+        ));
     }
 
     #[test]

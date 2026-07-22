@@ -170,6 +170,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::ScatterElements(node) => scatter::scatter_elements(node, env, device),
         Node::ScatterND(node) => scatter::scatter_nd(node, env, device),
         Node::Shape(node) => shape::shape_of(node, env, device),
+        Node::Size(node) => shape::size(node, env, device),
         Node::Sigmoid(node) => unary::sigmoid(node, env, device),
         Node::Sign(node) => unary::sign(node, env, device),
         Node::Sin(node) => unary::sin(node, env, device),
