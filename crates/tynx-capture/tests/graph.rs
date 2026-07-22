@@ -97,7 +97,9 @@ fn structural_parameter_changes_invalidate_replay() {
     let output = builder.binary(BinaryOp::Matmul, x, w).unwrap();
     let graph = builder.finish(vec![output]).unwrap();
 
+    graph.validate_parameters().unwrap();
     parameter.set_trainable(false).unwrap();
+    assert!(graph.validate_parameters().is_err());
     let error = graph.run(&[input], false).unwrap_err();
     assert!(error.to_string().contains("changed structure"));
 }

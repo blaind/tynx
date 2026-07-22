@@ -138,6 +138,13 @@ impl CaptureState {
         let builder = inner.builder.take().ok_or_else(capture_finished)?;
         builder.finish(outputs).map(Some).map_err(to_python_error)
     }
+
+    fn abort(&self) {
+        let mut inner = self.inner.borrow_mut();
+        inner.builder = None;
+        inner.parameters.clear();
+        inner.failure = None;
+    }
 }
 
 fn capture_finished() -> PyErr {
@@ -415,6 +422,11 @@ impl PyCaptureSession {
     fn release(&self, output: PyRef<'_, PyTensor>) -> PyTensor {
         output.without_trace()
     }
+
+    fn abort(&self) {
+        deactivate(&self.state);
+        self.state.abort();
+    }
 }
 
 impl Drop for PyCaptureSession {
@@ -458,6 +470,11 @@ impl PyCapturedGraph {
     #[getter]
     fn node_count(&self) -> usize {
         self.graph.node_count()
+    }
+
+    #[getter]
+    fn structure_valid(&self) -> bool {
+        self.graph.validate_parameters().is_ok()
     }
 
     #[pyo3(signature = (*inputs))]

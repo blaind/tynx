@@ -33,6 +33,7 @@ class CompiledFunction(Generic[R]):
         self._fallback = False
         self._warned = False
         self.compile_count = 0
+        self.invalidation_count = 0
         self.fallback_count = 0
         self.replay_count = 0
         self.last_fallback_reason: Optional[str] = None
@@ -71,18 +72,26 @@ class CompiledFunction(Generic[R]):
             return self._function(*args, **kwargs)
 
         tensor_args, static_key = prepared
+        valid_graphs = [entry for entry in self._graphs if entry[1].structure_valid]
+        self.invalidation_count += len(self._graphs) - len(valid_graphs)
+        self._graphs = valid_graphs
         for cached_static_key, graph, output_spec in self._graphs:
             if cached_static_key == static_key and graph.matches(*tensor_args):
                 self.replay_count += 1
                 return cast(R, _restore_output(iter(graph(*tensor_args)), output_spec))
 
         session = _CaptureSession(fullgraph=self._fullgraph)
-        traced = iter(session.input(argument) for argument in tensor_args)
-        traced_bound = _replace_tensor_arguments(bound, traced)
-        output = self._function(*traced_bound.args, **traced_bound.kwargs)
+        try:
+            traced = iter(session.input(argument) for argument in tensor_args)
+            traced_bound = _replace_tensor_arguments(bound, traced)
+            output = self._function(*traced_bound.args, **traced_bound.kwargs)
+        except BaseException:
+            session.abort()
+            raise
         flattened = _flatten_output(output)
         if isinstance(flattened, str):
             reason = flattened
+            session.abort()
             if self._fullgraph:
                 raise RuntimeError(f"tynx.compile(fullgraph=True) cannot capture {reason}")
             self._disable(reason)

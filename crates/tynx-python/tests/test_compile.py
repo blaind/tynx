@@ -247,6 +247,45 @@ def test_fullgraph_rejects_unsupported_operation_visibly() -> None:
         compiled(tynx.Tensor([1.0]))
 
 
+def test_failed_trace_is_torn_down_and_can_retry() -> None:
+    attempts = 0
+
+    @tynx.compile(fullgraph=True)
+    def flaky(input: tynx.Tensor) -> tynx.Tensor:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise ValueError("trace failed")
+        return input.relu()
+
+    with pytest.raises(ValueError, match="trace failed"):
+        flaky(tynx.Tensor([-1.0, 2.0]))
+    assert flaky(tynx.Tensor([3.0, -4.0])).tolist() == [3.0, 0.0]
+    assert flaky(tynx.Tensor([-5.0, 6.0])).tolist() == [0.0, 6.0]
+    assert attempts == 2
+    assert flaky.compile_count == 1
+    assert flaky.replay_count == 1
+
+
+def test_failed_dtype_specialization_does_not_poison_cached_graph() -> None:
+    calls = 0
+
+    @tynx.compile(fullgraph=True)
+    def forward(input: tynx.Tensor) -> tynx.Tensor:
+        nonlocal calls
+        calls += 1
+        return input.relu()
+
+    assert forward(tynx.Tensor([-1.0, 2.0])).tolist() == [0.0, 2.0]
+    with pytest.raises(TypeError, match="requires a float32 Tensor"):
+        forward(tynx.Tensor([-1, 2], dtype="int64"))
+    assert forward(tynx.Tensor([3.0, -4.0])).tolist() == [3.0, 0.0]
+    assert calls == 2
+    assert forward.compile_count == 1
+    assert forward.graph_count == 1
+    assert forward.replay_count == 1
+
+
 def test_tensor_dependent_python_control_flow_falls_back() -> None:
     calls = 0
 

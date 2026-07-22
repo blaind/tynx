@@ -650,6 +650,11 @@ impl Graph {
         {
             signature.validate_value(input, &format!("input {index}"))?;
         }
+        self.validate_parameters()
+    }
+
+    /// Validate stable parameter and buffer structures without checking runtime inputs.
+    pub fn validate_parameters(&self) -> Result<()> {
         for node in &self.nodes {
             match node {
                 Node::Parameter(guard) => guard.validate()?,
