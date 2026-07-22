@@ -689,6 +689,90 @@ def test_layer_norm_validates_configuration_shape_and_dtype() -> None:
         tynx.nn.LayerNorm(2)(tynx.Tensor([[1, 2]], dtype="int64"))
 
 
+def test_batch_norm1d_updates_running_stats_and_preserves_gradients() -> None:
+    layer = tynx.nn.BatchNorm1d(2, eps=0.0, momentum=0.1)
+    input = tynx.Tensor([[1.0, 10.0], [3.0, 14.0]], requires_grad=True)
+
+    output = layer(input)
+
+    assert output.tolist()[0] == pytest.approx([-1.0, -1.0])
+    assert output.tolist()[1] == pytest.approx([1.0, 1.0])
+    assert layer.running_mean is not None
+    assert layer.running_mean.tolist() == pytest.approx([0.2, 1.2])
+    assert layer.running_var is not None
+    assert layer.running_var.tolist() == pytest.approx([1.1, 1.7])
+    assert [name for name, _ in layer.named_parameters()] == ["bias", "weight"]
+    assert [name for name, _ in layer.named_buffers()] == ["running_mean", "running_var"]
+
+    output.sum().backward()
+
+    assert input.grad is not None
+    for row in input.grad.tolist():
+        assert row == pytest.approx([0.0, 0.0], abs=1e-6)
+    assert layer.weight is not None
+    assert layer.weight.grad is not None
+    assert layer.weight.grad.tolist() == pytest.approx([0.0, 0.0], abs=1e-6)
+    assert layer.bias is not None
+    assert layer.bias.grad is not None
+    assert layer.bias.grad.tolist() == pytest.approx([2.0, 2.0])
+
+
+def test_batch_norm_eval_uses_running_stats_without_updating_them() -> None:
+    layer = tynx.nn.BatchNorm1d(2, eps=0.0, momentum=0.1)
+    input = tynx.Tensor([[1.0, 10.0], [3.0, 14.0]])
+    layer(input)
+    assert layer.running_mean is not None
+    assert layer.running_var is not None
+    mean_before = layer.running_mean.tolist()
+    variance_before = layer.running_var.tolist()
+
+    layer.eval()
+    output = layer(input)
+
+    assert output.tolist()[0] == pytest.approx(
+        [(1.0 - 0.2) / math.sqrt(1.1), (10.0 - 1.2) / math.sqrt(1.7)]
+    )
+    assert output.tolist()[1] == pytest.approx(
+        [(3.0 - 0.2) / math.sqrt(1.1), (14.0 - 1.2) / math.sqrt(1.7)]
+    )
+    assert layer.running_mean.tolist() == mean_before
+    assert layer.running_var.tolist() == variance_before
+
+
+def test_batch_norm2d_supports_non_affine_batch_stats_without_buffers() -> None:
+    layer = tynx.nn.BatchNorm2d(2, affine=False, track_running_stats=False)
+    input = tynx.Tensor(
+        [
+            [[[1.0], [3.0]], [[10.0], [14.0]]],
+            [[[5.0], [7.0]], [[18.0], [22.0]]],
+        ]
+    )
+
+    output = layer.eval()(input)
+
+    assert output.shape == input.shape
+    assert output.mean((0, 2, 3)).tolist() == pytest.approx([0.0, 0.0], abs=1e-6)
+    assert layer.parameters() == []
+    assert layer.buffers() == []
+
+
+def test_batch_norm_validates_configuration_shape_and_dtype() -> None:
+    with pytest.raises(ValueError, match="positive integer"):
+        tynx.nn.BatchNorm1d(0)
+    with pytest.raises(ValueError, match=r"\[0, 1\]"):
+        tynx.nn.BatchNorm1d(2, momentum=1.1)
+    with pytest.raises(TypeError, match="must be bool"):
+        tynx.nn.BatchNorm1d(2, affine=1)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="expects input rank"):
+        tynx.nn.BatchNorm2d(2)(tynx.Tensor([[1.0, 2.0], [3.0, 4.0]]))
+    with pytest.raises(ValueError, match="expected 3 channels"):
+        tynx.nn.BatchNorm1d(3)(tynx.Tensor([[1.0, 2.0], [3.0, 4.0]]))
+    with pytest.raises(ValueError, match="more than one value"):
+        tynx.nn.BatchNorm1d(2)(tynx.Tensor([[1.0, 2.0]]))
+    with pytest.raises(TypeError, match="float32"):
+        tynx.nn.BatchNorm1d(2)(tynx.Tensor([[1, 2], [3, 4]], dtype="int64"))
+
+
 def test_buffer_is_stable_non_trainable_state_and_not_an_optimizer_parameter() -> None:
     buffer = tynx.Buffer([1.0, 2.0], name="running_mean")
 
