@@ -65,6 +65,13 @@ The repository's dated, non-gating reference measurements are recorded in
 [`BASELINES.md`](BASELINES.md). They document the exact command and environment so later runs have a
 stable comparison point without turning machine-specific latency into a CI threshold.
 
+To isolate Python/PyO3 operation dispatch from backend work, the capture microbenchmark compares an
+operation-heavy eager function with its exact-signature native graph replay:
+
+```sh
+python benchmarks/python-capture.py
+```
+
 ## Training
 
 The training suite compares an imported Tynx model with burn-onnx generated AOT Rust using the
