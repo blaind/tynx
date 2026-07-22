@@ -157,6 +157,8 @@ pub enum UnaryOp {
     ReversePowerScalar(f64),
     /// Numerically stable log-softmax along one axis.
     LogSoftmax(usize),
+    /// Numerically stable softmax along one axis.
+    Softmax(usize),
     /// Clamp to optional trace-time scalar bounds.
     Clamp {
         /// Optional lower bound.
@@ -770,6 +772,7 @@ fn execute_unary(op: &UnaryOp, input: Value) -> Result<Value> {
         UnaryOp::PowerScalar(value) => Ok(input.powf_scalar(*value)),
         UnaryOp::ReversePowerScalar(value) => input.clone().full_like(*value).powf_broadcast(input),
         UnaryOp::LogSoftmax(dim) => Ok(input.log_softmax(*dim)),
+        UnaryOp::Softmax(dim) => Ok(input.softmax(*dim)),
         UnaryOp::Clamp { min, max } => Ok(input.clip(*min, *max)),
         UnaryOp::Reshape(shape) => input.reshape(shape.clone()),
         UnaryOp::Permute(axes) => input.permute(axes.clone()),

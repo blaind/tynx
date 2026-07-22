@@ -27,6 +27,26 @@ def test_compile_replays_linear_relu_without_python_dispatch() -> None:
     assert compiled.node_counts == (6,)
 
 
+def test_compile_replays_softmax_without_fallback() -> None:
+    calls = 0
+
+    @tynx.compile(fullgraph=True)
+    def policy(logits: tynx.Tensor) -> tynx.Tensor:
+        nonlocal calls
+        calls += 1
+        return logits.softmax(-1)
+
+    first = policy(tynx.Tensor([[1.0, 2.0, 3.0]]))
+    second = policy(tynx.Tensor([[3.0, 2.0, 1.0]]))
+
+    assert first.tolist()[0] == pytest.approx([0.09003057, 0.24472848, 0.66524094])
+    assert second.tolist()[0] == pytest.approx([0.66524094, 0.24472848, 0.09003057])
+    assert calls == 1
+    assert policy.compile_count == 1
+    assert policy.fallback_count == 0
+    assert policy.replay_count == 1
+
+
 def test_compile_preserves_nested_multi_output_structure() -> None:
     calls = 0
 

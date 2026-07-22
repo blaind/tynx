@@ -914,7 +914,7 @@ impl PyTensor {
     /// Normalize values into probabilities along one dimension.
     fn softmax(&self, dim: &Bound<'_, PyAny>) -> PyResult<Self> {
         let dim = shape::axis(dim, self.ndim(), false, "softmax")?;
-        self.unary(|input| Ok(input.softmax(dim)))
+        self.unary_captured(UnaryOp::Softmax(dim), |input| Ok(input.softmax(dim)))
     }
 
     /// Apply numerically stable log-softmax along one dimension.
