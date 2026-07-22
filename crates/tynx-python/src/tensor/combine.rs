@@ -3,7 +3,7 @@
 use pyo3::{
     exceptions::{PyTypeError, PyValueError},
     prelude::*,
-    types::{PyAny, PyList, PyTuple},
+    types::{PyAny, PyBool, PyList, PyTuple},
 };
 use tynx_core::{DynBool, DynInt, DynTensor};
 
@@ -126,4 +126,164 @@ pub(crate) fn cat_py(tensors: &Bound<'_, PyAny>, dim: isize) -> PyResult<PyTenso
 #[pyo3(signature = (tensors, dim=0))]
 pub(crate) fn stack_py(tensors: &Bound<'_, PyAny>, dim: isize) -> PyResult<PyTensor> {
     combine(tensors, dim, true)
+}
+
+fn split_sizes(spec: &Bound<'_, PyAny>, extent: usize) -> PyResult<Vec<usize>> {
+    if !spec.is_instance_of::<PyBool>()
+        && let Ok(size) = spec.extract::<usize>()
+    {
+        if size == 0 {
+            return Err(PyValueError::new_err("split size must be positive"));
+        }
+        if extent == 0 {
+            return Ok(vec![0]);
+        }
+        let mut sizes = vec![size; extent / size];
+        let remainder = extent % size;
+        if remainder != 0 {
+            sizes.push(remainder);
+        }
+        return Ok(sizes);
+    }
+    let items = if let Ok(tuple) = spec.cast::<PyTuple>() {
+        tuple.iter().collect::<Vec<_>>()
+    } else if let Ok(list) = spec.cast::<PyList>() {
+        list.iter().collect::<Vec<_>>()
+    } else {
+        return Err(PyTypeError::new_err(
+            "split_size_or_sections must be a positive integer or sequence of integers",
+        ));
+    };
+    items
+        .into_iter()
+        .map(|item| {
+            if item.is_instance_of::<PyBool>() {
+                return Err(PyTypeError::new_err(
+                    "split section sizes must be integers, not bool",
+                ));
+            }
+            item.extract::<usize>().map_err(|_| {
+                PyTypeError::new_err("split section sizes must be non-negative integers")
+            })
+        })
+        .collect()
+}
+
+pub(super) fn split_outputs(
+    input: &PyTensor,
+    split_size_or_sections: &Bound<'_, PyAny>,
+    dim: isize,
+) -> PyResult<Vec<PyTensor>> {
+    input.capture_unsupported("split")?;
+    let value = input.source.value();
+    let axis = shape::axis_value(dim, value.rank(), false, "split")?;
+    let sizes = split_sizes(split_size_or_sections, value.dims()[axis])?;
+    let tracking = is_grad_enabled();
+    match value {
+        TensorValue::Float(_) => input
+            .operation_float_value(tracking, "split")?
+            .split(&sizes, axis)
+            .map_err(to_python_error)
+            .map(|outputs| {
+                outputs
+                    .into_iter()
+                    .map(|output| {
+                        if tracking {
+                            PyTensor::from_operation(output, &[input])
+                        } else {
+                            PyTensor::from_inner(output)
+                        }
+                    })
+                    .collect()
+            }),
+        TensorValue::Int(value) => value
+            .split(&sizes, axis)
+            .map_err(to_python_error)
+            .map(|outputs| outputs.into_iter().map(PyTensor::from_int_inner).collect()),
+        TensorValue::Bool(value) => {
+            value
+                .split(&sizes, axis)
+                .map_err(to_python_error)
+                .map(|outputs| {
+                    outputs
+                        .into_iter()
+                        .map(|value| PyTensor::from_value(TensorValue::Bool(value)))
+                        .collect()
+                })
+        }
+    }
+}
+
+pub(super) fn chunk_outputs(
+    input: &PyTensor,
+    chunks: usize,
+    dim: isize,
+) -> PyResult<Vec<PyTensor>> {
+    input.capture_unsupported("chunk")?;
+    let value = input.source.value();
+    let axis = shape::axis_value(dim, value.rank(), false, "chunk")?;
+    let tracking = is_grad_enabled();
+    match value {
+        TensorValue::Float(_) => input
+            .operation_float_value(tracking, "chunk")?
+            .chunk(chunks, axis)
+            .map_err(to_python_error)
+            .map(|outputs| {
+                outputs
+                    .into_iter()
+                    .map(|output| {
+                        if tracking {
+                            PyTensor::from_operation(output, &[input])
+                        } else {
+                            PyTensor::from_inner(output)
+                        }
+                    })
+                    .collect()
+            }),
+        TensorValue::Int(value) => value
+            .chunk(chunks, axis)
+            .map_err(to_python_error)
+            .map(|outputs| outputs.into_iter().map(PyTensor::from_int_inner).collect()),
+        TensorValue::Bool(value) => {
+            value
+                .chunk(chunks, axis)
+                .map_err(to_python_error)
+                .map(|outputs| {
+                    outputs
+                        .into_iter()
+                        .map(|value| PyTensor::from_value(TensorValue::Bool(value)))
+                        .collect()
+                })
+        }
+    }
+}
+
+fn output_tuple(py: Python<'_>, outputs: Vec<PyTensor>) -> PyResult<Py<PyTuple>> {
+    let outputs = outputs
+        .into_iter()
+        .map(|output| Py::new(py, output))
+        .collect::<PyResult<Vec<_>>>()?;
+    Ok(PyTuple::new(py, outputs)?.unbind())
+}
+
+#[pyfunction(name = "split")]
+#[pyo3(signature = (input, split_size_or_sections, dim=0))]
+pub(crate) fn split_py(
+    py: Python<'_>,
+    input: PyRef<'_, PyTensor>,
+    split_size_or_sections: &Bound<'_, PyAny>,
+    dim: isize,
+) -> PyResult<Py<PyTuple>> {
+    output_tuple(py, split_outputs(&input, split_size_or_sections, dim)?)
+}
+
+#[pyfunction(name = "chunk")]
+#[pyo3(signature = (input, chunks, dim=0))]
+pub(crate) fn chunk_py(
+    py: Python<'_>,
+    input: PyRef<'_, PyTensor>,
+    chunks: usize,
+    dim: isize,
+) -> PyResult<Py<PyTuple>> {
+    output_tuple(py, chunk_outputs(&input, chunks, dim)?)
 }

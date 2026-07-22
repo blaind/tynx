@@ -683,6 +683,77 @@ macro_rules! impl_concat {
                     .collect::<Result<Vec<_>>>()?;
                 Self::concat(expanded, dim)
             }
+
+            /// Split a tensor into explicitly sized ordinary tensor results.
+            pub fn split(self, sizes: &[usize], dim: usize) -> Result<Vec<Self>> {
+                let dims = self.dims();
+                if dim >= dims.len() {
+                    return Err(TynxError::Shape(format!(
+                        "split axis {dim} is out of range for rank {}",
+                        dims.len()
+                    )));
+                }
+                if sizes.is_empty() {
+                    return Err(TynxError::Shape(
+                        "split requires at least one section".to_string(),
+                    ));
+                }
+                if sizes.iter().any(|&size| size == 0) && !(sizes == [0] && dims[dim] == 0) {
+                    return Err(TynxError::Shape(
+                        "split section sizes must be positive".to_string(),
+                    ));
+                }
+                let total = sizes.iter().try_fold(0usize, |total, &size| {
+                    total.checked_add(size).ok_or_else(|| {
+                        TynxError::Shape("split section sizes overflowed".to_string())
+                    })
+                })?;
+                if total != dims[dim] {
+                    return Err(TynxError::Shape(format!(
+                        "split section sizes sum to {total}, expected {} for axis {dim}",
+                        dims[dim]
+                    )));
+                }
+                let mut start = 0usize;
+                sizes
+                    .iter()
+                    .map(|&size| {
+                        let end = start + size;
+                        let mut slices = vec![Slice::full(); dims.len()];
+                        slices[dim] = Slice::new(start as isize, Some(end as isize), 1);
+                        start = end;
+                        Ok(self.clone().slice(&slices))
+                    })
+                    .collect()
+            }
+
+            /// Divide a tensor into at most the requested number of chunks.
+            pub fn chunk(self, chunks: usize, dim: usize) -> Result<Vec<Self>> {
+                let dims = self.dims();
+                if chunks == 0 {
+                    return Err(TynxError::Shape(
+                        "chunk count must be positive".to_string(),
+                    ));
+                }
+                if dim >= dims.len() {
+                    return Err(TynxError::Shape(format!(
+                        "chunk axis {dim} is out of range for rank {}",
+                        dims.len()
+                    )));
+                }
+                let extent = dims[dim];
+                if extent == 0 {
+                    return self.split(&[0], dim);
+                }
+                let chunk_size = extent.div_ceil(chunks);
+                let full_chunks = extent / chunk_size;
+                let remainder = extent % chunk_size;
+                let mut sizes = vec![chunk_size; full_chunks];
+                if remainder != 0 {
+                    sizes.push(remainder);
+                }
+                self.split(&sizes, dim)
+            }
         }
     };
 }

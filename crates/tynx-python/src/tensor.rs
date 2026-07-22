@@ -33,7 +33,7 @@ use crate::{
     grad_mode::is_grad_enabled,
     to_python_error,
 };
-pub(crate) use combine::{cat_py, stack_py};
+pub(crate) use combine::{cat_py, chunk_py, split_py, stack_py};
 use comparison::{Comparison, MaskOperation};
 use data::TensorValue;
 use extrema::Extremum;
@@ -798,6 +798,33 @@ impl PyTensor {
                 .map(|value| Self::from_value(TensorValue::Bool(value)))
                 .map_err(to_python_error),
         }
+    }
+
+    /// Split into ordinary tensor results along one dimension.
+    #[pyo3(signature = (split_size_or_sections, dim=0))]
+    fn split(
+        &self,
+        py: Python<'_>,
+        split_size_or_sections: &Bound<'_, PyAny>,
+        dim: isize,
+    ) -> PyResult<Py<PyTuple>> {
+        let outputs = combine::split_outputs(self, split_size_or_sections, dim)?;
+        let outputs = outputs
+            .into_iter()
+            .map(|output| Py::new(py, output))
+            .collect::<PyResult<Vec<_>>>()?;
+        Ok(PyTuple::new(py, outputs)?.unbind())
+    }
+
+    /// Divide into at most `chunks` ordinary tensor results.
+    #[pyo3(signature = (chunks, dim=0))]
+    fn chunk(&self, py: Python<'_>, chunks: usize, dim: isize) -> PyResult<Py<PyTuple>> {
+        let outputs = combine::chunk_outputs(self, chunks, dim)?;
+        let outputs = outputs
+            .into_iter()
+            .map(|output| Py::new(py, output))
+            .collect::<PyResult<Vec<_>>>()?;
+        Ok(PyTuple::new(py, outputs)?.unbind())
     }
 
     fn __bool__(&self, py: Python<'_>) -> PyResult<bool> {
