@@ -1,5 +1,5 @@
 """Neural-network building blocks and training utilities."""
 
-from . import utils
+from . import state, utils
 
-__all__ = ["utils"]
+__all__ = ["state", "utils"]

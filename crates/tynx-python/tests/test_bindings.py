@@ -444,6 +444,67 @@ def test_gradient_clipping_validates_arguments_and_handles_missing_gradients() -
         tynx.nn.utils.clip_grad_value_([parameter], -1.0)
 
 
+def test_state_discovery_walks_supported_objects_and_stabilizes_aliases() -> None:
+    class Layer:
+        def __init__(self) -> None:
+            self.weight = tynx.Parameter([1.0], name="ignored_nested_name")
+            self.bias = tynx.Parameter([0.0])
+
+    class Model:
+        def __init__(self) -> None:
+            shared = Layer()
+            self.right = shared
+            self.left = shared
+            self.heads = {"value": [tynx.Parameter([2.0])]}
+            self.self_cycle = self
+
+    model = Model()
+
+    named = tynx.nn.state.named_parameters(model)
+    aliases = tynx.nn.state.get_parameter_aliases(model)
+
+    assert [name for name, _ in named] == ["heads.value.0", "left.bias", "left.weight"]
+    assert tynx.nn.state.get_parameters(model) == [parameter for _, parameter in named]
+    assert aliases == {
+        "heads.value.0": (),
+        "left.bias": ("right.bias",),
+        "left.weight": ("right.weight",),
+    }
+
+
+def test_state_discovery_never_invokes_dynamic_python_behavior() -> None:
+    class Trap:
+        def __init__(self) -> None:
+            self.parameter = tynx.Parameter([1.0])
+
+        @property
+        def exploding_property(self) -> object:
+            raise AssertionError("property was invoked")
+
+        def __getattr__(self, name: str) -> object:
+            raise AssertionError(f"__getattr__ was invoked for {name}")
+
+        def __iter__(self) -> object:
+            raise AssertionError("iterator was invoked")
+
+    assert [name for name, _ in tynx.nn.state.named_parameters(Trap())] == ["parameter"]
+
+
+def test_state_discovery_rejects_slotted_objects_and_ambiguous_dictionary_keys() -> None:
+    class Slotted:
+        __slots__ = ("parameter",)
+
+        def __init__(self) -> None:
+            self.parameter = tynx.Parameter([1.0])
+
+    with pytest.raises(TypeError, match="__slots__ objects are unsupported"):
+        tynx.nn.state.get_parameters(Slotted())
+    with pytest.raises(TypeError, match="require string keys"):
+        tynx.nn.state.get_parameters({1: tynx.Parameter([1.0])})
+    with pytest.raises(ValueError, match="cannot contain"):
+        tynx.nn.state.get_parameters({"ambiguous.path": tynx.Parameter([1.0])})
+
+
 def test_tensor_eager_operators() -> None:
     left = tynx.Tensor([[1.0, 2.0], [3.0, 4.0]])
     right = tynx.Tensor([[2.0, 0.5], [1.0, 2.0]])
