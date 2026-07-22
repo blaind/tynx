@@ -64,6 +64,12 @@ impl Value {
             return Ok(Self::Scalar(scalar_from_tensor_data(&data)?));
         }
 
+        if is_narrow_integer(dtype) && !is_flex_device(device) {
+            return Err(TynxError::UnsupportedOp(format!(
+                "tensor dtype {dtype:?} is not supported on device {device:?}; refusing to substitute invalid device data"
+            )));
+        }
+
         Ok(match dtype {
             DType::Bool(_) => Self::Bool(DynBool::from_data(data, rank, device)?),
             dtype if is_integer(dtype) => Self::Int(DynInt::from_data(data, rank, device)?),
@@ -128,6 +134,22 @@ impl Value {
 
 fn is_integer(dtype: DType) -> bool {
     dtype.is_int() || dtype.is_uint()
+}
+
+fn is_narrow_integer(dtype: DType) -> bool {
+    matches!(dtype, DType::I8 | DType::I16 | DType::U8 | DType::U16)
+}
+
+fn is_flex_device(device: &Device) -> bool {
+    #[cfg(feature = "flex")]
+    {
+        *device == Device::flex()
+    }
+    #[cfg(not(feature = "flex"))]
+    {
+        let _ = device;
+        false
+    }
 }
 
 fn scalar_from_tensor_data(data: &TensorData) -> Result<Scalar> {
@@ -216,5 +238,22 @@ mod tests {
 
         assert!(matches!(signed, Value::Scalar(Scalar::I64(i64::MAX))));
         assert!(matches!(unsigned, Value::Scalar(Scalar::U64(u64::MAX))));
+    }
+
+    #[cfg(feature = "vulkan")]
+    #[test]
+    fn rejects_narrow_integer_uploads_on_wgpu_devices() {
+        let device = Device::vulkan(burn::tensor::DeviceKind::DefaultDevice);
+
+        let scalar =
+            Value::from_tensor_data(TensorData::new(vec![1_i8], Vec::<usize>::new()), 0, &device)
+                .unwrap();
+
+        let error =
+            Value::from_tensor_data(TensorData::new(vec![1_i8, -2], [2]), 1, &device).unwrap_err();
+
+        assert!(matches!(scalar, Value::Scalar(Scalar::I64(1))));
+        assert!(error.to_string().contains("dtype I8 is not supported"));
+        assert!(error.to_string().contains("refusing to substitute"));
     }
 }
