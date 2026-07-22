@@ -1,7 +1,7 @@
 //! Rank-erased tensor containers used by the runtime.
 
 use burn::tensor::{
-    Bool, DType, Device, IndexingUpdateOp, Int, Slice, Tensor, TensorData, activation,
+    Bool, DType, Device, Distribution, IndexingUpdateOp, Int, Slice, Tensor, TensorData, activation,
 };
 
 use crate::error::{Result, TynxError};
@@ -685,6 +685,44 @@ impl_concat!(DynInt);
 impl_concat!(DynBool);
 
 impl DynTensor {
+    /// Create a random floating-point tensor with an explicit shape and dtype.
+    pub fn random(
+        dims: &[usize],
+        distribution: Distribution,
+        device: &Device,
+        dtype: DType,
+    ) -> Result<Self> {
+        Ok(match dims {
+            [d0] => Self::R1(Tensor::<1>::random([*d0], distribution, (device, dtype))),
+            [d0, d1] => Self::R2(Tensor::<2>::random(
+                [*d0, *d1],
+                distribution,
+                (device, dtype),
+            )),
+            [d0, d1, d2] => Self::R3(Tensor::<3>::random(
+                [*d0, *d1, *d2],
+                distribution,
+                (device, dtype),
+            )),
+            [d0, d1, d2, d3] => Self::R4(Tensor::<4>::random(
+                [*d0, *d1, *d2, *d3],
+                distribution,
+                (device, dtype),
+            )),
+            [d0, d1, d2, d3, d4] => Self::R5(Tensor::<5>::random(
+                [*d0, *d1, *d2, *d3, *d4],
+                distribution,
+                (device, dtype),
+            )),
+            [d0, d1, d2, d3, d4, d5] => Self::R6(Tensor::<6>::random(
+                [*d0, *d1, *d2, *d3, *d4, *d5],
+                distribution,
+                (device, dtype),
+            )),
+            _ => return Err(rank_overflow(dims.len())),
+        })
+    }
+
     /// Create a floating-point tensor filled with one value and an explicit dtype.
     pub fn full(dims: &[usize], value: f64, device: &Device, dtype: DType) -> Result<Self> {
         Ok(match dims {

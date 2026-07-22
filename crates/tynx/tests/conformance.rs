@@ -10,7 +10,7 @@ use burn::tensor::{BoolStore, DType, Device, TensorData};
 use half::{bf16, f16};
 use protobuf::Message;
 use serde::{Deserialize, Serialize};
-use tynx::onnx_ir::TensorProto;
+use tynx::onnx_ir::{Node, TensorProto};
 use tynx::{Env, Session, Value};
 
 const REGISTRY_JSON: &str = include_str!("conformance.json");
@@ -278,6 +278,11 @@ fn run_case(directory: &Path, device: &Device) -> Observation {
         Err(error) => return observed(CaseStatus::RuntimeUnsupported, error),
     };
 
+    let stochastic = session
+        .graph()
+        .nodes
+        .iter()
+        .any(|node| matches!(node, Node::Bernoulli(_) | Node::RandomUniformLike(_)));
     for (argument, reference) in session.outputs().iter().zip(&outputs) {
         let Some(value) = actual.get(&argument.name) else {
             return observed(
@@ -285,7 +290,12 @@ fn run_case(directory: &Path, device: &Device) -> Observation {
                 format!("output '{}' is missing", argument.name),
             );
         };
-        if let Err(error) = compare_value(reference, value) {
+        let comparison = if stochastic {
+            compare_binary_random_value(reference, value)
+        } else {
+            compare_value(reference, value)
+        };
+        if let Err(error) = comparison {
             return observed(
                 CaseStatus::Mismatch,
                 format!("output '{}': {error}", argument.name),
@@ -294,6 +304,40 @@ fn run_case(directory: &Path, device: &Device) -> Observation {
     }
 
     observed(CaseStatus::Pass, "")
+}
+
+fn compare_binary_random_value(reference: &Reference, value: &Value) -> Result<(), String> {
+    let actual_shape = value_shape(value);
+    if actual_shape != reference.shape() {
+        return Err(format!("shape {actual_shape:?} != {:?}", reference.shape()));
+    }
+
+    let binary = match reference {
+        Reference::F16(..) | Reference::BF16(..) | Reference::F32(..) | Reference::F64(..) => {
+            float_values(value, reference.dtype())?
+                .into_iter()
+                .all(|value| value == 0.0 || value == 1.0)
+        }
+        Reference::I8(..) | Reference::I16(..) | Reference::I32(..) | Reference::I64(..) => {
+            signed_values(value, reference.dtype())?
+                .into_iter()
+                .all(|value| value == 0 || value == 1)
+        }
+        Reference::U8(..) | Reference::U16(..) | Reference::U32(..) | Reference::U64(..) => {
+            unsigned_values(value, reference.dtype())?
+                .into_iter()
+                .all(|value| value == 0 || value == 1)
+        }
+        Reference::Bool(..) => {
+            bool_values(value, reference.dtype())?;
+            true
+        }
+    };
+    if binary {
+        Ok(())
+    } else {
+        Err("stochastic Bernoulli output contains a value other than 0 or 1".to_string())
+    }
 }
 
 fn observed(status: CaseStatus, detail: impl ToString) -> Observation {
@@ -819,5 +863,18 @@ mod tests {
         assert!(float_matches(f64::NEG_INFINITY, f64::NEG_INFINITY));
         assert!(!float_matches(f64::INFINITY, f64::NEG_INFINITY));
         assert!(!float_matches(0.0, f64::NAN));
+    }
+
+    #[test]
+    fn validates_stochastic_binary_outputs_without_requiring_the_same_draw() {
+        let device = Device::default();
+        let reference = Reference::F32(vec![0.0, 1.0], vec![2]);
+        let different_draw =
+            Value::from_tensor_data(TensorData::new(vec![1.0_f32, 0.0], [2]), 1, &device).unwrap();
+        let invalid =
+            Value::from_tensor_data(TensorData::new(vec![0.5_f32, 0.0], [2]), 1, &device).unwrap();
+
+        assert!(compare_binary_random_value(&reference, &different_draw).is_ok());
+        assert!(compare_binary_random_value(&reference, &invalid).is_err());
     }
 }

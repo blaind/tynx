@@ -29,6 +29,7 @@ mod pad;
 mod pooling;
 mod pow;
 mod quantization;
+mod random;
 mod range_op;
 mod recurrent;
 mod reduction;
@@ -68,7 +69,8 @@ pub(crate) fn restore_dynamic_conv_inputs(data: &[u8], graph: &mut OnnxGraph) ->
 
 pub(crate) fn preserve_attributes(data: &[u8], graph: &mut OnnxGraph) -> Result<()> {
     reduction::preserve_attributes(data, graph)?;
-    pooling::preserve_attributes(data, graph)
+    pooling::preserve_attributes(data, graph)?;
+    random::preserve_attributes(data, graph)
 }
 
 /// Execute one ONNX node using values from the runtime environment.
@@ -90,6 +92,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::AveragePool2d(node) => pooling::average_pool2d(node, env, device),
         Node::AveragePool3d(node) => pooling::average_pool3d(node, env, device),
         Node::BatchNormalization(node) => normalization::batch_normalization(node, env, device),
+        Node::Bernoulli(node) => random::bernoulli(node, env, device),
         Node::BlackmanWindow(node) => window::blackman_window(node, env, device),
         Node::BitShift(node) => integer::bitshift(node, env, device),
         Node::BitwiseAnd(node) => integer::bitwise_and(node, env, device),
@@ -187,6 +190,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Pow(node) => pow::pow(node, env, device),
         Node::QLinearMatMul(node) => quantization::qlinear_matmul(node, env, device),
         Node::QuantizeLinear(node) => quantization::quantize_linear(node, env, device),
+        Node::RandomUniformLike(node) => random::random_uniform_like(node, env, device),
         Node::Range(node) => range_op::range(node, env, device),
         Node::Reciprocal(node) => unary::reciprocal(node, env, device),
         Node::ReduceL1(node) => reduction::reduce_l1(node, env, device),
