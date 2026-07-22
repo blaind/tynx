@@ -8,7 +8,7 @@ use std::{
 };
 
 use burn::tensor::{DType, Device};
-use tynx_core::{DynTensor, Result, TynxError};
+use tynx_core::{DynTensor, Gradients, Result, TynxError};
 
 static NEXT_PARAM_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -74,6 +74,7 @@ struct ParameterState {
     value_generation: u64,
     structure_generation: u64,
     leaf: Option<(u64, DynTensor)>,
+    grad: Option<DynTensor>,
 }
 
 /// A stable, cloneable parameter identity whose current tensor can change in place.
@@ -105,6 +106,7 @@ impl ParameterSlot {
                 value_generation: 0,
                 structure_generation: 0,
                 leaf: None,
+                grad: None,
             })),
         })
     }
@@ -141,6 +143,16 @@ impl ParameterSlot {
     /// Read the current value without attaching it to an autodiff tape.
     pub fn value(&self) -> DynTensor {
         self.state.borrow().value.clone()
+    }
+
+    /// Return the accumulated gradient without clearing it.
+    pub fn grad(&self) -> Option<DynTensor> {
+        self.state.borrow().grad.clone()
+    }
+
+    /// Clear the accumulated gradient.
+    pub fn zero_grad(&self) {
+        self.state.borrow_mut().grad = None;
     }
 
     /// Read the tensor used by a forward pass.
@@ -192,6 +204,7 @@ impl ParameterSlot {
         state.value_generation = next_generation(state.value_generation, "value")?;
         state.structure_generation = next_generation(state.structure_generation, "structure")?;
         state.leaf = None;
+        state.grad = None;
         Ok(())
     }
 
@@ -209,6 +222,41 @@ impl ParameterSlot {
         state.structure_generation = next_generation(state.structure_generation, "structure")?;
         state.leaf = None;
         Ok(())
+    }
+
+    pub(crate) fn accumulate_from(&self, gradients: &Gradients) -> Result<bool> {
+        let leaf = {
+            let state = self.state.borrow();
+            match &state.leaf {
+                Some((generation, leaf)) if *generation == state.value_generation => leaf.clone(),
+                _ => return Ok(false),
+            }
+        };
+        let Some(gradient) = leaf.grad(gradients) else {
+            return Ok(false);
+        };
+
+        let mut state = self.state.borrow_mut();
+        let gradient_device = tensor_device(&gradient);
+        if gradient.dims() != state.contract.shape
+            || gradient.dtype() != state.contract.dtype
+            || gradient_device != state.contract.device
+        {
+            return Err(TynxError::TypeMismatch(format!(
+                "gradient shape {:?}, dtype {:?}, and device {gradient_device:?} do not match parameter contract {:?}",
+                gradient.dims(),
+                gradient.dtype(),
+                state.contract,
+            )));
+        }
+        let gradient = off_tape(gradient, &gradient_device);
+        let accumulated = match &state.grad {
+            Some(current) => current.clone().add_broadcast(gradient)?,
+            None => gradient,
+        };
+        let accumulated_device = tensor_device(&accumulated);
+        state.grad = Some(off_tape(accumulated, &accumulated_device));
+        Ok(true)
     }
 }
 

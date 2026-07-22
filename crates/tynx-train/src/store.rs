@@ -131,6 +131,13 @@ impl ParameterStore {
     pub fn trainable(&self) -> impl Iterator<Item = &ParameterSlot> {
         self.iter().filter(|slot| slot.contract().trainable())
     }
+
+    /// Clear accumulated gradients from every unique slot.
+    pub fn zero_grad(&self) {
+        for slot in self.iter() {
+            slot.zero_grad();
+        }
+    }
 }
 
 fn validate_name(name: &str) -> Result<()> {
