@@ -31,7 +31,7 @@ def _accelerated_device() -> tynx.Device:
     pytest.skip(f"accelerated backend not enabled: {device}")
 
 
-def test_accelerated_multidimensional_global_extrema_use_flat_reductions() -> None:
+def test_accelerated_multidimensional_extrema_avoid_i64_mask_reductions() -> None:
     device = _accelerated_device()
     value = tynx.Tensor([[3.0, -2.0, 7.0], [1.0, 7.0, 0.0]])
 
@@ -40,6 +40,19 @@ def test_accelerated_multidimensional_global_extrema_use_flat_reductions() -> No
     assert value.argmax().item() == 2
     assert value.argmin().item() == 1
     assert value.max(keepdim=True).shape == (1, 1)
+
+    assert value.max(dim=0).tolist() == pytest.approx([3.0, 7.0, 7.0])
+    assert value.min(dim=1).tolist() == pytest.approx([-2.0, 0.0])
+    assert value.argmax(dim=0).tolist() == [0, 1, 0]
+    assert value.argmin(dim=1).tolist() == [1, 2]
+
+    with_nan = tynx.Tensor([[1.0, float("nan"), 3.0], [4.0, 5.0, 6.0]])
+    maxima = with_nan.max(dim=1).tolist()
+    minima = with_nan.min(dim=1).tolist()
+    assert math.isnan(maxima[0])
+    assert maxima[1] == pytest.approx(6.0)
+    assert math.isnan(minima[0])
+    assert minima[1] == pytest.approx(4.0)
     tynx.synchronize(device)
 
 
