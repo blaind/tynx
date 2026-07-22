@@ -168,6 +168,8 @@ pub enum UnaryOp {
     },
     /// Reshape without changing element order.
     Reshape(Vec<usize>),
+    /// Broadcast singleton dimensions to a larger shape.
+    Expand(Vec<usize>),
     /// Permute all tensor axes.
     Permute(Vec<usize>),
     /// Sum selected axes and apply the binding-visible output shape.
@@ -725,6 +727,16 @@ fn execute_unary(op: &UnaryOp, input: Value) -> Result<Value> {
             )),
         };
     }
+    if let UnaryOp::Expand(shape) = op {
+        return match input {
+            Value::Tensor(value) => value.expand(shape).map(Value::Tensor),
+            Value::Int(value) => value.expand(shape).map(Value::Int),
+            Value::Bool(value) => value.expand(shape).map(Value::Bool),
+            Value::Scalar(_) | Value::Shape(_) => Err(TynxError::TypeMismatch(
+                "captured expand requires a device tensor".to_string(),
+            )),
+        };
+    }
     if let UnaryOp::CategoricalSample { seed } = op {
         let logits = input.into_tensor()?.detach();
         let rank = logits.rank();
@@ -780,6 +792,7 @@ fn execute_unary(op: &UnaryOp, input: Value) -> Result<Value> {
         UnaryOp::Softmax(dim) => Ok(input.softmax(*dim)),
         UnaryOp::Clamp { min, max } => Ok(input.clip(*min, *max)),
         UnaryOp::Reshape(shape) => input.reshape(shape.clone()),
+        UnaryOp::Expand(_) => unreachable!("handled before float unary dispatch"),
         UnaryOp::Permute(axes) => input.permute(axes.clone()),
         UnaryOp::Sum { dims, output_shape } => input.sum_dims(dims).reshape(output_shape.clone()),
         UnaryOp::Mean { dims, output_shape } => input.mean_dims(dims).reshape(output_shape.clone()),

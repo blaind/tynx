@@ -942,6 +942,32 @@ impl PyTensor {
         self.reshape_value(output)
     }
 
+    /// Broadcast singleton dimensions to a larger shape.
+    #[pyo3(signature = (*shape))]
+    fn expand(&self, shape: &Bound<'_, PyTuple>) -> PyResult<Self> {
+        let output = shape::expand(shape, &self.source.value().dims())?;
+        match self.source.value() {
+            TensorValue::Float(_) => self
+                .unary_captured(UnaryOp::Expand(output.clone()), move |input| {
+                    input.expand(&output)
+                }),
+            value => {
+                let expanded = match value.detach() {
+                    TensorValue::Int(input) => {
+                        TensorValue::Int(input.expand(&output).map_err(to_python_error)?)
+                    }
+                    TensorValue::Bool(input) => {
+                        TensorValue::Bool(input.expand(&output).map_err(to_python_error)?)
+                    }
+                    TensorValue::Float(_) => unreachable!("float expansion handled above"),
+                };
+                let mut result = Self::from_value(expanded);
+                result.trace = record_unary(self, UnaryOp::Expand(output))?;
+                Ok(result)
+            }
+        }
+    }
+
     /// Flatten a contiguous range of dimensions.
     #[pyo3(signature = (start_dim=0, end_dim=-1))]
     fn flatten(&self, start_dim: isize, end_dim: isize) -> PyResult<Self> {

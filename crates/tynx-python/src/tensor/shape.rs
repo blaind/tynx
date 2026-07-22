@@ -56,6 +56,37 @@ pub(super) fn reshape(args: &Bound<'_, PyTuple>, numel: usize) -> PyResult<Vec<u
     Ok(output)
 }
 
+pub(super) fn expand(args: &Bound<'_, PyTuple>, input: &[usize]) -> PyResult<Vec<usize>> {
+    let requested = variadic_dims(args, "expand shape")?;
+    if requested.len() != input.len() {
+        return Err(PyValueError::new_err(format!(
+            "expand shape has rank {}, expected {}",
+            requested.len(),
+            input.len()
+        )));
+    }
+
+    requested
+        .into_iter()
+        .zip(input.iter().copied())
+        .map(|(requested, actual)| {
+            if requested <= 0 {
+                return Err(PyValueError::new_err(format!(
+                    "expand dimensions must be positive, got {requested}"
+                )));
+            }
+            let requested =
+                usize::try_from(requested).expect("positive expand dimension fits usize");
+            if actual != 1 && actual != requested {
+                return Err(PyValueError::new_err(format!(
+                    "cannot expand dimension of size {actual} to {requested}"
+                )));
+            }
+            Ok(requested)
+        })
+        .collect()
+}
+
 pub(super) fn permutation(args: &Bound<'_, PyTuple>, rank: usize) -> PyResult<Vec<usize>> {
     let requested = variadic_dims(args, "permutation")?;
     if requested.len() != rank {
