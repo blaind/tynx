@@ -4,7 +4,11 @@ use pyo3::{exceptions::PyValueError, prelude::*};
 use tynx_capture::{BinaryOp, UnaryOp};
 use tynx_core::{DType, Device, Distribution, DynTensor};
 
-use crate::{grad_mode::is_grad_enabled, tensor::PyTensor, to_python_error};
+use crate::{
+    grad_mode::is_grad_enabled,
+    tensor::{IntBounds, PyTensor},
+    to_python_error,
+};
 
 #[pyfunction(name = "manual_seed")]
 pub(crate) fn manual_seed_py(seed: u64) {
@@ -78,8 +82,14 @@ pub(crate) fn categorical_sample_py(
     if output_shape.is_empty() {
         output_shape.push(1);
     }
-    PyTensor::from_int_inner(indices.reshape(output_shape).map_err(to_python_error)?)
-        .with_recorded_unary(&logits, UnaryOp::CategoricalSample { seed })
+    PyTensor::from_int_inner_with_bounds(
+        indices.reshape(output_shape).map_err(to_python_error)?,
+        IntBounds::Range {
+            min: 0,
+            max: categories.saturating_sub(1) as i64,
+        },
+    )
+    .with_recorded_unary(&logits, UnaryOp::CategoricalSample { seed })
 }
 
 #[pyfunction(name = "_dropout")]

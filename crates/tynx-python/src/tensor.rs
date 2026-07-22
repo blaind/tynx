@@ -36,6 +36,7 @@ use crate::{
 };
 pub(crate) use combine::{cat_py, chunk_py, split_py, stack_py};
 use comparison::{Comparison, MaskOperation};
+pub(crate) use data::IntBounds;
 use data::TensorValue;
 use extrema::Extremum;
 pub(crate) use factory::{
@@ -51,6 +52,7 @@ use reduction::ReductionSpec;
 #[pyclass(name = "Tensor", frozen, unsendable, subclass)]
 pub(crate) struct PyTensor {
     source: TensorSource,
+    int_bounds: Option<Rc<RefCell<Option<IntBounds>>>>,
     targets: Vec<GradTarget>,
     leaf: Option<Rc<LeafState>>,
     backward_graphs: Vec<Rc<BackwardGraph>>,
@@ -256,6 +258,7 @@ impl PyTensor {
     pub(crate) fn from_inner(inner: DynTensor) -> Self {
         Self {
             source: TensorSource::Owned(Box::new(TensorValue::Float(inner))),
+            int_bounds: None,
             targets: Vec::new(),
             leaf: None,
             backward_graphs: Vec::new(),
@@ -267,9 +270,20 @@ impl PyTensor {
         Self::from_value(TensorValue::Int(inner))
     }
 
+    pub(crate) fn from_int_inner_with_bounds(inner: DynInt, bounds: IntBounds) -> Self {
+        Self::from_value_with_int_bounds(TensorValue::Int(inner), Some(bounds))
+    }
+
     fn from_value(value: TensorValue) -> Self {
+        Self::from_value_with_int_bounds(value, None)
+    }
+
+    fn from_value_with_int_bounds(value: TensorValue, bounds: Option<IntBounds>) -> Self {
+        let int_bounds =
+            matches!(value, TensorValue::Int(_)).then(|| Rc::new(RefCell::new(bounds)));
         Self {
             source: TensorSource::Owned(Box::new(value)),
+            int_bounds,
             targets: Vec::new(),
             leaf: None,
             backward_graphs: Vec::new(),
@@ -286,6 +300,7 @@ impl PyTensor {
         });
         Self {
             source: TensorSource::Owned(Box::new(TensorValue::Float(inner))),
+            int_bounds: None,
             targets: vec![GradTarget::Tensor(Rc::downgrade(&leaf))],
             leaf: Some(leaf),
             backward_graphs: Vec::new(),
@@ -305,6 +320,7 @@ impl PyTensor {
         };
         Self {
             source: TensorSource::Parameter(slot.clone()),
+            int_bounds: None,
             targets,
             leaf: None,
             backward_graphs: Vec::new(),
@@ -338,6 +354,7 @@ impl PyTensor {
         backward_graphs.push(Rc::new(BackwardGraph::default()));
         Self {
             source: TensorSource::Owned(Box::new(TensorValue::Float(inner))),
+            int_bounds: None,
             targets,
             leaf: None,
             backward_graphs,
@@ -545,6 +562,7 @@ impl PyTensor {
     fn gather_impl(&self, dim: usize, index: &Self) -> PyResult<Self> {
         let input_shape = self.source.value().dims();
         let indices = indexing::gather_indices(index.source.value().detach(), &input_shape, dim)?;
+        index.validate_index_bounds(input_shape[dim], dim, "gather")?;
         let tracking = is_grad_enabled();
         match self.source.value() {
             TensorValue::Float(_) => {
@@ -555,7 +573,7 @@ impl PyTensor {
                 } else {
                     Self::from_inner(inner)
                 };
-                output.trace = record_gather(self, dim, index)?;
+                output.trace = record_gather(self, dim, input_shape[dim], index)?;
                 Ok(output)
             }
             value => indexing::gather(value.detach(), dim, indices).map(Self::from_value),
@@ -638,6 +656,7 @@ impl PyTensor {
     pub(crate) fn with_trace(&self, trace: TraceValue) -> Self {
         Self {
             source: TensorSource::Owned(Box::new(self.source.value())),
+            int_bounds: self.int_bounds.clone(),
             targets: self.targets.clone(),
             leaf: self.leaf.clone(),
             backward_graphs: self.backward_graphs.clone(),
@@ -648,6 +667,7 @@ impl PyTensor {
     pub(crate) fn without_trace(&self) -> Self {
         Self {
             source: TensorSource::Owned(Box::new(self.source.value())),
+            int_bounds: self.int_bounds.clone(),
             targets: self.targets.clone(),
             leaf: self.leaf.clone(),
             backward_graphs: self.backward_graphs.clone(),
@@ -672,6 +692,58 @@ impl PyTensor {
     ) -> PyResult<Self> {
         self.trace = record_binary(left, right, operation)?;
         Ok(self)
+    }
+
+    pub(crate) fn with_inherited_int_bounds(mut self, source: &Self) -> Self {
+        if self.int_bounds.is_some() {
+            self.int_bounds = source.int_bounds.clone();
+        }
+        self
+    }
+
+    pub(crate) fn validate_index_bounds(
+        &self,
+        size: usize,
+        dim: usize,
+        operation: &str,
+    ) -> PyResult<()> {
+        let size = i64::try_from(size).map_err(|_| {
+            PyValueError::new_err(format!(
+                "{operation} dimension {dim} exceeds the supported index range"
+            ))
+        })?;
+        let cache = self.int_bounds.as_ref().ok_or_else(|| {
+            PyTypeError::new_err(format!("{operation} indices must be an int64 Tensor"))
+        })?;
+        let bounds = if let Some(bounds) = *cache.borrow() {
+            bounds
+        } else {
+            let indices = match self.source.value().detach() {
+                TensorValue::Int(indices) => indices,
+                _ => unreachable!("an integer bounds cache is attached only to int64 tensors"),
+            };
+            let values = indices.into_data().iter::<i64>().collect::<Vec<_>>();
+            raise_pending_device_error()?;
+            let bounds = IntBounds::from_values(&values);
+            *cache.borrow_mut() = Some(bounds);
+            bounds
+        };
+        let IntBounds::Range { min, max } = bounds else {
+            return Ok(());
+        };
+        let invalid = if min < 0 {
+            Some(min)
+        } else if max >= size {
+            Some(max)
+        } else {
+            None
+        };
+        if let Some(index) = invalid {
+            return Err(PyIndexError::new_err(format!(
+                "{operation} index {index} is out of bounds for dimension {dim} with size {size}"
+            )));
+        }
+        Ok(())
     }
 
     pub(crate) fn detached_float_value(&self, operation: &str) -> PyResult<DynTensor> {
@@ -728,26 +800,37 @@ impl PyTensor {
         device: Option<PyRef<'_, PyDevice>>,
         requires_grad: bool,
     ) -> PyResult<Self> {
-        let value = if let Ok(tensor) = data.extract::<PyRef<'_, Self>>() {
-            let value = tensor.source.value().detach();
-            let target =
-                device.map_or_else(|| value.device(), |device| device.inner.as_ref().clone());
-            let target_dtype = dtype.unwrap_or(value.dtype_name());
-            value
-                .cast(target_dtype)?
-                .move_to_device(&ensure_autodiff(target))
-        } else {
-            let device = ensure_autodiff(
-                device
-                    .map(|device| device.inner.as_ref().clone())
-                    .unwrap_or_else(tynx_core::default_device),
-            );
-            TensorValue::from_python(data, dtype, &device)?
-        };
+        let (value, bounds, inherited_bounds) =
+            if let Ok(tensor) = data.extract::<PyRef<'_, Self>>() {
+                let value = tensor.source.value().detach();
+                let target =
+                    device.map_or_else(|| value.device(), |device| device.inner.as_ref().clone());
+                let target_dtype = dtype.unwrap_or(value.dtype_name());
+                let preserve_bounds = value.dtype_name() == "int64" && target_dtype == "int64";
+                (
+                    value
+                        .cast(target_dtype)?
+                        .move_to_device(&ensure_autodiff(target)),
+                    None,
+                    preserve_bounds.then(|| tensor.int_bounds.clone()).flatten(),
+                )
+            } else {
+                let device = ensure_autodiff(
+                    device
+                        .map(|device| device.inner.as_ref().clone())
+                        .unwrap_or_else(tynx_core::default_device),
+                );
+                let (value, bounds) = TensorValue::from_python(data, dtype, &device)?;
+                (value, bounds, None)
+            };
         if requires_grad {
             return Ok(Self::from_leaf(value.float("requires_grad=True")?));
         }
-        Ok(Self::from_value(value))
+        let mut output = Self::from_value_with_int_bounds(value, bounds);
+        if inherited_bounds.is_some() {
+            output.int_bounds = inherited_bounds;
+        }
+        Ok(output)
     }
 
     /// Tensor dimensions as a Python tuple.
@@ -958,7 +1041,7 @@ impl PyTensor {
 
     /// Return an off-tape tensor sharing the current numerical value.
     fn detach(&self) -> Self {
-        Self::from_value(self.source.value().detach())
+        Self::from_value(self.source.value().detach()).with_inherited_int_bounds(self)
     }
 
     /// Cast tensor values to one of Tynx's supported dtypes.
@@ -993,8 +1076,14 @@ impl PyTensor {
                 Self::from_inner(output)
             });
         }
+        let preserve_bounds = current.dtype_name() == "int64" && dtype == "int64";
         let output = current.detach().cast(dtype)?.move_to_device(&target_device);
-        Ok(Self::from_value(output))
+        let output = Self::from_value(output);
+        Ok(if preserve_bounds {
+            output.with_inherited_int_bounds(self)
+        } else {
+            output
+        })
     }
 
     /// Replace stable Parameter/Buffer state from a compatible tensor without changing identity.
@@ -1313,7 +1402,7 @@ impl PyTensor {
                     ),
                     TensorValue::Float(_) => unreachable!("float expansion handled above"),
                 };
-                let mut result = Self::from_value(expanded);
+                let mut result = Self::from_value(expanded).with_inherited_int_bounds(self);
                 result.trace = record_unary(self, UnaryOp::Expand(output))?;
                 Ok(result)
             }
@@ -1344,7 +1433,8 @@ impl PyTensor {
                     .to_rank(repeats.len())
                     .map_err(to_python_error)?
                     .repeat(&repeats),
-            )),
+            )
+            .with_inherited_int_bounds(self)),
             TensorValue::Bool(input) => Ok(Self::from_value(TensorValue::Bool(
                 input
                     .to_rank(repeats.len())
@@ -1786,6 +1876,10 @@ impl PyTensor {
     fn ordered(&self, dim: usize, descending: bool, k: Option<usize>) -> PyResult<(Self, Self)> {
         self.capture_unsupported("Tensor ordering")?;
         let tracking = is_grad_enabled();
+        let index_bounds = IntBounds::Range {
+            min: 0,
+            max: self.source.value().dims()[dim].saturating_sub(1) as i64,
+        };
         match self.source.value() {
             TensorValue::Float(_) => {
                 let input = self.operation_input(tracking, "Tensor ordering")?;
@@ -1798,14 +1892,20 @@ impl PyTensor {
                 } else {
                     Self::from_inner(values)
                 };
-                Ok((values, Self::from_int_inner(indices)))
+                Ok((
+                    values,
+                    Self::from_int_inner_with_bounds(indices, index_bounds),
+                ))
             }
             TensorValue::Int(input) => {
                 let (values, indices) = match k {
                     Some(k) => input.topk_ordered(k, dim, descending),
                     None => input.sort_with_indices(dim, descending),
                 };
-                Ok((Self::from_int_inner(values), Self::from_int_inner(indices)))
+                Ok((
+                    Self::from_int_inner(values),
+                    Self::from_int_inner_with_bounds(indices, index_bounds),
+                ))
             }
             TensorValue::Bool(_) => Err(PyTypeError::new_err(
                 "sort, argsort, and topk do not support bool Tensors",
@@ -1820,7 +1920,8 @@ impl PyTensor {
                     input.reshape(output)
                 }),
             value => {
-                let mut result = Self::from_value(value.reshape(output.clone())?);
+                let mut result = Self::from_value(value.reshape(output.clone())?)
+                    .with_inherited_int_bounds(self);
                 result.trace = record_unary(self, UnaryOp::Reshape(output))?;
                 Ok(result)
             }
@@ -1940,7 +2041,17 @@ impl PyTensor {
                 )
             }
         };
-        extrema::arg(value, axis, output_shape, maximum).map(Self::from_value)
+        let size = value.dims()[axis];
+        let bounds = if size == 0 {
+            IntBounds::Empty
+        } else {
+            IntBounds::Range {
+                min: 0,
+                max: size.saturating_sub(1) as i64,
+            }
+        };
+        extrema::arg(value, axis, output_shape, maximum)
+            .map(|value| Self::from_value_with_int_bounds(value, Some(bounds)))
     }
 }
 

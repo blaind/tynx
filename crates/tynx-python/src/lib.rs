@@ -14,7 +14,7 @@ mod tensor;
 use std::path::PathBuf;
 
 use capture::{PyCaptureSession, PyCapturedGraph};
-use pyo3::exceptions::{PyOSError, PyTypeError, PyValueError};
+use pyo3::exceptions::{PyIndexError, PyOSError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
 use tynx_core::{Device, Env, PreparedSession, Scalar, Session, Value};
@@ -223,7 +223,10 @@ fn runtime_output_to_python(py: Python<'_>, value: Value) -> PyResult<Py<PyAny>>
 }
 
 pub(crate) fn to_python_error(error: tynx_core::TynxError) -> PyErr {
-    PyValueError::new_err(error.to_string())
+    match error {
+        tynx_core::TynxError::Index(message) => PyIndexError::new_err(message),
+        error => PyValueError::new_err(error.to_string()),
+    }
 }
 
 /// Native Python module for Tynx.
