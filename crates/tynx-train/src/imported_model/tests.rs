@@ -1,7 +1,7 @@
 use burn::tensor::{Device, TensorData};
 use protobuf::{Message, MessageField};
 use tynx_core::onnx_ir::{GraphProto, ModelProto, TensorProto, TypeProto, ValueInfoProto};
-use tynx_core::{DynTensor, Env, Session, TynxError, Value};
+use tynx_core::{DynTensor, Env, Session, Value};
 
 use super::ImportedModel;
 use crate::{
@@ -229,21 +229,72 @@ fn repeated_imported_steps_remain_generation_local() {
 }
 
 #[test]
-fn unsupported_slot_consumer_is_rejected_before_forward() {
+fn imported_conv2d_learns_with_live_weight_and_bias_slots() {
     let session = Session::from_bytes_with(&conv_model_bytes(), false).unwrap();
     let names = stable_names(&session, "conv");
-
-    let error = ImportedModel::from_session_with(
+    let device = Device::autodiff(Device::default());
+    let model = ImportedModel::from_session_with(
         session,
-        Device::autodiff(Device::default()),
+        device.clone(),
         &TrainabilityOverrides::new(),
         &names,
     )
-    .unwrap_err();
+    .unwrap();
+    let input = tensor(vec![1.0, 2.0, 3.0, 4.0], &[1, 1, 2, 2], &device);
+    let target = tensor(vec![3.0, 5.0, 7.0, 9.0], &[1, 1, 2, 2], &device);
+    let output_name = model.session().outputs()[0].name.clone();
+    let mut optimizer = Sgd::new(0.05).unwrap();
 
-    assert!(matches!(error, TynxError::UnsupportedOp(_)));
-    assert!(error.to_string().contains("slot-backed execution"));
-    assert!(error.to_string().contains("Conv2d"));
+    for _ in 0..800 {
+        model.parameters().zero_grad();
+        let prediction = model
+            .run(env_with_input(input.clone()))
+            .unwrap()
+            .remove(&output_name)
+            .unwrap()
+            .into_tensor()
+            .unwrap();
+        let loss = mse(prediction, target.clone()).unwrap();
+        assert_eq!(
+            backward(&loss, model.parameters())
+                .unwrap()
+                .parameters_with_grad(),
+            2
+        );
+        assert_eq!(optimizer.step(model.parameters()).unwrap(), 2);
+    }
+
+    let prediction = model
+        .run(env_with_input(input))
+        .unwrap()
+        .remove(&output_name)
+        .unwrap()
+        .into_tensor()
+        .unwrap();
+    let actual = prediction.into_data().iter::<f32>().collect::<Vec<_>>();
+    for (actual_value, expected) in actual.iter().zip([3.0, 5.0, 7.0, 9.0]) {
+        assert!(
+            (actual_value - expected).abs() < 1.0e-3,
+            "expected {expected}, got {actual_value}; prediction={actual:?}"
+        );
+    }
+
+    assert_eq!(
+        model
+            .parameters()
+            .get_by_name("conv.weight")
+            .unwrap()
+            .value_generation(),
+        800
+    );
+    assert_eq!(
+        model
+            .parameters()
+            .get_by_name("conv.bias")
+            .unwrap()
+            .value_generation(),
+        800
+    );
 }
 
 #[test]

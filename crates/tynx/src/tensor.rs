@@ -13,7 +13,7 @@ use burn::tensor::{
         adaptive_avg_pool2d as burn_adaptive_avg_pool2d, avg_pool2d as burn_avg_pool2d,
         conv2d as burn_conv2d, embedding as burn_embedding, max_pool2d as burn_max_pool2d,
     },
-    ops::ConvOptions,
+    ops::PaddedConvOptions,
 };
 
 use crate::error::{Result, TynxError};
@@ -1044,6 +1044,26 @@ impl DynTensor {
         dilation: [usize; 2],
         groups: usize,
     ) -> Result<Self> {
+        self.conv2d_padded(
+            weight,
+            bias,
+            stride,
+            [[padding[0], padding[0]], [padding[1], padding[1]]],
+            dilation,
+            groups,
+        )
+    }
+
+    /// Apply an NCHW two-dimensional convolution with explicit leading/trailing padding.
+    pub fn conv2d_padded(
+        self,
+        weight: Self,
+        bias: Option<Self>,
+        stride: [usize; 2],
+        padding: [[usize; 2]; 2],
+        dilation: [usize; 2],
+        groups: usize,
+    ) -> Result<Self> {
         let input_shape = self.dims();
         let weight_shape = weight.dims();
         if input_shape.len() != 4 || weight_shape.len() != 4 {
@@ -1085,9 +1105,9 @@ impl DynTensor {
                 .checked_mul(kernel - 1)
                 .and_then(|value| value.checked_add(1))
                 .ok_or_else(|| TynxError::Shape("conv2d kernel extent overflowed".to_string()))?;
-            let padded_input = padding[axis]
-                .checked_mul(2)
-                .and_then(|value| input_shape[axis + 2].checked_add(value))
+            let padded_input = input_shape[axis + 2]
+                .checked_add(padding[axis][0])
+                .and_then(|value| value.checked_add(padding[axis][1]))
                 .ok_or_else(|| TynxError::Shape("conv2d padded extent overflowed".to_string()))?;
             if padded_input < effective_kernel {
                 return Err(TynxError::Shape(format!(
@@ -1124,7 +1144,13 @@ impl DynTensor {
                 input,
                 weight,
                 bias,
-                ConvOptions::new(stride, padding, dilation, groups),
+                PaddedConvOptions::asymmetric(
+                    stride,
+                    [padding[0][0], padding[1][0]],
+                    [padding[0][1], padding[1][1]],
+                    dilation,
+                    groups,
+                ),
             ))),
             _ => unreachable!("conv2d ranks were validated before dispatch"),
         }

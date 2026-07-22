@@ -6,12 +6,15 @@ use tynx_core::onnx_ir::{
     ir::{ArgType, Argument, OnnxGraph},
     node::{
         batch_norm::{BatchNormConfig, BatchNormalizationNode},
+        conv2d::Conv2dNode,
         gemm::GemmNode,
         linear::LinearNode,
         matmul::MatMulNode,
     },
 };
-use tynx_core::{DynTensor, Env, Result, Session, TynxError, Value, execute};
+use tynx_core::{
+    DynTensor, Env, Result, Session, TynxError, Value, execute, resolve_onnx_padding2d,
+};
 
 use crate::ImportedState;
 
@@ -29,6 +32,7 @@ pub(super) fn validate(graph: &OnnxGraph, state: &ImportedState) -> Result<()> {
                 Node::Linear(_) | Node::Gemm(_) => matches!(input_index, 1 | 2),
                 Node::MatMul(_) => matches!(input_index, 0 | 1),
                 Node::BatchNormalization(_) => matches!(input_index, 1..=4),
+                Node::Conv2d(_) => matches!(input_index, 0..=2),
                 _ => false,
             };
             if !supported {
@@ -60,6 +64,7 @@ pub(super) fn run(
             Node::BatchNormalization(node) => {
                 execute_batch_normalization(node, node_index, &env, state, device, tracking)
             }
+            Node::Conv2d(node) => execute_conv2d(node, node_index, &env, state, device, tracking),
             _ => execute(node, &env, device),
         }?;
         if values.len() != node.outputs().len() {
@@ -76,6 +81,49 @@ pub(super) fn run(
     }
 
     session.collect_outputs(&env)
+}
+
+fn execute_conv2d(
+    node: &Conv2dNode,
+    node_index: usize,
+    env: &Env,
+    state: &ImportedState,
+    device: &Device,
+    tracking: bool,
+) -> Result<Vec<Value>> {
+    let input = resolve_tensor(node, node_index, 0, env, state, device, tracking)?;
+    let weight = resolve_tensor(node, node_index, 1, env, state, device, tracking)?;
+    let bias = node
+        .inputs
+        .get(2)
+        .filter(|input| !input.is_optional())
+        .map(|_| resolve_tensor(node, node_index, 2, env, state, device, tracking))
+        .transpose()?;
+    let shape = input.dims();
+    if shape.len() != 4 {
+        return Err(TynxError::Shape(format!(
+            "training Conv2d node '{}' requires rank-4 NCHW input, got shape {shape:?}",
+            node.name
+        )));
+    }
+    let [(top, bottom), (left, right)] = resolve_onnx_padding2d(
+        [shape[2], shape[3]],
+        node.config.kernel_size,
+        node.config.stride,
+        node.config.dilation,
+        &node.config.padding,
+        &node.config.auto_pad,
+        false,
+    );
+    let output = input.conv2d_padded(
+        weight,
+        bias,
+        node.config.stride,
+        [[top, bottom], [left, right]],
+        node.config.dilation,
+        node.config.groups,
+    )?;
+    Ok(vec![Value::Tensor(output)])
 }
 
 fn execute_batch_normalization(
@@ -347,4 +395,10 @@ macro_rules! impl_node_inputs {
     };
 }
 
-impl_node_inputs!(LinearNode, GemmNode, MatMulNode, BatchNormalizationNode);
+impl_node_inputs!(
+    LinearNode,
+    GemmNode,
+    MatMulNode,
+    BatchNormalizationNode,
+    Conv2dNode,
+);

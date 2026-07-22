@@ -11,6 +11,7 @@ mod value;
 pub use device::{default_device, synchronize, take_device_error};
 pub use error::{Result, TynxError};
 pub use initializer::InitializerId;
+pub use interpreter::spatial::padding2d as resolve_onnx_padding2d;
 pub use interpreter::{Env, execute};
 pub use session::{PreparedSession, Session};
 pub use tensor::{DynBool, DynInt, DynTensor, MAX_RANK};

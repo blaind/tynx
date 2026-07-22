@@ -43,7 +43,7 @@ mod selection;
 mod shape;
 mod slice;
 mod softmax;
-mod spatial;
+pub(crate) mod spatial;
 mod spatial_layout;
 mod split;
 mod stft;

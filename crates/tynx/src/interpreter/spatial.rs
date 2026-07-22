@@ -25,7 +25,8 @@ pub(super) fn padding1d(
     )]
 }
 
-pub(super) fn padding2d(
+/// Resolve ONNX two-dimensional explicit or automatic padding into axis start/end pairs.
+pub fn padding2d(
     input: [usize; 2],
     kernel: [usize; 2],
     stride: [usize; 2],
