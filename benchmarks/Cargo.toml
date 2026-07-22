@@ -1,0 +1,29 @@
+[workspace]
+members = [
+    "crates/burn-aot",
+    "crates/ort",
+    "crates/protocol",
+    "crates/tynx",
+]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+burn = { git = "https://github.com/tracel-ai/burn", rev = "78f10aec1ca6c6ffb1edd17a0fa131ae59ad5403", default-features = false, features = ["std"] }
+burn-store = { git = "https://github.com/tracel-ai/burn", rev = "78f10aec1ca6c6ffb1edd17a0fa131ae59ad5403", default-features = false, features = ["burnpack", "std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tynx-bench-protocol = { path = "crates/protocol" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
