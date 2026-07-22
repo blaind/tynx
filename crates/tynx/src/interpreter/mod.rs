@@ -9,6 +9,7 @@ mod convolution;
 mod extrema;
 mod logical;
 mod matrix;
+mod normalization;
 mod pooling;
 mod pow;
 mod reduction;
@@ -60,6 +61,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::AveragePool1d(node) => pooling::average_pool1d(node, env, device),
         Node::AveragePool2d(node) => pooling::average_pool2d(node, env, device),
         Node::AveragePool3d(node) => pooling::average_pool3d(node, env, device),
+        Node::BatchNormalization(node) => normalization::batch_normalization(node, env, device),
         Node::Cast(node) => cast::cast(node, env, device),
         Node::CastLike(node) => cast::cast_like(node, env, device),
         Node::Ceil(node) => unary::ceil(node, env, device),
@@ -86,6 +88,9 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::HardSigmoid(node) => unary::hard_sigmoid(node, env, device),
         Node::HardSwish(node) => unary::hard_swish(node, env, device),
         Node::Identity(node) => Ok(vec![resolve::first(env, &node.name, &node.inputs, device)?]),
+        Node::InstanceNormalization(node) => {
+            normalization::instance_normalization(node, env, device)
+        }
         Node::LeakyRelu(node) => unary::leaky_relu(node, env, device),
         Node::Less(node) => comparison::less(node, env, device),
         Node::LessOrEqual(node) => comparison::less_or_equal(node, env, device),
