@@ -6,6 +6,8 @@ use tynx_core::{DynTensor, Result, TynxError};
 
 use crate::{ParamId, ParameterSlot, ParameterStore};
 
+use super::validate_state_tensor;
+
 /// Configuration shared by Adam's adaptive-moment update.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AdamConfig {
@@ -154,6 +156,55 @@ struct AdamState {
     max_second_moment: Option<DynTensor>,
 }
 
+/// Portable adaptive-moment state for one Adam or AdamW parameter.
+///
+/// Process-local parameter identity and structure generation are excluded so a checkpoint can be
+/// rebound to a freshly constructed model after names are resolved by the caller.
+#[derive(Debug, Clone)]
+pub struct AdamParameterState {
+    step: u64,
+    first_moment: DynTensor,
+    second_moment: DynTensor,
+    max_second_moment: Option<DynTensor>,
+}
+
+impl AdamParameterState {
+    /// Construct a portable Adam-family state entry.
+    pub fn new(
+        step: u64,
+        first_moment: DynTensor,
+        second_moment: DynTensor,
+        max_second_moment: Option<DynTensor>,
+    ) -> Self {
+        Self {
+            step,
+            first_moment: first_moment.detach(),
+            second_moment: second_moment.detach(),
+            max_second_moment: max_second_moment.map(DynTensor::detach),
+        }
+    }
+
+    /// Return the completed update count for this parameter.
+    pub fn step(&self) -> u64 {
+        self.step
+    }
+
+    /// Return the detached first moment.
+    pub fn first_moment(&self) -> DynTensor {
+        self.first_moment.clone()
+    }
+
+    /// Return the detached second moment.
+    pub fn second_moment(&self) -> DynTensor {
+        self.second_moment.clone()
+    }
+
+    /// Return the detached AMSGrad maximum second moment, when present.
+    pub fn max_second_moment(&self) -> Option<DynTensor> {
+        self.max_second_moment.clone()
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 enum WeightDecayMode {
     Coupled,
@@ -185,6 +236,67 @@ impl AdamEngine {
 
     fn step_for(&self, id: ParamId) -> Option<u64> {
         self.state.get(&id).map(|state| state.step)
+    }
+
+    fn state_for(&self, parameter: &ParameterSlot) -> Option<AdamParameterState> {
+        self.state
+            .get(&parameter.id())
+            .filter(|state| state.structure_generation == parameter.structure_generation())
+            .map(|state| {
+                AdamParameterState::new(
+                    state.step,
+                    state.first_moment.clone().detach(),
+                    state.second_moment.clone().detach(),
+                    state.max_second_moment.clone().map(DynTensor::detach),
+                )
+            })
+    }
+
+    fn replace_slot_states(
+        &mut self,
+        states: &[(ParameterSlot, Option<AdamParameterState>)],
+    ) -> Result<()> {
+        let mut seen = HashSet::new();
+        let mut replacement = HashMap::new();
+        for (parameter, state) in states {
+            if !seen.insert(parameter.id()) {
+                return Err(TynxError::TypeMismatch(format!(
+                    "duplicate Adam state destination for parameter {}",
+                    parameter.id().get()
+                )));
+            }
+            let Some(state) = state else {
+                continue;
+            };
+            if state.step == 0 {
+                return Err(TynxError::TypeMismatch(
+                    "Adam state step must be positive".to_string(),
+                ));
+            }
+            validate_state_tensor("Adam first moment", &state.first_moment, parameter)?;
+            validate_state_tensor("Adam second moment", &state.second_moment, parameter)?;
+            if let Some(maximum) = &state.max_second_moment {
+                validate_state_tensor("Adam maximum second moment", maximum, parameter)?;
+            }
+            if self.config.amsgrad != state.max_second_moment.is_some() {
+                return Err(TynxError::TypeMismatch(format!(
+                    "Adam state maximum second moment presence must match amsgrad={} configuration",
+                    self.config.amsgrad
+                )));
+            }
+            replacement.insert(
+                parameter.id(),
+                AdamState {
+                    structure_generation: parameter.structure_generation(),
+                    step: state.step,
+                    first_moment: state.first_moment.clone().detach(),
+                    second_moment: state.second_moment.clone().detach(),
+                    max_second_moment: state.max_second_moment.clone().map(DynTensor::detach),
+                },
+            );
+        }
+        self.state = replacement;
+        Ok(())
     }
 
     fn step_parameters<'a>(
@@ -328,6 +440,19 @@ impl Adam {
         self.engine.step_for(id)
     }
 
+    /// Snapshot the current-generation adaptive state for one parameter.
+    pub fn state_for(&self, parameter: &ParameterSlot) -> Option<AdamParameterState> {
+        self.engine.state_for(parameter)
+    }
+
+    /// Atomically replace all adaptive state for a runtime parameter list.
+    pub fn replace_slot_states(
+        &mut self,
+        states: &[(ParameterSlot, Option<AdamParameterState>)],
+    ) -> Result<()> {
+        self.engine.replace_slot_states(states)
+    }
+
     /// Update every unique trainable slot that currently has a gradient.
     pub fn step(&mut self, parameters: &ParameterStore) -> Result<usize> {
         self.engine
@@ -383,6 +508,19 @@ impl AdamW {
     /// Return the current step counter for a parameter identity.
     pub fn step_for(&self, id: ParamId) -> Option<u64> {
         self.engine.step_for(id)
+    }
+
+    /// Snapshot the current-generation adaptive state for one parameter.
+    pub fn state_for(&self, parameter: &ParameterSlot) -> Option<AdamParameterState> {
+        self.engine.state_for(parameter)
+    }
+
+    /// Atomically replace all adaptive state for a runtime parameter list.
+    pub fn replace_slot_states(
+        &mut self,
+        states: &[(ParameterSlot, Option<AdamParameterState>)],
+    ) -> Result<()> {
+        self.engine.replace_slot_states(states)
     }
 
     /// Update every unique trainable slot that currently has a gradient.
@@ -507,6 +645,64 @@ mod tests {
         assert_eq!(adam.state_len(), 1);
         assert!(parameter.grad().is_some());
         assert_eq!(parameter.structure_generation(), 0);
+    }
+
+    #[test]
+    fn adaptive_snapshot_rebinds_to_a_fresh_slot_and_resumes_exactly() {
+        let device = Device::autodiff(Device::default());
+        let (parameter, store) = scalar_parameter("weight", 2.0, &device);
+        let config = AdamConfig::new(0.1).with_amsgrad(true);
+        let mut baseline = Adam::with_config(config).unwrap();
+        set_gradient(&parameter, &store, 2.0);
+        baseline.step(&store).unwrap();
+        let snapshot = baseline.state_for(&parameter).unwrap();
+        assert_eq!(snapshot.step(), 1);
+        assert!(snapshot.max_second_moment().is_some());
+
+        let (resumed_parameter, resumed_store) =
+            scalar_parameter("weight", scalar_value(&parameter), &device);
+        let mut resumed = Adam::with_config(config).unwrap();
+        resumed
+            .replace_slot_states(&[(resumed_parameter.clone(), Some(snapshot))])
+            .unwrap();
+
+        set_gradient(&parameter, &store, 2.0);
+        baseline.step(&store).unwrap();
+        set_gradient(&resumed_parameter, &resumed_store, 2.0);
+        resumed.step(&resumed_store).unwrap();
+
+        assert!((scalar_value(&resumed_parameter) - scalar_value(&parameter)).abs() < 1.0e-7);
+        assert_eq!(resumed.step_for(resumed_parameter.id()), Some(2));
+    }
+
+    #[test]
+    fn adaptive_state_load_is_atomic_and_configuration_checked() {
+        let device = Device::autodiff(Device::default());
+        let (parameter, store) = scalar_parameter("weight", 2.0, &device);
+        let mut adam = Adam::new(0.1).unwrap();
+        set_gradient(&parameter, &store, 2.0);
+        adam.step(&store).unwrap();
+        let original = adam.state_for(&parameter).unwrap();
+        let incompatible = AdamParameterState::new(
+            1,
+            original.first_moment(),
+            original.second_moment(),
+            Some(original.second_moment()),
+        );
+
+        assert!(
+            adam.replace_slot_states(&[(parameter.clone(), Some(incompatible))])
+                .is_err()
+        );
+        assert_eq!(adam.state_for(&parameter).unwrap().step(), 1);
+
+        let zero_step =
+            AdamParameterState::new(0, original.first_moment(), original.second_moment(), None);
+        assert!(
+            adam.replace_slot_states(&[(parameter.clone(), Some(zero_step))])
+                .is_err()
+        );
+        assert_eq!(adam.state_for(&parameter).unwrap().step(), 1);
     }
 
     #[test]

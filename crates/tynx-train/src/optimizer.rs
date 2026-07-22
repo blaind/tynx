@@ -2,7 +2,7 @@
 
 mod adam;
 
-pub use adam::{Adam, AdamConfig, AdamW, AdamWConfig};
+pub use adam::{Adam, AdamConfig, AdamParameterState, AdamW, AdamWConfig};
 
 use std::collections::{HashMap, HashSet};
 
@@ -93,6 +93,29 @@ pub struct Sgd {
     momentum_buffers: HashMap<ParamId, (u64, DynTensor)>,
 }
 
+/// Portable momentum state for one SGD parameter.
+///
+/// Runtime parameter identity and structure generation are deliberately excluded. Loading binds
+/// the detached buffer to a destination slot's current identity and structural contract.
+#[derive(Debug, Clone)]
+pub struct SgdParameterState {
+    momentum_buffer: DynTensor,
+}
+
+impl SgdParameterState {
+    /// Construct a portable state entry from a momentum buffer.
+    pub fn new(momentum_buffer: DynTensor) -> Self {
+        Self {
+            momentum_buffer: momentum_buffer.detach(),
+        }
+    }
+
+    /// Return the detached momentum buffer.
+    pub fn momentum_buffer(&self) -> DynTensor {
+        self.momentum_buffer.clone()
+    }
+}
+
 impl Sgd {
     /// Create plain SGD with the given learning rate.
     pub fn new(learning_rate: f64) -> Result<Self> {
@@ -125,6 +148,48 @@ impl Sgd {
     /// Return the number of parameter momentum buffers.
     pub fn state_len(&self) -> usize {
         self.momentum_buffers.len()
+    }
+
+    /// Snapshot the current-generation momentum state for one parameter.
+    pub fn state_for(&self, parameter: &ParameterSlot) -> Option<SgdParameterState> {
+        self.momentum_buffers
+            .get(&parameter.id())
+            .filter(|(generation, _)| *generation == parameter.structure_generation())
+            .map(|(_, momentum_buffer)| SgdParameterState::new(momentum_buffer.clone().detach()))
+    }
+
+    /// Atomically replace all SGD state for a runtime parameter list.
+    ///
+    /// Each `Some` entry is rebound to the destination slot's current identity and structure
+    /// generation. `None` represents a parameter with no allocated momentum state. Duplicate
+    /// destination identities are rejected rather than silently selecting one entry.
+    pub fn replace_slot_states(
+        &mut self,
+        states: &[(ParameterSlot, Option<SgdParameterState>)],
+    ) -> Result<()> {
+        let mut seen = HashSet::new();
+        let mut replacement = HashMap::new();
+        for (parameter, state) in states {
+            if !seen.insert(parameter.id()) {
+                return Err(TynxError::TypeMismatch(format!(
+                    "duplicate SGD state destination for parameter {}",
+                    parameter.id().get()
+                )));
+            }
+            let Some(state) = state else {
+                continue;
+            };
+            validate_state_tensor("SGD momentum buffer", &state.momentum_buffer, parameter)?;
+            replacement.insert(
+                parameter.id(),
+                (
+                    parameter.structure_generation(),
+                    state.momentum_buffer.clone().detach(),
+                ),
+            );
+        }
+        self.momentum_buffers = replacement;
+        Ok(())
     }
 
     /// Update every unique trainable slot that currently has a gradient.
@@ -221,6 +286,26 @@ fn validate_nonnegative_finite(name: &str, value: f64) -> Result<()> {
     Ok(())
 }
 
+fn validate_state_tensor(label: &str, tensor: &DynTensor, parameter: &ParameterSlot) -> Result<()> {
+    let contract = parameter.contract();
+    if tensor.dims() != contract.shape()
+        || tensor.dtype() != contract.dtype()
+        || tensor.device() != *contract.device()
+    {
+        return Err(TynxError::TypeMismatch(format!(
+            "{label} shape {:?}, dtype {:?}, and device {:?} do not match parameter {} contract shape {:?}, dtype {:?}, and device {:?}",
+            tensor.dims(),
+            tensor.dtype(),
+            tensor.device(),
+            parameter.id().get(),
+            contract.shape(),
+            contract.dtype(),
+            contract.device(),
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use burn::tensor::{Device, TensorData};
@@ -300,6 +385,58 @@ mod tests {
         let value = values(parameter.value())[0];
         assert!((value - 1.52).abs() < 1.0e-6);
         assert_eq!(sgd.state_len(), 1);
+    }
+
+    #[test]
+    fn momentum_snapshot_rebinds_to_a_fresh_slot_and_resumes_exactly() {
+        let device = Device::autodiff(Device::default());
+        let (parameter, store) = scalar_parameter("weight", 2.0, &device);
+        let config = SgdConfig::new(0.1).with_momentum(0.9);
+        let mut baseline = Sgd::with_config(config).unwrap();
+        set_gradient(&parameter, &store, 2.0);
+        baseline.step(&store).unwrap();
+        let snapshot = baseline.state_for(&parameter).unwrap();
+
+        let (resumed_parameter, resumed_store) =
+            scalar_parameter("weight", values(parameter.value())[0], &device);
+        let mut resumed = Sgd::with_config(config).unwrap();
+        resumed
+            .replace_slot_states(&[(resumed_parameter.clone(), Some(snapshot))])
+            .unwrap();
+
+        store.zero_grad();
+        set_gradient(&parameter, &store, 2.0);
+        baseline.step(&store).unwrap();
+        set_gradient(&resumed_parameter, &resumed_store, 2.0);
+        resumed.step(&resumed_store).unwrap();
+
+        assert_eq!(values(resumed_parameter.value()), values(parameter.value()));
+        assert_eq!(resumed.state_len(), 1);
+    }
+
+    #[test]
+    fn momentum_state_load_validates_before_replacement_and_ignores_stale_state() {
+        let device = Device::autodiff(Device::default());
+        let (parameter, store) = scalar_parameter("weight", 2.0, &device);
+        set_gradient(&parameter, &store, 2.0);
+        let mut sgd = Sgd::with_config(SgdConfig::new(0.1).with_momentum(0.9)).unwrap();
+        sgd.step(&store).unwrap();
+        let original = sgd.state_for(&parameter).unwrap();
+        let invalid = SgdParameterState::new(tensor(vec![1.0, 2.0], &[2], &device));
+
+        assert!(
+            sgd.replace_slot_states(&[(parameter.clone(), Some(invalid))])
+                .is_err()
+        );
+        assert_eq!(
+            values(sgd.state_for(&parameter).unwrap().momentum_buffer()),
+            values(original.momentum_buffer())
+        );
+
+        parameter
+            .rebind(tensor(vec![1.8], &[1], &device), true)
+            .unwrap();
+        assert!(sgd.state_for(&parameter).is_none());
     }
 
     #[test]
