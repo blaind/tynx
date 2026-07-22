@@ -903,7 +903,7 @@
     "test_mean_example": "pass",
     "test_mean_one_input": "pass",
     "test_mean_two_inputs": "pass",
-    "test_melweightmatrix": "runtime_unsupported",
+    "test_melweightmatrix": "pass",
     "test_min_example": "parse_unsupported",
     "test_min_float16": "pass",
     "test_min_float32": "pass",

@@ -23,6 +23,7 @@ mod hardmax;
 mod integer;
 mod logical;
 mod matrix;
+mod mel_weight_matrix;
 mod normalization;
 mod pad;
 mod pooling;
@@ -170,6 +171,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::MeanVarianceNormalization(node) => {
             normalization::mean_variance_normalization(node, env, device)
         }
+        Node::MelWeightMatrix(node) => mel_weight_matrix::mel_weight_matrix(node, env, device),
         Node::Min(node) => variadic::min(node, env, device),
         Node::Mish(node) => unary::mish(node, env, device),
         Node::Mod(node) => integer::modulo(node, env, device),
