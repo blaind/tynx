@@ -14,6 +14,7 @@ mod gather;
 mod logical;
 mod matrix;
 mod normalization;
+mod pad;
 mod pooling;
 mod pow;
 mod reduction;
@@ -126,6 +127,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::NonZero(node) => selection::nonzero(node, env, device),
         Node::OneHot(node) => selection::one_hot(node, env, device),
         Node::Or(node) => logical::or(node, env, device),
+        Node::Pad(node) => pad::pad(node, env, device),
         Node::PRelu(node) => binary::prelu(node, env, device),
         Node::Pow(node) => pow::pow(node, env, device),
         Node::Reciprocal(node) => unary::reciprocal(node, env, device),

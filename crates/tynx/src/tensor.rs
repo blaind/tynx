@@ -441,6 +441,38 @@ macro_rules! gather_dyn {
     };
 }
 
+macro_rules! slice_assign_dyn {
+    ($tensor:expr, $slices:expr, $values:expr, $kind:ident) => {
+        match ($tensor, $values) {
+            ($kind::R1(tensor), $kind::R1(values)) => {
+                $kind::R1(tensor.slice_assign($slices, values))
+            }
+            ($kind::R2(tensor), $kind::R2(values)) => {
+                $kind::R2(tensor.slice_assign($slices, values))
+            }
+            ($kind::R3(tensor), $kind::R3(values)) => {
+                $kind::R3(tensor.slice_assign($slices, values))
+            }
+            ($kind::R4(tensor), $kind::R4(values)) => {
+                $kind::R4(tensor.slice_assign($slices, values))
+            }
+            ($kind::R5(tensor), $kind::R5(values)) => {
+                $kind::R5(tensor.slice_assign($slices, values))
+            }
+            ($kind::R6(tensor), $kind::R6(values)) => {
+                $kind::R6(tensor.slice_assign($slices, values))
+            }
+            (tensor, values) => {
+                return Err(TynxError::Shape(format!(
+                    "slice assignment ranks differ: destination {}, values {}",
+                    tensor.rank(),
+                    values.rank()
+                )));
+            }
+        }
+    };
+}
+
 macro_rules! gather_nd_output {
     ($tensor:expr, $indices:expr, $rank:expr, $kind:ident) => {
         match $rank {
@@ -666,6 +698,16 @@ impl DynTensor {
     /// Slice the tensor with one slice per dimension.
     pub fn slice(self, slices: &[Slice]) -> Self {
         map_float!(self, |tensor| tensor.slice(slices))
+    }
+
+    /// Assign a same-rank tensor into a slice.
+    pub fn slice_assign(self, slices: &[Slice], values: Self) -> Result<Self> {
+        Ok(slice_assign_dyn!(self, slices, values, DynTensor))
+    }
+
+    /// Reverse one dimension.
+    pub fn flip_dim(self, dim: usize) -> Self {
+        map_float!(self, |tensor| tensor.flip([dim as isize]))
     }
 
     /// Select slices along one dimension using flattened indices.
@@ -1363,6 +1405,16 @@ impl DynInt {
         map_int!(self, |tensor| tensor.slice(slices))
     }
 
+    /// Assign a same-rank tensor into a slice.
+    pub fn slice_assign(self, slices: &[Slice], values: Self) -> Result<Self> {
+        Ok(slice_assign_dyn!(self, slices, values, DynInt))
+    }
+
+    /// Reverse one dimension.
+    pub fn flip_dim(self, dim: usize) -> Self {
+        map_int!(self, |tensor| tensor.flip([dim as isize]))
+    }
+
     /// Map negative indices into the corresponding positive dimension indices.
     pub fn normalize_indices(self, size: usize) -> Result<Self> {
         if size == 0 {
@@ -1871,6 +1923,16 @@ impl DynBool {
     /// Slice the tensor with one slice per dimension.
     pub fn slice(self, slices: &[Slice]) -> Self {
         map_bool!(self, |tensor| tensor.slice(slices))
+    }
+
+    /// Assign a same-rank tensor into a slice.
+    pub fn slice_assign(self, slices: &[Slice], values: Self) -> Result<Self> {
+        Ok(slice_assign_dyn!(self, slices, values, DynBool))
+    }
+
+    /// Reverse one dimension.
+    pub fn flip_dim(self, dim: usize) -> Self {
+        map_bool!(self, |tensor| tensor.flip([dim as isize]))
     }
 
     /// Select slices along one dimension using flattened indices.
