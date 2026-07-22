@@ -1293,6 +1293,30 @@ def test_tensor_backward_accumulates_leaf_gradients() -> None:
     assert value.grad is None
 
 
+@pytest.mark.parametrize("operator", ["add", "sub", "mul", "truediv", "matmul"])
+def test_tensor_inplace_arithmetic_fails_instead_of_losing_leaf_gradients(
+    operator: str,
+) -> None:
+    value = tynx.Tensor([1.0], requires_grad=True)
+    other = tynx.Tensor([2.0])
+
+    with pytest.raises(RuntimeError, match="in-place arithmetic"):
+        if operator == "add":
+            value += other
+        elif operator == "sub":
+            value -= other
+        elif operator == "mul":
+            value *= other
+        elif operator == "truediv":
+            value /= other
+        else:
+            value @= other
+
+    assert value.is_leaf
+    assert value.requires_grad
+    assert value.grad is None
+
+
 def test_tensor_reductions_follow_dim_and_keepdim_shapes() -> None:
     value = tynx.Tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
 
