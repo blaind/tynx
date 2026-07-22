@@ -59,8 +59,22 @@ struct TensorSpec {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum DataSpec {
-    Explicit { values: Vec<f32> },
-    Linear { start: f32, step: f32 },
+    ClampedLinear {
+        start: f32,
+        step: f32,
+        min: f32,
+        max: f32,
+    },
+    Constant {
+        value: f32,
+    },
+    Explicit {
+        values: Vec<f32>,
+    },
+    Linear {
+        start: f32,
+        step: f32,
+    },
     Identity,
 }
 
@@ -138,6 +152,12 @@ pub fn model_bytes(case: &Case) -> BenchResult<Vec<u8>> {
     match case.model.as_str() {
         "models/sign.onnx.hex" => decode_hex(include_str!("../../../models/sign.onnx.hex")),
         "models/matmul64.onnx.hex" => decode_hex(include_str!("../../../models/matmul64.onnx.hex")),
+        "models/matmul_dynamic.onnx.hex" => {
+            decode_hex(include_str!("../../../models/matmul_dynamic.onnx.hex"))
+        }
+        "models/matmul_add_relu_dynamic.onnx.hex" => decode_hex(include_str!(
+            "../../../models/matmul_add_relu_dynamic.onnx.hex"
+        )),
         model => Err(format!("model '{model}' is not embedded in the benchmark harness").into()),
     }
 }
@@ -235,6 +255,15 @@ pub fn print_report(report: &Report) -> BenchResult<()> {
 fn expand(spec: &TensorSpec) -> BenchResult<Vec<f32>> {
     let len = element_count(&spec.shape)?;
     let values = match &spec.data {
+        DataSpec::ClampedLinear {
+            start,
+            step,
+            min,
+            max,
+        } => (0..len)
+            .map(|index| (start + *step * index as f32).clamp(*min, *max))
+            .collect(),
+        DataSpec::Constant { value } => vec![*value; len],
         DataSpec::Explicit { values } => values.clone(),
         DataSpec::Linear { start, step } => {
             (0..len).map(|index| start + *step * index as f32).collect()
@@ -332,13 +361,22 @@ mod tests {
     #[test]
     fn loads_embedded_cases_and_models() {
         let sign = load_case_named("sign-11").unwrap();
-        let matmul = load_case_named("matmul-64x64").unwrap();
+        let matmul64 = load_case_named("matmul-64x64").unwrap();
+        let matmul256 = load_case_named("matmul-256x256").unwrap();
+        let multi_op = load_case_named("matmul-add-relu-256x256").unwrap();
 
         assert_eq!(sign.inputs[0].values.len(), 11);
         assert_eq!(model_bytes(&sign).unwrap().len(), 83);
-        assert_eq!(matmul.inputs.len(), 2);
-        assert_eq!(matmul.inputs[0].values, matmul.expected);
-        assert_eq!(model_bytes(&matmul).unwrap().len(), 122);
+        assert_eq!(matmul64.inputs.len(), 2);
+        assert_eq!(matmul64.inputs[0].values, matmul64.expected);
+        assert_eq!(model_bytes(&matmul64).unwrap().len(), 122);
+        assert_eq!(matmul256.output_shape, [256, 256]);
+        assert_eq!(model_bytes(&matmul256).unwrap().len(), 124);
+        assert_eq!(multi_op.inputs.len(), 3);
+        assert!(multi_op.inputs[2].values.iter().all(|value| *value == 0.25));
+        assert_eq!(multi_op.expected[0], 0.0);
+        assert!(multi_op.expected.last().unwrap() > &1.0);
+        assert_eq!(model_bytes(&multi_op).unwrap().len(), 208);
     }
 
     #[test]

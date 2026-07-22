@@ -5,9 +5,19 @@ use burn_onnx::ModelGen;
 fn main() {
     generate("sign", include_str!("../../models/sign.onnx.hex"));
     generate("matmul64", include_str!("../../models/matmul64.onnx.hex"));
+    generate(
+        "matmul_dynamic",
+        include_str!("../../models/matmul_dynamic.onnx.hex"),
+    );
+    generate(
+        "matmul_add_relu_dynamic",
+        include_str!("../../models/matmul_add_relu_dynamic.onnx.hex"),
+    );
 
     println!("cargo:rerun-if-changed=../../models/sign.onnx.hex");
     println!("cargo:rerun-if-changed=../../models/matmul64.onnx.hex");
+    println!("cargo:rerun-if-changed=../../models/matmul_dynamic.onnx.hex");
+    println!("cargo:rerun-if-changed=../../models/matmul_add_relu_dynamic.onnx.hex");
     println!("cargo:rerun-if-changed=build.rs");
 }
 

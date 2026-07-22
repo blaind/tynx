@@ -54,6 +54,20 @@ jobs:
         run: cargo run --manifest-path benchmarks/Cargo.toml --locked --release -p ort-bench > benchmarks/results/ort-matmul-cpu.json
         env:
           TYNX_BENCH_CASE: matmul-64x64
+      - name: Benchmark 256x256 MatMul CPU
+        run: |
+          cargo run --manifest-path benchmarks/Cargo.toml --locked --release -p tynx-bench > benchmarks/results/tynx-matmul-256-cpu.json
+          cargo run --manifest-path benchmarks/Cargo.toml --locked --release -p burn-aot-bench > benchmarks/results/burn-aot-matmul-256-cpu.json
+          cargo run --manifest-path benchmarks/Cargo.toml --locked --release -p ort-bench > benchmarks/results/ort-matmul-256-cpu.json
+        env:
+          TYNX_BENCH_CASE: matmul-256x256
+      - name: Benchmark MatMul-Add-ReLU CPU
+        run: |
+          cargo run --manifest-path benchmarks/Cargo.toml --locked --release -p tynx-bench > benchmarks/results/tynx-matmul-add-relu-cpu.json
+          cargo run --manifest-path benchmarks/Cargo.toml --locked --release -p burn-aot-bench > benchmarks/results/burn-aot-matmul-add-relu-cpu.json
+          cargo run --manifest-path benchmarks/Cargo.toml --locked --release -p ort-bench > benchmarks/results/ort-matmul-add-relu-cpu.json
+        env:
+          TYNX_BENCH_CASE: matmul-add-relu-256x256
       - uses: actions/upload-artifact@v7
         if: always()
         with:
