@@ -1,17 +1,29 @@
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from os import PathLike
 from typing import Literal, overload
 
-from typing_extensions import TypeAlias
-
 __version__: str
 
-TensorScalar: TypeAlias = float | int | bool
-TensorData: TypeAlias = TensorScalar | list["TensorData"] | tuple["TensorData", ...]
-TensorDType: TypeAlias = Literal["float32", "int64", "bool"]
-ReductionDim: TypeAlias = int | tuple[int, ...]
-Scalar: TypeAlias = int | float
-Shape: TypeAlias = tuple[int, ...] | list[int]
+TensorScalar = float | int | bool
+_TensorData1 = Sequence[TensorScalar]
+_TensorData2 = Sequence[_TensorData1]
+_TensorData3 = Sequence[_TensorData2]
+_TensorData4 = Sequence[_TensorData3]
+_TensorData5 = Sequence[_TensorData4]
+_TensorData6 = Sequence[_TensorData5]
+TensorData = (
+    TensorScalar
+    | _TensorData1
+    | _TensorData2
+    | _TensorData3
+    | _TensorData4
+    | _TensorData5
+    | _TensorData6
+)
+TensorDType = Literal["float32", "int64", "bool"]
+ReductionDim = int | tuple[int, ...]
+Scalar = int | float
+Shape = tuple[int, ...] | list[int]
 
 class _NoGrad:
     def __enter__(self) -> None: ...
@@ -193,7 +205,7 @@ class TrainabilityReport:
     def backward_issues(self) -> list[dict[str, object]]: ...
     def require_trainable(self) -> None: ...
 
-OptimizerParameter: TypeAlias = Parameter | tuple[str, Parameter]
+OptimizerParameter = Parameter | tuple[str, Parameter]
 
 class SGD:
     def __init__(

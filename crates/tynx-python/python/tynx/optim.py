@@ -3,16 +3,14 @@
 from collections.abc import Iterable, Mapping
 from typing import Callable, Generic, TypeVar, Union, cast
 
-from typing_extensions import TypeAlias
-
 from ._tynx import SGD as _NativeSGD
 from ._tynx import Adam as _NativeAdam
 from ._tynx import AdamW as _NativeAdamW
 from ._tynx import Parameter
 
-OptimizerParameter: TypeAlias = Union[Parameter, tuple[str, Parameter]]
-OptimizerParameterGroup: TypeAlias = Mapping[str, object]
-_Parameters: TypeAlias = Iterable[Union[OptimizerParameter, OptimizerParameterGroup]]
+OptimizerParameter = Union[Parameter, tuple[str, Parameter]]
+OptimizerParameterGroup = Mapping[str, object]
+_Parameters = Iterable[Union[OptimizerParameter, OptimizerParameterGroup]]
 _Native = TypeVar("_Native", _NativeSGD, _NativeAdam, _NativeAdamW)
 
 

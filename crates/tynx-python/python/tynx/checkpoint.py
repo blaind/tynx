@@ -9,8 +9,6 @@ from os import PathLike
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, Union, cast
 
-from typing_extensions import TypeAlias
-
 from ._tynx import Tensor
 from .nn.state import (
     LoadStateResult,
@@ -22,9 +20,9 @@ from .nn.state import (
 
 _CHECKPOINT_FORMAT = "tynx.training"
 _CHECKPOINT_VERSION = 1
-_Path: TypeAlias = Union[str, PathLike[str]]
-_JsonScalar: TypeAlias = Union[None, bool, int, float, str]
-_Encoded: TypeAlias = Union[_JsonScalar, list["_Encoded"], dict[str, "_Encoded"]]
+_Path = Union[str, PathLike[str]]
+_JsonScalar = Union[None, bool, int, float, str]
+_Encoded = Union[_JsonScalar, list["_Encoded"], dict[str, "_Encoded"]]
 
 if TYPE_CHECKING:
     from ._tynx import TensorData, TensorDType
