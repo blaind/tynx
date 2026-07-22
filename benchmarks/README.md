@@ -61,6 +61,10 @@ matched single-thread and automatic runtime-default modes, adds a comparison tab
 and uploads its JSON reports. Leave the workflow iteration inputs blank to use the per-case
 defaults.
 
+The repository's dated, non-gating reference measurements are recorded in
+[`BASELINES.md`](BASELINES.md). They document the exact command and environment so later runs have a
+stable comparison point without turning machine-specific latency into a CI threshold.
+
 ## Training
 
 The training suite compares an imported Tynx model with burn-onnx generated AOT Rust using the
