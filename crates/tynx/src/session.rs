@@ -33,9 +33,14 @@ impl Session {
 
     /// Load a model from bytes with optional graph simplification.
     pub fn from_bytes_with(data: &[u8], simplify: bool) -> Result<Self> {
+        let (prepared, changed) = crate::interpreter::prepare_model(data)?;
+        let parse_data = if changed { prepared.as_slice() } else { data };
         let mut graph = OnnxGraphBuilder::new()
             .simplify(simplify)
-            .parse_bytes(data)?;
+            .parse_bytes(parse_data)?;
+        if changed {
+            crate::interpreter::restore_dynamic_conv_inputs(data, &mut graph)?;
+        }
         crate::interpreter::preserve_attributes(data, &mut graph)?;
 
         Ok(Self { graph })

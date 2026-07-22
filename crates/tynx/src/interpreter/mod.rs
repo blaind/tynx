@@ -3,12 +3,15 @@
 mod binary;
 mod clip;
 mod comparison;
+mod convolution;
 mod logical;
 mod matrix;
+mod pooling;
 mod pow;
 mod reduction;
 mod resolve;
 mod shape;
+mod spatial;
 mod unary;
 mod variadic;
 mod where_op;
@@ -23,8 +26,17 @@ use crate::{Result, TynxError, Value};
 /// Values available to nodes, keyed by ONNX argument name.
 pub type Env = HashMap<String, Value>;
 
+pub(crate) fn prepare_model(data: &[u8]) -> Result<(Vec<u8>, bool)> {
+    convolution::prepare_model(data)
+}
+
+pub(crate) fn restore_dynamic_conv_inputs(data: &[u8], graph: &mut OnnxGraph) -> Result<()> {
+    convolution::restore_dynamic_inputs(data, graph)
+}
+
 pub(crate) fn preserve_attributes(data: &[u8], graph: &mut OnnxGraph) -> Result<()> {
-    reduction::preserve_attributes(data, graph)
+    reduction::preserve_attributes(data, graph)?;
+    pooling::preserve_attributes(data, graph)
 }
 
 /// Execute one ONNX node using values from the runtime environment.
@@ -39,9 +51,15 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Asinh(node) => unary::asinh(node, env, device),
         Node::Atan(node) => unary::atan(node, env, device),
         Node::Atanh(node) => unary::atanh(node, env, device),
+        Node::AveragePool1d(node) => pooling::average_pool1d(node, env, device),
+        Node::AveragePool2d(node) => pooling::average_pool2d(node, env, device),
+        Node::AveragePool3d(node) => pooling::average_pool3d(node, env, device),
         Node::Ceil(node) => unary::ceil(node, env, device),
         Node::Celu(node) => unary::celu(node, env, device),
         Node::Clip(node) => clip::clip(node, env, device),
+        Node::Conv1d(node) => convolution::conv1d(node, env, device),
+        Node::Conv2d(node) => convolution::conv2d(node, env, device),
+        Node::Conv3d(node) => convolution::conv3d(node, env, device),
         Node::Cos(node) => unary::cos(node, env, device),
         Node::Cosh(node) => unary::cosh(node, env, device),
         Node::Div(node) => binary::div(node, env, device),
@@ -52,6 +70,8 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Floor(node) => unary::floor(node, env, device),
         Node::Flatten(node) => shape::flatten(node, env, device),
         Node::Gelu(node) => unary::gelu(node, env, device),
+        Node::GlobalAveragePool(node) => pooling::global_average_pool(node, env, device),
+        Node::GlobalMaxPool(node) => pooling::global_max_pool(node, env, device),
         Node::Greater(node) => comparison::greater(node, env, device),
         Node::GreaterOrEqual(node) => comparison::greater_or_equal(node, env, device),
         Node::HardSigmoid(node) => unary::hard_sigmoid(node, env, device),
@@ -65,6 +85,9 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Max(node) => variadic::max(node, env, device),
         Node::MatMul(node) => matrix::matmul(node, env, device),
         Node::MatMulInteger(node) => matrix::matmul_integer(node, env, device),
+        Node::MaxPool1d(node) => pooling::max_pool1d(node, env, device),
+        Node::MaxPool2d(node) => pooling::max_pool2d(node, env, device),
+        Node::MaxPool3d(node) => pooling::max_pool3d(node, env, device),
         Node::Mean(node) => variadic::mean(node, env, device),
         Node::Min(node) => variadic::min(node, env, device),
         Node::Mish(node) => unary::mish(node, env, device),
