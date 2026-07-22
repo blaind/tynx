@@ -31,10 +31,14 @@ impl Extremum {
         }
     }
 
-    pub(super) fn float_reduce(self, value: DynTensor, dims: &[usize]) -> DynTensor {
+    pub(super) fn float_reduce(
+        self,
+        value: DynTensor,
+        dims: &[usize],
+    ) -> tynx_core::Result<DynTensor> {
         match self {
-            Self::Minimum => value.reduce_min_dims(dims),
-            Self::Maximum => value.reduce_max_dims(dims),
+            Self::Minimum => value.reduce_min_dims_nan(dims),
+            Self::Maximum => value.reduce_max_dims_nan(dims),
         }
     }
 }
@@ -79,7 +83,7 @@ pub(super) fn reduce(
     match value {
         TensorValue::Float(value) => extremum
             .float_reduce(value, dims)
-            .reshape(output_shape)
+            .and_then(|value| value.reshape(output_shape))
             .map(TensorValue::Float)
             .map_err(to_python_error),
         TensorValue::Int(value) => match extremum {
