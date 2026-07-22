@@ -1341,6 +1341,19 @@ impl DynTensor {
         map_float!(self, |tensor| activation::celu(tensor, alpha))
     }
 
+    /// Apply element-wise shrinkage outside the configured dead zone.
+    pub fn shrink(self, lambda: f64, bias: f64) -> Self {
+        map_float!(self, |tensor| activation::shrink(tensor, lambda, bias))
+    }
+
+    /// Apply the Swish activation with an explicit alpha coefficient.
+    pub fn swish(self, alpha: f64) -> Self {
+        map_float!(self, |tensor| {
+            let sigmoid = activation::sigmoid(tensor.clone().mul_scalar(alpha));
+            tensor.mul(sigmoid)
+        })
+    }
+
     /// Apply the Mish activation function element-wise.
     pub fn mish(self) -> Self {
         map_float!(self, |tensor| activation::mish(tensor))

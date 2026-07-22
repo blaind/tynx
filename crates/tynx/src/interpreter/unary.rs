@@ -7,9 +7,9 @@ use onnx_ir::node::{
     elu::EluNode, erf::ErfNode, exp::ExpNode, floor::FloorNode, gelu::GeluNode,
     hard_sigmoid::HardSigmoidNode, hard_swish::HardSwishNode, leaky_relu::LeakyReluNode,
     log::LogNode, mish::MishNode, neg::NegNode, reciprocal::ReciprocalNode, relu::ReluNode,
-    round::RoundNode, selu::SeluNode, sigmoid::SigmoidNode, sign::SignNode, sin::SinNode,
-    sinh::SinhNode, softplus::SoftplusNode, softsign::SoftsignNode, sqrt::SqrtNode, tan::TanNode,
-    tanh::TanhNode, thresholded_relu::ThresholdedReluNode,
+    round::RoundNode, selu::SeluNode, shrink::ShrinkNode, sigmoid::SigmoidNode, sign::SignNode,
+    sin::SinNode, sinh::SinhNode, softplus::SoftplusNode, softsign::SoftsignNode, sqrt::SqrtNode,
+    swish::SwishNode, tan::TanNode, tanh::TanhNode, thresholded_relu::ThresholdedReluNode,
 };
 
 use super::{Env, resolve};
@@ -145,6 +145,24 @@ pub(super) fn softplus(node: &SoftplusNode, env: &Env, device: &Device) -> Resul
     Ok(vec![Value::Tensor(input.softplus())])
 }
 
+pub(super) fn shrink(node: &ShrinkNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
+    if node.config.lambda < 0.0 {
+        return Err(crate::TynxError::Shape(format!(
+            "Shrink lambda must be non-negative, got {}",
+            node.config.lambda
+        )));
+    }
+    let input = resolve::first(env, &node.name, &node.inputs, device)?.into_tensor()?;
+    Ok(vec![Value::Tensor(
+        input.shrink(node.config.lambda, node.config.bias),
+    )])
+}
+
+pub(super) fn swish(node: &SwishNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
+    let input = resolve::first(env, &node.name, &node.inputs, device)?.into_tensor()?;
+    Ok(vec![Value::Tensor(input.swish(node.config.alpha))])
+}
+
 pub(super) fn elu(node: &EluNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
     let input = resolve::first(env, &node.name, &node.inputs, device)?.into_tensor()?;
     Ok(vec![Value::Tensor(input.elu(node.config.alpha))])
@@ -241,6 +259,7 @@ mod tests {
             relu::ReluNodeBuilder,
             round::RoundNodeBuilder,
             selu::{SeluConfig, SeluNodeBuilder},
+            shrink::{ShrinkConfig, ShrinkNodeBuilder},
             sigmoid::SigmoidNodeBuilder,
             sign::SignNodeBuilder,
             sin::SinNodeBuilder,
@@ -248,6 +267,7 @@ mod tests {
             softplus::SoftplusNodeBuilder,
             softsign::SoftsignNodeBuilder,
             sqrt::SqrtNodeBuilder,
+            swish::{SwishConfig, SwishNodeBuilder},
             tan::TanNodeBuilder,
             tanh::TanhNodeBuilder,
             thresholded_relu::{ThresholdedReluConfig, ThresholdedReluNodeBuilder},
@@ -1288,6 +1308,71 @@ mod tests {
             .collect::<Vec<_>>();
 
         for (actual, expected) in output.into_iter().zip([-0.158_655_26, 0.0, 0.841_344_7]) {
+            assert!((actual - expected).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn applies_shrink_bias_outside_the_dead_zone() {
+        let node = ShrinkNodeBuilder::new("shrink")
+            .input_tensor("x", 1, DType::F32)
+            .output_tensor("y", 1, DType::F32)
+            .config(ShrinkConfig {
+                lambda: 1.0,
+                bias: 0.25,
+            })
+            .build();
+        let device = Device::default();
+        let mut env = Env::new();
+        env.insert(
+            "x".into(),
+            Value::from_tensor_data(
+                TensorData::new(vec![-2.0_f32, -1.0, 0.5, 1.0, 2.0], [5]),
+                1,
+                &device,
+            )
+            .unwrap(),
+        );
+
+        let output = shrink(&node, &env, &device)
+            .unwrap()
+            .pop()
+            .unwrap()
+            .into_tensor()
+            .unwrap()
+            .into_data()
+            .iter::<f32>()
+            .collect::<Vec<_>>();
+
+        assert_eq!(output, [-1.75, 0.0, 0.0, 0.0, 1.75]);
+    }
+
+    #[test]
+    fn applies_swish_with_custom_alpha() {
+        let node = SwishNodeBuilder::new("swish")
+            .input_tensor("x", 1, DType::F32)
+            .output_tensor("y", 1, DType::F32)
+            .config(SwishConfig { alpha: 2.0 })
+            .build();
+        let device = Device::default();
+        let mut env = Env::new();
+        env.insert(
+            "x".into(),
+            Value::from_tensor_data(TensorData::new(vec![-1.0_f32, 0.0, 1.0], [3]), 1, &device)
+                .unwrap(),
+        );
+
+        let output = swish(&node, &env, &device)
+            .unwrap()
+            .pop()
+            .unwrap()
+            .into_tensor()
+            .unwrap()
+            .into_data()
+            .iter::<f32>()
+            .collect::<Vec<_>>();
+
+        for (actual, expected) in output.into_iter().zip([-0.119_202_92, 0.0, 0.880_797_1]) {
             assert!((actual - expected).abs() < 1e-6);
         }
     }
