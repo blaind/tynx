@@ -164,6 +164,43 @@ def test_tensor_where_rejects_invalid_conditions_and_branches() -> None:
         tynx.where(condition, 1, 0)
 
 
+def test_tensor_gather_supports_typed_values_and_negative_dimensions() -> None:
+    indices = tynx.Tensor([[2, 1], [0, 0]], dtype="int64")
+    floats = tynx.Tensor([[10.0, 11.0, 12.0], [20.0, 21.0, 22.0]])
+    integers = tynx.Tensor([[10, 11, 12], [20, 21, 22]], dtype="int64")
+    booleans = tynx.Tensor([[True, False, False], [False, True, True]], dtype="bool")
+
+    assert floats.gather(-1, indices).tolist() == [[12.0, 11.0], [20.0, 20.0]]
+    assert integers.gather(1, indices).tolist() == [[12, 11], [20, 20]]
+    assert booleans.gather(1, indices).tolist() == [[False, False], [False, False]]
+
+    prefix_indices = tynx.Tensor([[2, 0]], dtype="int64")
+    assert floats.gather(1, prefix_indices).tolist() == [[12.0, 10.0]]
+
+
+def test_tensor_gather_backward_accumulates_repeated_indices() -> None:
+    values = tynx.Tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], requires_grad=True)
+    indices = tynx.Tensor([[1, 1, 2], [0, 2, 2]], dtype="int64")
+
+    values.gather(1, indices).sum().backward()
+
+    assert values.grad is not None
+    assert values.grad.tolist() == [[0.0, 2.0, 1.0], [1.0, 0.0, 2.0]]
+
+
+def test_tensor_gather_rejects_invalid_indices_and_shapes() -> None:
+    values = tynx.Tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+
+    with pytest.raises(TypeError, match="must be an int64 Tensor"):
+        values.gather(1, tynx.Tensor([[0.0], [1.0]]))
+    with pytest.raises(ValueError, match="rank 1 must match input rank 2"):
+        values.gather(1, tynx.Tensor([0, 1], dtype="int64"))
+    with pytest.raises(ValueError, match="exceeds input size"):
+        values.gather(1, tynx.Tensor([[0], [1], [2]], dtype="int64"))
+    with pytest.raises(ValueError, match="dimension 2 is out of range"):
+        values.gather(2, tynx.Tensor([[0], [0]], dtype="int64"))
+
+
 def test_tensor_eager_operators() -> None:
     left = tynx.Tensor([[1.0, 2.0], [3.0, 4.0]])
     right = tynx.Tensor([[2.0, 0.5], [1.0, 2.0]])

@@ -2,6 +2,7 @@
 
 mod comparison;
 mod data;
+mod indexing;
 mod reduction;
 mod selection;
 mod shape;
@@ -295,6 +296,24 @@ impl PyTensor {
         )
     }
 
+    fn gather_impl(&self, dim: usize, index: &Self) -> PyResult<Self> {
+        let input_shape = self.source.value().dims();
+        let indices = indexing::gather_indices(index.source.value().detach(), &input_shape, dim)?;
+        let tracking = is_grad_enabled();
+        match self.source.value() {
+            TensorValue::Float(_) => {
+                let input = self.source.operation_input(tracking, "gather")?;
+                let inner = input.gather(dim, indices).map_err(to_python_error)?;
+                Ok(if tracking {
+                    Self::from_operation(inner, &[self])
+                } else {
+                    Self::from_inner(inner)
+                })
+            }
+            value => indexing::gather(value.detach(), dim, indices).map(Self::from_value),
+        }
+    }
+
     pub(crate) fn tensor_from_python(data: &Bound<'_, PyAny>) -> PyResult<DynTensor> {
         let device = Device::autodiff(tynx_core::default_device());
         TensorValue::float_from_python(data, &device)
@@ -583,6 +602,12 @@ impl PyTensor {
             other_tensor.as_deref(),
             other_tensor.is_none().then_some(other),
         )
+    }
+
+    /// Gather values along one dimension using an in-bounds, same-rank int64 index tensor.
+    fn gather(&self, dim: &Bound<'_, PyAny>, index: PyRef<'_, Self>) -> PyResult<Self> {
+        let dim = shape::axis(dim, self.ndim(), false, "gather")?;
+        self.gather_impl(dim, &index)
     }
 
     fn __add__(&self, other: &Bound<'_, PyAny>) -> PyResult<Self> {

@@ -538,6 +538,43 @@ macro_rules! gather_dyn {
     };
 }
 
+fn gather_slices(data: &[usize], indices: &[usize], dim: usize) -> Result<Vec<Slice>> {
+    if data.len() != indices.len() {
+        return Err(TynxError::Shape(format!(
+            "gather ranks differ: data {}, indices {}",
+            data.len(),
+            indices.len()
+        )));
+    }
+    if dim >= data.len() {
+        return Err(TynxError::Shape(format!(
+            "gather dimension {dim} is outside rank {}",
+            data.len()
+        )));
+    }
+
+    data.iter()
+        .zip(indices)
+        .enumerate()
+        .map(|(axis, (&data_size, &index_size))| {
+            if axis == dim {
+                return Ok(Slice::full());
+            }
+            if index_size > data_size {
+                return Err(TynxError::Shape(format!(
+                    "gather index size {index_size} exceeds data size {data_size} at dimension {axis}"
+                )));
+            }
+            let end = isize::try_from(index_size).map_err(|_| {
+                TynxError::Shape(format!(
+                    "gather index size at dimension {axis} exceeds platform limits"
+                ))
+            })?;
+            Ok(Slice::new(0, Some(end), 1))
+        })
+        .collect()
+}
+
 macro_rules! slice_assign_dyn {
     ($tensor:expr, $slices:expr, $values:expr, $kind:ident) => {
         match ($tensor, $values) {
@@ -852,7 +889,8 @@ impl DynTensor {
 
     /// Gather elements from a same-rank index tensor.
     pub fn gather(self, dim: usize, indices: DynInt) -> Result<Self> {
-        Ok(gather_dyn!(self, dim, indices, DynTensor))
+        let slices = gather_slices(&self.dims(), &indices.dims(), dim)?;
+        Ok(gather_dyn!(self.slice(&slices), dim, indices, DynTensor))
     }
 
     /// Gather slices using tuples stored in the last index dimension.
@@ -1669,7 +1707,8 @@ impl DynInt {
 
     /// Gather elements from a same-rank index tensor.
     pub fn gather(self, dim: usize, indices: DynInt) -> Result<Self> {
-        Ok(gather_dyn!(self, dim, indices, DynInt))
+        let slices = gather_slices(&self.dims(), &indices.dims(), dim)?;
+        Ok(gather_dyn!(self.slice(&slices), dim, indices, DynInt))
     }
 
     /// Gather slices using tuples stored in the last index dimension.
@@ -2273,7 +2312,8 @@ impl DynBool {
 
     /// Gather elements from a same-rank index tensor.
     pub fn gather(self, dim: usize, indices: DynInt) -> Result<Self> {
-        Ok(gather_dyn!(self, dim, indices, DynBool))
+        let slices = gather_slices(&self.dims(), &indices.dims(), dim)?;
+        Ok(gather_dyn!(self.slice(&slices), dim, indices, DynBool))
     }
 
     /// Gather slices using tuples stored in the last index dimension.
@@ -2475,5 +2515,26 @@ mod tests {
         let error = tensor.to_rank(1).unwrap_err();
 
         assert_eq!(error, TynxError::RankPromote { from: 2, to: 1 });
+    }
+
+    #[test]
+    fn gather_accepts_smaller_non_index_dimensions() {
+        let device = Device::default();
+        let data = DynTensor::from_data(
+            TensorData::new(vec![1.0_f32, 2.0, 3.0, 4.0, 5.0, 6.0], [2, 3]),
+            2,
+            &device,
+        )
+        .unwrap();
+        let indices =
+            DynInt::from_data(TensorData::new(vec![2_i64, 0], [1, 2]), 2, &device).unwrap();
+
+        let output = data.gather(1, indices).unwrap();
+
+        assert_eq!(output.dims(), vec![1, 2]);
+        assert_eq!(
+            output.into_data().iter::<f32>().collect::<Vec<_>>(),
+            [3.0, 1.0]
+        );
     }
 }
