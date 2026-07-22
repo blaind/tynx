@@ -67,6 +67,12 @@ def test_accelerated_int64_extrema_avoid_backend_reduction_kernel() -> None:
     assert value.max().item() == maximum
     assert value.min(dim=1).tolist() == [minimum, -5]
     assert value.min().item() == minimum
+
+    vector = tynx.Tensor([minimum, 0, maximum], dtype="int64")
+    assert vector.max(dim=0).tolist() == [maximum]
+    assert vector.max().item() == maximum
+    assert vector.min(dim=0).tolist() == [minimum]
+    assert vector.min().item() == minimum
     tynx.synchronize(device)
 
 
