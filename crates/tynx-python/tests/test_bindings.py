@@ -246,6 +246,23 @@ def test_tensor_value_min_max_reductions_are_differentiable() -> None:
     assert values.grad.tolist() == [[1.0, 1.0, 0.0], [0.0, 1.0, 1.0]]
 
 
+def test_tensor_arg_extrema_return_first_indices() -> None:
+    values = tynx.Tensor([[1.0, 5.0, 5.0], [4.0, 2.0, -1.0]])
+
+    assert values.argmax().dtype == "int64"
+    assert values.argmax().tolist() == [1]
+    assert values.argmin().tolist() == [5]
+    assert values.argmax(dim=1).tolist() == [1, 0]
+    assert values.argmin(dim=-1, keepdim=True).tolist() == [[0], [2]]
+    assert values.argmax(keepdim=True).shape == (1, 1)
+
+    integers = tynx.Tensor([[1, 3], [5, 2]], dtype="int64")
+    assert integers.argmax(dim=0).tolist() == [1, 0]
+
+    with pytest.raises(TypeError, match="do not support bool"):
+        tynx.Tensor([True, False], dtype="bool").argmax()
+
+
 def test_tensor_elementwise_minimum_maximum_broadcast_and_gradients() -> None:
     left = tynx.Tensor([[-2.0], [3.0]], requires_grad=True)
     right = tynx.Tensor([[1.0, 2.0]], requires_grad=True)
