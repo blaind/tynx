@@ -1,4 +1,10 @@
 //! Rank-erased tensor containers used by the runtime.
+//!
+//! The public operations on [`DynTensor`], [`DynInt`], and [`DynBool`] are Tynx's shared
+//! numerical boundary. Frontends translate their own conventions at the edge—ONNX attributes in
+//! the interpreter and Python arguments in the CPython facade—then delegate device computation to
+//! these methods. Keeping the numerical implementation here prevents eager and imported models
+//! from developing separate semantics.
 
 use burn::tensor::{
     Bool, DType, Device, Distribution, IndexingUpdateOp, Int, Slice, Tensor, TensorData, activation,
