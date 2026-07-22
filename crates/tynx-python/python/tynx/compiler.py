@@ -9,6 +9,7 @@ from inspect import BoundArguments as _BoundArguments
 from inspect import Parameter as _Parameter
 from inspect import Signature as _Signature
 from inspect import signature as _signature
+from types import MethodType as _MethodType
 from typing import Any as _Any
 from typing import Generic as _Generic
 from typing import Optional as _Optional
@@ -16,6 +17,7 @@ from typing import TypeVar as _TypeVar
 from typing import Union as _Union
 from typing import cast as _cast
 from typing import overload as _overload
+from weakref import WeakKeyDictionary as _WeakKeyDictionary
 
 from ._tynx import Tensor, _CapturedGraph, _CaptureSession
 
@@ -48,6 +50,34 @@ class CompiledFunction(_Generic[R]):
         self.fallback_count = 0
         self.replay_count = 0
         self.last_fallback_reason: _Optional[str] = None
+        self._bound_instances: _WeakKeyDictionary[object, CompiledFunction[R]] = (
+            _WeakKeyDictionary()
+        )
+
+    @_overload
+    def __get__(self, instance: None, owner: type[object]) -> "CompiledFunction[R]": ...
+
+    @_overload
+    def __get__(self, instance: object, owner: type[object]) -> "CompiledFunction[R]": ...
+
+    def __get__(self, instance: _Optional[object], owner: type[object]) -> "CompiledFunction[R]":
+        """Bind compiled functions used as class attributes like normal methods."""
+        if instance is None:
+            return self
+        cached = self._bound_instances.get(instance)
+        if cached is not None:
+            return cached
+        receiver = next(iter(self._signature.parameters), None)
+        static_argnames = self._static_argnames.difference(
+            {receiver} if receiver in ("self", "cls") else set()
+        )
+        bound = CompiledFunction(
+            _cast(_Callable[..., R], _MethodType(self._function, instance)),
+            fullgraph=self._fullgraph,
+            static_argnames=static_argnames,
+        )
+        self._bound_instances[instance] = bound
+        return bound
 
     @property
     def graph_count(self) -> int:
@@ -62,6 +92,8 @@ class CompiledFunction(_Generic[R]):
     def clear_cache(self) -> None:
         """Discard captured graphs and retry capture on the next compatible call."""
         self._graphs.clear()
+        for bound in self._bound_instances.values():
+            bound.clear_cache()
         self._fallback = False
         self._warned = False
         self.last_fallback_reason = None
