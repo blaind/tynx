@@ -21,6 +21,13 @@ jobs:
           - os: macos-14
           - os: windows-latest
     runs-on: ${{ matrix.os }}
+    env:
+      RUSTFLAGS: >-
+        --remap-path-prefix=${{ github.workspace }}=tynx
+        --remap-path-prefix=/root/.cargo=cargo
+        --remap-path-prefix=/home/runner/.cargo=cargo
+        --remap-path-prefix=/Users/runner/.cargo=cargo
+        --remap-path-prefix=C:\Users\runneradmin\.cargo=cargo
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -48,6 +55,22 @@ jobs:
                   print(f"  exceeds the {os.environ['WHEEL_MAX_MIB']} MiB budget")
                   failed = True
           sys.exit(1 if failed else 0)
+          EOF
+      - name: Check wheels for leaked build paths
+        shell: bash
+        run: |
+          python - <<'EOF'
+          import glob, sys, zipfile
+          bad = [b"/root/.cargo", b"/home/runner", b"/Users/runner", b"\\Users\\runneradmin"]
+          for whl in glob.glob("dist/*.whl"):
+              with zipfile.ZipFile(whl) as archive:
+                  for name in archive.namelist():
+                      if name.endswith((".so", ".pyd", ".dylib")):
+                          data = archive.read(name)
+                          leaks = [p.decode() for p in bad if p in data]
+                          if leaks:
+                              sys.exit(f"{whl}:{name} leaks build paths: {leaks}")
+          print("no build paths leaked")
           EOF
       - name: Smoke test wheel
         shell: bash
