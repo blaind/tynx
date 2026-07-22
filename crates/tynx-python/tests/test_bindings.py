@@ -505,6 +505,65 @@ def test_state_discovery_rejects_slotted_objects_and_ambiguous_dictionary_keys()
         tynx.nn.state.get_parameters({"ambiguous.path": tynx.Parameter([1.0])})
 
 
+def test_functional_mse_loss_reductions_and_gradients() -> None:
+    prediction = tynx.Tensor([1.0, 3.0], requires_grad=True)
+    target = tynx.Tensor([0.0, 1.0])
+
+    assert tynx.nn.functional.mse_loss(prediction, target, "none").tolist() == [1.0, 4.0]
+    assert tynx.nn.functional.mse_loss(prediction, target, "sum").item() == pytest.approx(5.0)
+    loss = tynx.nn.functional.mse_loss(prediction, target)
+    assert loss.item() == pytest.approx(2.5)
+    loss.backward()
+    assert prediction.grad is not None
+    assert prediction.grad.tolist() == pytest.approx([1.0, 2.0])
+
+
+def test_functional_cross_entropy_matches_reference_and_backpropagates() -> None:
+    logits = tynx.Tensor([[2.0, 1.0, 0.0], [0.0, 1.0, 2.0]], requires_grad=True)
+    targets = tynx.Tensor([0, 2], dtype="int64")
+
+    losses = tynx.nn.functional.cross_entropy(logits, targets, reduction="none")
+    loss = tynx.nn.functional.cross_entropy(logits, targets)
+
+    assert losses.tolist() == pytest.approx([0.40760595, 0.40760595])
+    assert loss.item() == pytest.approx(0.40760595)
+    loss.backward()
+    assert logits.grad is not None
+    gradient = logits.grad.tolist()
+    assert gradient[0] == pytest.approx([-0.1673795, 0.12236424, 0.04501529], abs=1e-6)
+    assert gradient[1] == pytest.approx([0.04501529, 0.12236424, -0.1673795], abs=1e-6)
+
+    assert targets.unsqueeze(1).shape == (2, 1)
+    assert tynx.Tensor([True, False], dtype="bool").reshape(1, 2).tolist() == [[True, False]]
+
+
+def test_functional_binary_cross_entropy_with_logits_is_stable() -> None:
+    logits = tynx.Tensor([-100.0, 0.0, 100.0], requires_grad=True)
+    targets = tynx.Tensor([0.0, 1.0, 1.0])
+
+    losses = tynx.nn.functional.binary_cross_entropy_with_logits(logits, targets, reduction="none")
+
+    assert losses.tolist() == pytest.approx([0.0, 0.6931472, 0.0], abs=1e-6)
+    losses.sum().backward()
+    assert logits.grad is not None
+    assert logits.grad.tolist() == pytest.approx([0.0, -0.5, 0.0], abs=1e-6)
+
+
+def test_functional_losses_validate_shapes_dtypes_and_reductions() -> None:
+    with pytest.raises(ValueError, match="matching shapes"):
+        tynx.nn.functional.mse_loss(tynx.Tensor([1.0]), tynx.Tensor([[1.0]]))
+    with pytest.raises(ValueError, match="rank-2 float32"):
+        tynx.nn.functional.cross_entropy(tynx.Tensor([1.0, 2.0]), tynx.Tensor([0], dtype="int64"))
+    with pytest.raises(ValueError, match="rank-1 int64"):
+        tynx.nn.functional.cross_entropy(tynx.Tensor([[1.0, 2.0]]), tynx.Tensor([0.0]))
+    with pytest.raises(ValueError, match="reduction must"):
+        tynx.nn.functional.mse_loss(
+            tynx.Tensor([1.0]),
+            tynx.Tensor([1.0]),
+            "invalid",  # type: ignore[arg-type]
+        )
+
+
 def test_tensor_eager_operators() -> None:
     left = tynx.Tensor([[1.0, 2.0], [3.0, 4.0]])
     right = tynx.Tensor([[2.0, 0.5], [1.0, 2.0]])

@@ -610,7 +610,7 @@ impl PyTensor {
     #[pyo3(signature = (*shape))]
     fn reshape(&self, shape: &Bound<'_, PyTuple>) -> PyResult<Self> {
         let output = shape::reshape(shape, self.numel())?;
-        self.unary(move |input| input.reshape(output))
+        self.reshape_value(output)
     }
 
     /// Flatten a contiguous range of dimensions.
@@ -620,7 +620,7 @@ impl PyTensor {
         let start = shape::axis_value(start_dim, input_shape.len(), false, "flatten start_dim")?;
         let end = shape::axis_value(end_dim, input_shape.len(), false, "flatten end_dim")?;
         let output = shape::flatten(&input_shape, start, end)?;
-        self.unary(move |input| input.reshape(output))
+        self.reshape_value(output)
     }
 
     /// Swap two tensor dimensions.
@@ -648,7 +648,7 @@ impl PyTensor {
             .map(|dim| shape::axis(dim, input_shape.len(), false, "squeeze"))
             .transpose()?;
         let output = shape::squeeze(&input_shape, dim);
-        self.unary(move |input| input.reshape(output))
+        self.reshape_value(output)
     }
 
     /// Insert a singleton dimension.
@@ -656,7 +656,7 @@ impl PyTensor {
         let input_shape = self.source.value().dims();
         let dim = shape::axis(dim, input_shape.len(), true, "unsqueeze")?;
         let output = shape::unsqueeze(&input_shape, dim)?;
-        self.unary(move |input| input.reshape(output))
+        self.reshape_value(output)
     }
 
     /// Select values from this tensor and another branch using a boolean condition.
@@ -775,6 +775,13 @@ impl PyTensor {
 }
 
 impl PyTensor {
+    fn reshape_value(&self, output: Vec<usize>) -> PyResult<Self> {
+        match self.source.value() {
+            TensorValue::Float(_) => self.unary(move |input| input.reshape(output)),
+            value => value.reshape(output).map(Self::from_value),
+        }
+    }
+
     fn clip_bounds(&self, min: Option<f64>, max: Option<f64>) -> PyResult<Self> {
         if min.is_none() && max.is_none() {
             return Err(PyValueError::new_err(

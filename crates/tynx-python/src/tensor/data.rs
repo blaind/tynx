@@ -109,6 +109,17 @@ impl TensorValue {
         }
     }
 
+    pub(super) fn reshape(self, dims: Vec<usize>) -> PyResult<Self> {
+        match self {
+            Self::Float(value) => value
+                .reshape(dims)
+                .map(Self::Float)
+                .map_err(to_python_error),
+            Self::Int(value) => value.reshape(dims).map(Self::Int).map_err(to_python_error),
+            Self::Bool(value) => value.reshape(dims).map(Self::Bool).map_err(to_python_error),
+        }
+    }
+
     pub(super) fn dims(&self) -> Vec<usize> {
         match self {
             Self::Float(value) => value.dims(),
