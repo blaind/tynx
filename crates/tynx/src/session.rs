@@ -21,6 +21,7 @@ use crate::{
 #[derive(Debug, Clone)]
 pub struct Session {
     graph: Arc<OnnxGraph>,
+    inputs: Arc<Vec<Argument>>,
     outputs: Arc<Vec<Argument>>,
     initializer_names: Arc<HashMap<InitializerId, String>>,
 }
@@ -72,6 +73,7 @@ impl Session {
     /// Load a model from bytes with optional graph simplification.
     pub fn from_bytes_with(data: &[u8], simplify: bool) -> Result<Self> {
         validate_model(data)?;
+        let declared_input_names = declared_input_names(data)?;
         let declared_output_names = declared_output_names(data)?;
         let (prepared, changed) = crate::interpreter::prepare_model(data)?;
         let parse_data = if changed { prepared.as_slice() } else { data };
@@ -83,6 +85,34 @@ impl Session {
             crate::interpreter::restore_dynamic_conv_inputs(data, &mut graph)?;
         }
         crate::interpreter::preserve_attributes(data, &mut graph)?;
+
+        if declared_input_names.len() != graph.inputs.len() {
+            return Err(TynxError::Parse(format!(
+                "ONNX graph declares {} runtime inputs but the parsed graph exposes {}",
+                declared_input_names.len(),
+                graph.inputs.len()
+            )));
+        }
+        let internal_input_names = graph
+            .inputs
+            .iter()
+            .map(|input| input.name.as_str())
+            .collect::<HashSet<_>>();
+        if internal_input_names.len() != graph.inputs.len() {
+            return Err(TynxError::Parse(
+                "distinct ONNX input names collide after parser name normalization".to_string(),
+            ));
+        }
+        let inputs = graph
+            .inputs
+            .iter()
+            .cloned()
+            .zip(declared_input_names)
+            .map(|(mut input, name)| {
+                input.name = name;
+                input
+            })
+            .collect();
 
         if declared_output_names.len() != graph.outputs.len() {
             return Err(TynxError::Parse(format!(
@@ -104,6 +134,7 @@ impl Session {
 
         Ok(Self {
             graph: Arc::new(graph),
+            inputs: Arc::new(inputs),
             outputs: Arc::new(outputs),
             initializer_names: Arc::new(initializer_names),
         })
@@ -116,7 +147,7 @@ impl Session {
 
     /// Return the model's declared inputs.
     pub fn inputs(&self) -> &[Argument] {
-        &self.graph.inputs
+        &self.inputs
     }
 
     /// Return the model's declared outputs.
@@ -127,6 +158,41 @@ impl Session {
     /// Return stable ONNX names keyed by processed initializer identity.
     pub fn initializer_names(&self) -> &HashMap<InitializerId, String> {
         &self.initializer_names
+    }
+
+    /// Resolve one declared input name to its processed graph value name.
+    pub fn internal_input_name(&self, public_name: &str) -> Option<&str> {
+        self.inputs
+            .iter()
+            .zip(self.graph.inputs.iter())
+            .find(|(public, _)| public.name == public_name)
+            .map(|(_, internal)| internal.name.as_str())
+    }
+
+    /// Iterate declared and processed input names as `(public, internal)` pairs.
+    pub fn input_name_mapping(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.inputs
+            .iter()
+            .zip(self.graph.inputs.iter())
+            .map(|(public, internal)| (public.name.as_str(), internal.name.as_str()))
+    }
+
+    /// Replace declared input names in an environment with processed graph names.
+    pub fn internalize_inputs(&self, env: &mut Env) -> Result<()> {
+        for (public, internal) in self.input_name_mapping() {
+            if public == internal {
+                continue;
+            }
+            let Some(value) = env.remove(public) else {
+                continue;
+            };
+            if env.insert(internal.to_string(), value).is_some() {
+                return Err(TynxError::TypeMismatch(format!(
+                    "both declared input '{public}' and internal input '{internal}' were provided"
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// Resolve one declared output name to its processed graph value name.
@@ -176,6 +242,7 @@ impl Session {
     /// Embedded values are materialized for every call. Use [`Session::prepare`] when
     /// running a model more than once.
     pub fn run(&self, device: &Device, mut env: Env) -> Result<Env> {
+        self.internalize_inputs(&mut env)?;
         run_graph(&self.graph, &mut env, device)?;
         self.collect_outputs(&env)
     }
@@ -299,6 +366,7 @@ impl PreparedSession {
     /// Run inference using cached embedded values.
     pub fn run(&self, mut env: Env) -> Result<Env> {
         self.validate_input_devices(&env)?;
+        self.session.internalize_inputs(&mut env)?;
         for (id, value) in &self.initializers {
             if !matches!(id, InitializerId::Unnamed { .. }) {
                 env.insert(env_key(id), value.clone());
@@ -434,6 +502,26 @@ fn declared_output_names(data: &[u8]) -> Result<Vec<String>> {
         .collect())
 }
 
+fn declared_input_names(data: &[u8]) -> Result<Vec<String>> {
+    let model =
+        ModelProto::parse_from_bytes(data).map_err(|error| TynxError::Parse(error.to_string()))?;
+    let graph = model
+        .graph
+        .as_ref()
+        .ok_or_else(|| TynxError::Parse("ONNX model has no graph".to_string()))?;
+    let initializer_names = graph
+        .initializer
+        .iter()
+        .map(|initializer| initializer.name.as_str())
+        .collect::<HashSet<_>>();
+    Ok(graph
+        .input
+        .iter()
+        .filter(|input| !initializer_names.contains(input.name.as_str()))
+        .map(|input| input.name.clone())
+        .collect())
+}
+
 fn declared_initializer_names(data: &[u8]) -> Result<HashMap<InitializerId, String>> {
     let model =
         ModelProto::parse_from_bytes(data).map_err(|error| TynxError::Parse(error.to_string()))?;
@@ -529,6 +617,7 @@ mod tests {
 
     fn session_from_graph(graph: OnnxGraph) -> Session {
         Session {
+            inputs: Arc::new(graph.inputs.clone()),
             outputs: Arc::new(graph.outputs.clone()),
             graph: Arc::new(graph),
             initializer_names: Arc::new(HashMap::new()),
@@ -781,6 +870,56 @@ mod tests {
         assert_eq!(
             session.output_name_mapping().collect::<Vec<_>>(),
             [("out", "ids")]
+        );
+    }
+
+    #[test]
+    fn preserves_declared_input_names_and_maps_them_for_execution() {
+        let data = identity_model_bytes("ModelInput", "ModelOutput");
+
+        let session = Session::from_bytes(&data).unwrap();
+        assert_eq!(session.inputs()[0].name, "ModelInput");
+        assert_eq!(session.graph().inputs[0].name, "model_input");
+        assert_eq!(
+            session.internal_input_name("ModelInput"),
+            Some("model_input")
+        );
+        assert_eq!(
+            session.input_name_mapping().collect::<Vec<_>>(),
+            [("ModelInput", "model_input")]
+        );
+
+        let mut inputs = Env::new();
+        inputs.insert("ModelInput".to_string(), Value::Scalar(Scalar::I64(42)));
+        let outputs = session.run(&Device::default(), inputs).unwrap();
+        assert!(matches!(
+            outputs.get("ModelOutput"),
+            Some(Value::Scalar(Scalar::I64(42)))
+        ));
+    }
+
+    #[test]
+    fn rejects_input_names_that_collide_after_parser_normalization() {
+        let mut graph = GraphProto::new();
+        graph.input.push(value_info("Input"));
+        graph.input.push(value_info("input"));
+        graph.output.push(value_info("sum"));
+        graph.node.push(Default::default());
+        graph.node[0].op_type = "Add".to_string();
+        graph.node[0].input = vec!["Input".to_string(), "input".to_string()];
+        graph.node[0].output = vec!["sum".to_string()];
+
+        let mut model = ModelProto::new();
+        model.ir_version = 8;
+        model.graph = MessageField::some(graph);
+        model.opset_import.push(Default::default());
+        model.opset_import[0].version = 13;
+
+        let error = Session::from_bytes(&model.write_to_bytes().unwrap()).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("distinct ONNX input names collide after parser name normalization")
         );
     }
 
