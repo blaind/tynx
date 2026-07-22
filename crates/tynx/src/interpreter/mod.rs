@@ -1,6 +1,7 @@
 //! Runtime dispatch for individual ONNX nodes.
 
 mod binary;
+mod broadcasting;
 mod cast;
 mod clip;
 mod comparison;
@@ -80,6 +81,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Equal(node) => comparison::equal(node, env, device),
         Node::Erf(node) => unary::erf(node, env, device),
         Node::Exp(node) => unary::exp(node, env, device),
+        Node::Expand(node) => broadcasting::expand(node, env, device),
         Node::Floor(node) => unary::floor(node, env, device),
         Node::Flatten(node) => shape::flatten(node, env, device),
         Node::Gelu(node) => unary::gelu(node, env, device),
@@ -143,6 +145,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Tan(node) => unary::tan(node, env, device),
         Node::Tanh(node) => unary::tanh(node, env, device),
         Node::ThresholdedRelu(node) => unary::thresholded_relu(node, env, device),
+        Node::Tile(node) => broadcasting::tile(node, env, device),
         Node::Transpose(node) => shape::transpose(node, env, device),
         Node::Unsqueeze(node) => shape::unsqueeze(node, env, device),
         Node::Where(node) => where_op::where_op(node, env, device),

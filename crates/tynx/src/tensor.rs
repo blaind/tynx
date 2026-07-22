@@ -445,6 +445,50 @@ impl DynTensor {
         })
     }
 
+    /// Expand singleton dimensions to the requested shape.
+    pub fn expand(self, dims: &[usize]) -> Result<Self> {
+        if dims.len() != self.rank() {
+            return Err(TynxError::Shape(format!(
+                "expand shape has rank {}, expected {}",
+                dims.len(),
+                self.rank()
+            )));
+        }
+        Ok(match self {
+            Self::R1(tensor) => Self::R1(tensor.expand([dims[0] as i64])),
+            Self::R2(tensor) => Self::R2(tensor.expand([dims[0] as i64, dims[1] as i64])),
+            Self::R3(tensor) => {
+                Self::R3(tensor.expand([dims[0] as i64, dims[1] as i64, dims[2] as i64]))
+            }
+            Self::R4(tensor) => Self::R4(tensor.expand([
+                dims[0] as i64,
+                dims[1] as i64,
+                dims[2] as i64,
+                dims[3] as i64,
+            ])),
+            Self::R5(tensor) => Self::R5(tensor.expand([
+                dims[0] as i64,
+                dims[1] as i64,
+                dims[2] as i64,
+                dims[3] as i64,
+                dims[4] as i64,
+            ])),
+            Self::R6(tensor) => Self::R6(tensor.expand([
+                dims[0] as i64,
+                dims[1] as i64,
+                dims[2] as i64,
+                dims[3] as i64,
+                dims[4] as i64,
+                dims[5] as i64,
+            ])),
+        })
+    }
+
+    /// Tile each dimension by the corresponding repeat count.
+    pub fn repeat(self, repeats: &[usize]) -> Self {
+        map_float!(self, |tensor| tensor.repeat(repeats))
+    }
+
     /// Permute the tensor dimensions.
     pub fn permute(self, axes: Vec<usize>) -> Result<Self> {
         if axes.len() != self.rank() {
@@ -978,6 +1022,50 @@ impl DynInt {
         })
     }
 
+    /// Expand singleton dimensions to the requested shape.
+    pub fn expand(self, dims: &[usize]) -> Result<Self> {
+        if dims.len() != self.rank() {
+            return Err(TynxError::Shape(format!(
+                "expand shape has rank {}, expected {}",
+                dims.len(),
+                self.rank()
+            )));
+        }
+        Ok(match self {
+            Self::R1(tensor) => Self::R1(tensor.expand([dims[0] as i64])),
+            Self::R2(tensor) => Self::R2(tensor.expand([dims[0] as i64, dims[1] as i64])),
+            Self::R3(tensor) => {
+                Self::R3(tensor.expand([dims[0] as i64, dims[1] as i64, dims[2] as i64]))
+            }
+            Self::R4(tensor) => Self::R4(tensor.expand([
+                dims[0] as i64,
+                dims[1] as i64,
+                dims[2] as i64,
+                dims[3] as i64,
+            ])),
+            Self::R5(tensor) => Self::R5(tensor.expand([
+                dims[0] as i64,
+                dims[1] as i64,
+                dims[2] as i64,
+                dims[3] as i64,
+                dims[4] as i64,
+            ])),
+            Self::R6(tensor) => Self::R6(tensor.expand([
+                dims[0] as i64,
+                dims[1] as i64,
+                dims[2] as i64,
+                dims[3] as i64,
+                dims[4] as i64,
+                dims[5] as i64,
+            ])),
+        })
+    }
+
+    /// Tile each dimension by the corresponding repeat count.
+    pub fn repeat(self, repeats: &[usize]) -> Self {
+        map_int!(self, |tensor| tensor.repeat(repeats))
+    }
+
     /// Permute the tensor dimensions.
     pub fn permute(self, axes: Vec<usize>) -> Result<Self> {
         if axes.len() != self.rank() {
@@ -1327,6 +1415,50 @@ impl DynBool {
             Self::R5(tensor) => reshape_dyn!(tensor, dims, DynBool),
             Self::R6(tensor) => reshape_dyn!(tensor, dims, DynBool),
         })
+    }
+
+    /// Expand singleton dimensions to the requested shape.
+    pub fn expand(self, dims: &[usize]) -> Result<Self> {
+        if dims.len() != self.rank() {
+            return Err(TynxError::Shape(format!(
+                "expand shape has rank {}, expected {}",
+                dims.len(),
+                self.rank()
+            )));
+        }
+        Ok(match self {
+            Self::R1(tensor) => Self::R1(tensor.expand([dims[0] as i64])),
+            Self::R2(tensor) => Self::R2(tensor.expand([dims[0] as i64, dims[1] as i64])),
+            Self::R3(tensor) => {
+                Self::R3(tensor.expand([dims[0] as i64, dims[1] as i64, dims[2] as i64]))
+            }
+            Self::R4(tensor) => Self::R4(tensor.expand([
+                dims[0] as i64,
+                dims[1] as i64,
+                dims[2] as i64,
+                dims[3] as i64,
+            ])),
+            Self::R5(tensor) => Self::R5(tensor.expand([
+                dims[0] as i64,
+                dims[1] as i64,
+                dims[2] as i64,
+                dims[3] as i64,
+                dims[4] as i64,
+            ])),
+            Self::R6(tensor) => Self::R6(tensor.expand([
+                dims[0] as i64,
+                dims[1] as i64,
+                dims[2] as i64,
+                dims[3] as i64,
+                dims[4] as i64,
+                dims[5] as i64,
+            ])),
+        })
+    }
+
+    /// Tile each dimension by the corresponding repeat count.
+    pub fn repeat(self, repeats: &[usize]) -> Self {
+        map_bool!(self, |tensor| tensor.repeat(repeats))
     }
 
     /// Permute the tensor dimensions.
