@@ -113,6 +113,67 @@ fn imported_gemm_learns_and_next_forward_reads_updated_slots() {
 }
 
 #[test]
+fn repeated_imported_steps_remain_generation_local() {
+    const STEPS: u64 = 2_048;
+
+    let session = Session::from_bytes_with(&gemm_model_bytes(), false).unwrap();
+    let names = stable_names(&session, "head");
+    let device = Device::autodiff(Device::default());
+    let model = ImportedModel::from_session_with(
+        session,
+        device.clone(),
+        &TrainabilityOverrides::new(),
+        &names,
+    )
+    .unwrap();
+    let output_name = model.session().outputs()[0].name.clone();
+    let input = tensor(vec![-1.0, 0.0, 1.0, 2.0], &[4, 1], &device);
+    let target = tensor(vec![-1.0, 1.0, 3.0, 5.0], &[4, 1], &device);
+    let mut optimizer = Sgd::new(0.0).unwrap();
+
+    for generation in 1..=STEPS {
+        model.parameters().zero_grad();
+        let prediction = model
+            .run(env_with_input(input.clone()))
+            .unwrap()
+            .remove(&output_name)
+            .unwrap()
+            .into_tensor()
+            .unwrap();
+        let loss = mse(prediction, target.clone()).unwrap();
+        let result = backward(&loss, model.parameters()).unwrap();
+        assert_eq!(result.parameters_with_grad(), 2);
+        drop(result);
+        drop(loss);
+
+        let weight = model.parameters().get_by_name("head.weight").unwrap();
+        let bias = model.parameters().get_by_name("head.bias").unwrap();
+        assert_eq!(values(weight.grad().unwrap()), [-7.0]);
+        assert_eq!(values(bias.grad().unwrap()), [-4.0]);
+        assert_eq!(optimizer.step(model.parameters()).unwrap(), 2);
+        assert_eq!(weight.value_generation(), generation);
+        assert_eq!(bias.value_generation(), generation);
+        assert_eq!(weight.structure_generation(), 0);
+        assert_eq!(bias.structure_generation(), 0);
+    }
+
+    assert_eq!(
+        values(
+            model
+                .parameters()
+                .get_by_name("head.weight")
+                .unwrap()
+                .value()
+        ),
+        [0.0]
+    );
+    assert_eq!(
+        values(model.parameters().get_by_name("head.bias").unwrap().value()),
+        [0.0]
+    );
+}
+
+#[test]
 fn unsupported_slot_consumer_is_rejected_before_forward() {
     let session = Session::from_bytes_with(&conv_model_bytes(), false).unwrap();
     let names = stable_names(&session, "conv");
@@ -209,4 +270,8 @@ fn tensor_proto(name: &str, dimensions: &[usize], values: &[f32]) -> TensorProto
     tensor.data_type = 1;
     tensor.float_data = values.to_vec();
     tensor
+}
+
+fn values(tensor: DynTensor) -> Vec<f32> {
+    tensor.into_data().iter::<f32>().collect()
 }
