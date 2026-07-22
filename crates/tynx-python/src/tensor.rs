@@ -377,6 +377,36 @@ impl PyTensor {
         self.reduce(dim, keepdim, DynTensor::mean_dims)
     }
 
+    /// Apply rectified linear activation element-wise.
+    fn relu(&self) -> PyResult<Self> {
+        self.unary(|input| Ok(input.relu()))
+    }
+
+    /// Apply logistic sigmoid activation element-wise.
+    fn sigmoid(&self) -> PyResult<Self> {
+        self.unary(|input| Ok(input.sigmoid()))
+    }
+
+    /// Apply hyperbolic tangent element-wise.
+    fn tanh(&self) -> PyResult<Self> {
+        self.unary(|input| Ok(input.tanh()))
+    }
+
+    /// Apply the exponential function element-wise.
+    fn exp(&self) -> PyResult<Self> {
+        self.unary(|input| Ok(input.exp()))
+    }
+
+    /// Apply the natural logarithm element-wise.
+    fn log(&self) -> PyResult<Self> {
+        self.unary(|input| Ok(input.log()))
+    }
+
+    /// Apply the square root element-wise.
+    fn sqrt(&self) -> PyResult<Self> {
+        self.unary(|input| Ok(input.sqrt()))
+    }
+
     fn __add__(&self, other: &Bound<'_, PyAny>) -> PyResult<Self> {
         self.arithmetic(other, DynTensor::add_broadcast, DynTensor::add_scalar)
     }

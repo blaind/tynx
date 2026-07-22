@@ -1,5 +1,7 @@
 """Tests for the native Python bindings."""
 
+import math
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -60,6 +62,46 @@ def test_tensor_reverse_scalar_operators_are_differentiable() -> None:
 
     assert value.grad is not None
     assert value.grad.tolist() == pytest.approx([-4.0])
+
+
+def test_tensor_unary_activations_and_math() -> None:
+    signed = tynx.Tensor([-1.0, 0.0, 1.0])
+    positive = tynx.Tensor([1.0, 4.0])
+
+    assert signed.relu().tolist() == pytest.approx([0.0, 0.0, 1.0])
+    assert signed.sigmoid().tolist() == pytest.approx(
+        [1.0 / (1.0 + math.e), 0.5, math.e / (1.0 + math.e)]
+    )
+    assert signed.tanh().tolist() == pytest.approx([-math.tanh(1.0), 0.0, math.tanh(1.0)])
+    assert positive.exp().tolist() == pytest.approx([math.e, math.exp(4.0)])
+    assert positive.log().tolist() == pytest.approx([0.0, math.log(4.0)])
+    assert positive.sqrt().tolist() == pytest.approx([1.0, 2.0])
+
+
+@pytest.mark.parametrize(
+    ("operation", "point"),
+    [
+        (lambda value: value.relu(), 2.0),
+        (lambda value: value.sigmoid(), 0.5),
+        (lambda value: value.tanh(), 0.5),
+        (lambda value: value.exp(), 0.5),
+        (lambda value: value.log(), 2.0),
+        (lambda value: value.sqrt(), 4.0),
+    ],
+)
+def test_tensor_unary_gradients_match_finite_differences(
+    operation: Callable[[tynx.Tensor], tynx.Tensor], point: float
+) -> None:
+    value = tynx.Tensor([point], requires_grad=True)
+    operation(value).backward()
+
+    epsilon = 1e-3
+    above = operation(tynx.Tensor([point + epsilon])).item()
+    below = operation(tynx.Tensor([point - epsilon])).item()
+    numerical = (above - below) / (2 * epsilon)
+
+    assert value.grad is not None
+    assert value.grad.item() == pytest.approx(numerical, rel=2e-3, abs=2e-3)
 
 
 def test_tensor_rejects_ragged_or_empty_data() -> None:
