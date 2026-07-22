@@ -319,7 +319,16 @@ impl PreparedSession {
             let Some(actual) = value.device() else {
                 continue;
             };
-            if actual != self.device || actual.is_autodiff() != self.device.is_autodiff() {
+            let compatible = match value {
+                Value::Int(_) | Value::Bool(_) => {
+                    actual.clone().inner() == self.device.clone().inner()
+                }
+                Value::Tensor(_) => {
+                    actual == self.device && actual.is_autodiff() == self.device.is_autodiff()
+                }
+                Value::Scalar(_) | Value::Shape(_) => true,
+            };
+            if !compatible {
                 return Err(TynxError::DeviceMismatch {
                     name: name.clone(),
                     expected: format!("{:?}", self.device),
@@ -685,6 +694,36 @@ mod tests {
             prepared.run(inputs),
             Err(TynxError::DeviceMismatch { .. })
         ));
+    }
+
+    #[test]
+    #[cfg(feature = "training")]
+    fn prepared_autodiff_session_accepts_integer_input_on_inner_device() {
+        let identity = IdentityNodeBuilder::new("identity")
+            .input_tensor("x", 1, DType::I64)
+            .output_tensor("y", 1, DType::I64)
+            .build();
+        let mut graph = OnnxGraph::default();
+        graph.inputs = identity.inputs.clone();
+        graph.outputs = identity.outputs.clone();
+        graph.nodes.push(Node::Identity(identity));
+        let session = session_from_graph(graph);
+        let device = Device::default();
+        let prepared = session.prepare(&device.clone().autodiff()).unwrap();
+        let mut inputs = Env::new();
+        inputs.insert(
+            "x".to_string(),
+            Value::from_tensor_data(
+                burn::tensor::TensorData::new(vec![1_i64, 5], [2]),
+                1,
+                &device,
+            )
+            .unwrap(),
+        );
+
+        let outputs = prepared.run(inputs).unwrap();
+        let output = outputs.get("y").unwrap().clone().into_int().unwrap();
+        assert_eq!(output.into_data().iter::<i64>().collect::<Vec<_>>(), [1, 5]);
     }
 
     #[test]

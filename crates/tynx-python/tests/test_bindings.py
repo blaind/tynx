@@ -1598,6 +1598,23 @@ def test_missing_model_raises_os_error(tmp_path: Path) -> None:
         tynx.Session(missing_model)
 
 
+def test_session_accepts_int64_input_on_prepared_autodiff_device(tmp_path: Path) -> None:
+    model = tmp_path / "int_identity.onnx"
+    model.write_bytes(
+        bytes.fromhex(
+            "08083a420a100a017812017922084964656e74697479120c696e745f6964656e74697479"
+            "5a0f0a0178120a0a08080712040a020802620f0a0179120a0a08080712040a0208024202100d"
+        )
+    )
+    session = tynx.Session(model)
+
+    output = session.run(tynx.Tensor([1, 5], dtype="int64"))
+
+    assert isinstance(output, tynx.Tensor)
+    assert output.dtype == "int64"
+    assert output.tolist() == [1, 5]
+
+
 def test_invalid_model_raises_value_error(tmp_path: Path) -> None:
     invalid_model = tmp_path / "invalid.onnx"
     invalid_model.write_bytes(b"not an ONNX model")
