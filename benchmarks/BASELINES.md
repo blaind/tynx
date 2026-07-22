@@ -31,3 +31,27 @@ cargo run --manifest-path benchmarks/Cargo.toml --locked --release \
 
 This is the first durable local reference recorded after the training foundation landed. It cannot
 retroactively serve as a pre-autodiff measurement; it is the comparison point for subsequent work.
+
+## 2026-07-22 Python model capture dispatch
+
+- Revision: `336243d`
+- CPU: AMD Ryzen 9 9950X3D 16-Core Processor (16 cores, 32 logical CPUs)
+- Python: CPython 3.13.7 with a release-mode abi3 extension
+- Backend: Burn Flex CPU autodiff device
+- Case: 32 sequential ReLUs over one 16-element f32 tensor
+- Warmup / measured iterations / repeats: 100 / 2,000 / 7
+- Captured IR nodes: 33
+- Eager median: 28.497 µs per call
+- Captured median: 23.472 µs per call
+- Dispatch speedup: 1.214×
+
+Command:
+
+```sh
+maturin develop --release --locked -m crates/tynx-python/Cargo.toml
+python benchmarks/python-capture.py \
+  --depth 32 --size 16 --warmup 100 --iterations 2000 --repeats 7
+```
+
+This microbenchmark isolates removal of repeated Python/PyO3 operation dispatch. Both paths execute
+the same Burn tensor operations, so it is not a claim of faster kernels or backend fusion.
