@@ -1,11 +1,13 @@
 from os import PathLike
-from typing import overload
+from typing import Literal, overload
 
 from typing_extensions import TypeAlias
 
 __version__: str
 
-TensorData: TypeAlias = float | list["TensorData"] | tuple["TensorData", ...]
+TensorScalar: TypeAlias = float | int | bool
+TensorData: TypeAlias = TensorScalar | list["TensorData"] | tuple["TensorData", ...]
+TensorDType: TypeAlias = Literal["float32", "int64", "bool"]
 ReductionDim: TypeAlias = int | tuple[int, ...]
 Scalar: TypeAlias = int | float
 Shape: TypeAlias = tuple[int, ...] | list[int]
@@ -18,7 +20,13 @@ def no_grad() -> _NoGrad: ...
 def is_grad_enabled() -> bool: ...
 
 class Tensor:
-    def __init__(self, data: TensorData, *, requires_grad: bool = False) -> None: ...
+    def __init__(
+        self,
+        data: TensorData,
+        *,
+        dtype: TensorDType = "float32",
+        requires_grad: bool = False,
+    ) -> None: ...
     @property
     def shape(self) -> tuple[int, ...]: ...
     @property
@@ -34,7 +42,7 @@ class Tensor:
     @property
     def grad(self) -> Tensor | None: ...
     def tolist(self) -> list[object]: ...
-    def item(self) -> float: ...
+    def item(self) -> float | int | bool: ...
     def detach(self) -> Tensor: ...
     def zero_grad(self) -> None: ...
     def backward(self, gradient: Tensor | None = None) -> None: ...

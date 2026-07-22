@@ -27,6 +27,38 @@ def test_tensor_metadata_and_host_conversion() -> None:
     assert tynx.Tensor([3.5]).item() == pytest.approx(3.5)
 
 
+def test_tensor_integer_and_boolean_storage() -> None:
+    integers = tynx.Tensor([[1, -2], [3, 4]], dtype="int64")
+    booleans = tynx.Tensor([[True, False], [False, True]], dtype="bool")
+
+    assert integers.dtype == "int64"
+    assert integers.shape == (2, 2)
+    assert integers.tolist() == [[1, -2], [3, 4]]
+    assert integers.grad is None
+    assert not integers.requires_grad
+    assert not integers.is_leaf
+    assert isinstance(tynx.Tensor([7], dtype="int64").item(), int)
+
+    assert booleans.dtype == "bool"
+    assert booleans.shape == (2, 2)
+    assert booleans.tolist() == [[True, False], [False, True]]
+    assert isinstance(tynx.Tensor([True], dtype="bool").item(), bool)
+    assert "dtype=int64" in repr(integers)
+
+
+def test_tensor_typed_storage_rejects_invalid_contracts() -> None:
+    with pytest.raises(ValueError, match="unsupported Tensor dtype"):
+        tynx.Tensor([1.0], dtype="float64")  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="compatible scalar"):
+        tynx.Tensor([1.5], dtype="int64")
+    with pytest.raises(TypeError, match="compatible scalar"):
+        tynx.Tensor([1], dtype="bool")
+    with pytest.raises(TypeError, match="requires a float32 Tensor"):
+        tynx.Tensor([1], dtype="int64", requires_grad=True)
+    with pytest.raises(TypeError, match="requires a float32 Tensor"):
+        tynx.Tensor([1], dtype="int64").relu()
+
+
 def test_tensor_eager_operators() -> None:
     left = tynx.Tensor([[1.0, 2.0], [3.0, 4.0]])
     right = tynx.Tensor([[2.0, 0.5], [1.0, 2.0]])
