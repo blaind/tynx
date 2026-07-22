@@ -423,10 +423,23 @@ impl PyTensor {
 impl PyTensor {
     /// Construct a typed tensor from a scalar or rectangular nested list/tuple.
     #[new]
-    #[pyo3(signature = (data, *, dtype="float32", requires_grad=false))]
-    fn new(data: &Bound<'_, PyAny>, dtype: &str, requires_grad: bool) -> PyResult<Self> {
+    #[pyo3(signature = (data, *, dtype=None, requires_grad=false))]
+    fn new(data: &Bound<'_, PyAny>, dtype: Option<&str>, requires_grad: bool) -> PyResult<Self> {
         let device = Device::autodiff(tynx_core::default_device());
-        let value = TensorValue::from_python(data, dtype, &device)?;
+        let value = if let Ok(tensor) = data.extract::<PyRef<'_, Self>>() {
+            let value = tensor.source.value().detach();
+            if let Some(dtype) = dtype
+                && dtype != value.dtype_name()
+            {
+                return Err(PyTypeError::new_err(format!(
+                    "copying a Tensor with dtype={dtype:?} requires source dtype {}, because constructor casts are not supported",
+                    value.dtype_name()
+                )));
+            }
+            value
+        } else {
+            TensorValue::from_python(data, dtype.unwrap_or("float32"), &device)?
+        };
         if requires_grad {
             return Ok(Self::from_leaf(value.float("requires_grad=True")?));
         }
@@ -449,6 +462,10 @@ impl PyTensor {
     #[getter]
     fn numel(&self) -> usize {
         self.source.value().dims().into_iter().product()
+    }
+
+    fn __len__(&self) -> usize {
+        self.source.value().dims()[0]
     }
 
     /// Element dtype.
@@ -796,7 +813,42 @@ impl PyTensor {
     }
 
     fn __matmul__(&self, other: PyRef<'_, Self>) -> PyResult<Self> {
-        self.binary(&other, DynTensor::matmul)
+        let left_shape = self.source.value().dims();
+        let right_shape = other.source.value().dims();
+        match (left_shape.as_slice(), right_shape.as_slice()) {
+            ([left], [right]) => {
+                let left = *left;
+                let right = *right;
+                self.binary(&other, move |left_value, right_value| {
+                    left_value
+                        .reshape(vec![1, left])?
+                        .matmul(right_value.reshape(vec![right, 1])?)?
+                        .reshape(vec![1])
+                })
+            }
+            ([rows, inner], [right]) => {
+                let rows = *rows;
+                let _inner = *inner;
+                let right = *right;
+                self.binary(&other, move |left_value, right_value| {
+                    left_value
+                        .matmul(right_value.reshape(vec![right, 1])?)?
+                        .reshape(vec![rows])
+                })
+            }
+            ([left], [inner, columns]) => {
+                let left = *left;
+                let _inner = *inner;
+                let columns = *columns;
+                self.binary(&other, move |left_value, right_value| {
+                    left_value
+                        .reshape(vec![1, left])?
+                        .matmul(right_value)?
+                        .reshape(vec![columns])
+                })
+            }
+            _ => self.binary(&other, DynTensor::matmul),
+        }
     }
 
     fn __imatmul__(&self, _other: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -805,6 +857,53 @@ impl PyTensor {
 
     fn __neg__(&self) -> PyResult<Self> {
         self.unary(|input| Ok(input.negated()))
+    }
+
+    fn __abs__(&self) -> PyResult<Self> {
+        match self.source.value() {
+            TensorValue::Float(_) => self.unary(|input| Ok(input.abs())),
+            TensorValue::Int(value) => Ok(Self::from_value(TensorValue::Int(value.abs()))),
+            TensorValue::Bool(_) => {
+                Err(PyTypeError::new_err("abs() does not support bool Tensors"))
+            }
+        }
+    }
+
+    fn __pow__(
+        &self,
+        exponent: &Bound<'_, PyAny>,
+        modulo: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Self> {
+        if modulo.is_some_and(|value| !value.is_none()) {
+            return Err(PyTypeError::new_err(
+                "Tensor power does not support a modulo argument",
+            ));
+        }
+        self.arithmetic(exponent, DynTensor::powf_broadcast, |base, exponent| {
+            base.powf_scalar(exponent)
+        })
+    }
+
+    fn __rpow__(
+        &self,
+        base: &Bound<'_, PyAny>,
+        modulo: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Self> {
+        if modulo.is_some_and(|value| !value.is_none()) {
+            return Err(PyTypeError::new_err(
+                "Tensor power does not support a modulo argument",
+            ));
+        }
+        let base = extract_scalar_operand(base)?;
+        self.unary(move |exponent| exponent.clone().full_like(base).powf_broadcast(exponent))
+    }
+
+    fn __ipow__(
+        &self,
+        _other: &Bound<'_, PyAny>,
+        _modulo: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<()> {
+        self.reject_in_place("**=")
     }
 
     fn __eq__(&self, other: &Bound<'_, PyAny>) -> PyResult<Self> {
