@@ -12,6 +12,6 @@ pub mod parameter;
 pub mod store;
 
 pub use autograd::{BackwardResult, backward};
-pub use optimizer::{Sgd, SgdConfig};
+pub use optimizer::{Adam, AdamConfig, AdamW, AdamWConfig, Sgd, SgdConfig};
 pub use parameter::{ParamId, ParameterContract, ParameterSlot};
 pub use store::ParameterStore;

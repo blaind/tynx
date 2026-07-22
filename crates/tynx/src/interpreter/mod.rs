@@ -10,6 +10,7 @@ mod comparison;
 mod concat;
 mod convolution;
 mod cumsum;
+mod dft;
 mod dropout;
 mod extrema;
 mod eye_like;
@@ -106,6 +107,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::DequantizeLinear(node) => quantization::dequantize_linear(node, env, device),
         Node::DepthToSpace(node) => spatial_layout::depth_to_space(node, env, device),
         Node::Det(node) => matrix::det(node, env, device),
+        Node::Dft(node) => dft::dft(node, env, device),
         Node::Div(node) => binary::div(node, env, device),
         Node::Dropout(node) => dropout::dropout(node, env, device),
         Node::Elu(node) => unary::elu(node, env, device),

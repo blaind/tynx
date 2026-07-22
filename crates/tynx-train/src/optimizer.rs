@@ -1,5 +1,9 @@
 //! Optimizers over stable parameter slots.
 
+mod adam;
+
+pub use adam::{Adam, AdamConfig, AdamW, AdamWConfig};
+
 use std::collections::HashMap;
 
 use tynx_core::{DynTensor, Result, TynxError};
