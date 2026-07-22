@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 import tynx
@@ -133,3 +134,49 @@ def test_checkpoint_rejects_models_and_payloads_with_no_state(tmp_path: Path) ->
     )
     with pytest.raises(ValueError, match="model state is empty"):
         tynx.load_checkpoint(checkpoint, object(), optimizer)
+
+
+def test_weights_only_checkpoint_supports_both_argument_orders(tmp_path: Path) -> None:
+    source = _initialized_model()
+    first = tmp_path / "path-first.tynx"
+    second = tmp_path / "model-first.tynx"
+
+    tynx.save_checkpoint(first, source)
+    tynx.save_checkpoint(source, second)
+
+    for checkpoint in (first, second):
+        payload = json.loads(checkpoint.read_text(encoding="utf-8"))
+        assert payload["optimizer"] is None
+        destination = tynx.nn.Linear(1, 1)
+        result = tynx.load_checkpoint(checkpoint, destination)
+        assert result.missing_keys == ()
+        assert result.unexpected_keys == ()
+        for name, value in destination.state_dict().items():
+            assert value.tolist() == source.state_dict()[name].tolist()
+
+
+def test_checkpoint_supports_model_optimizer_path_order(tmp_path: Path) -> None:
+    model = _initialized_model()
+    optimizer = tynx.optim.Adam(model.named_parameters(), lr=0.03)
+    _train_step(model, optimizer)
+    checkpoint = tmp_path / "torch-order.tynx"
+
+    tynx.save_checkpoint(model, optimizer, checkpoint)
+
+    resumed = tynx.nn.Linear(1, 1)
+    resumed_optimizer = tynx.optim.Adam(resumed.named_parameters())
+    tynx.load_checkpoint(checkpoint, resumed, resumed_optimizer)
+    for name, value in resumed.state_dict().items():
+        assert value.tolist() == model.state_dict()[name].tolist()
+
+
+def test_checkpoint_rejects_invalid_argument_order_up_front(tmp_path: Path) -> None:
+    model = _initialized_model()
+    optimizer = tynx.optim.Adam(model.named_parameters())
+
+    with pytest.raises(TypeError, match="expects"):
+        cast(Any, tynx.save_checkpoint)(model, optimizer)
+    with pytest.raises(TypeError, match="model must be a model object"):
+        tynx.save_checkpoint(tmp_path / "bad.tynx", "not-a-model", optimizer)
+    with pytest.raises(TypeError, match=r"optimizer must provide state_dict\(\)"):
+        cast(Any, tynx.save_checkpoint)(tmp_path / "bad.tynx", model, object())
