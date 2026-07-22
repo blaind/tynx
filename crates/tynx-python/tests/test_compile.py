@@ -370,6 +370,22 @@ def test_captured_categorical_sampling_advances_and_matches_eager_rng() -> None:
     assert sample.replay_count == 5
 
 
+def test_captured_categorical_log_prob_broadcasts_sample_dimensions() -> None:
+    @tynx.compile(fullgraph=True)
+    def log_prob(logits: tynx.Tensor, values: tynx.Tensor) -> tynx.Tensor:
+        return tynx.distributions.Categorical(logits=logits).log_prob(values)
+
+    logits = tynx.Tensor([[1.0, 2.0, 0.5], [0.0, 1.0, 3.0]])
+    values = tynx.Tensor([[1, 2], [0, 1]], dtype="int64")
+
+    first = log_prob(logits, values)
+    second = log_prob(logits, values)
+
+    assert second.tolist() == first.tolist()
+    assert log_prob.graph_count == 1
+    assert log_prob.replay_count == 1
+
+
 def test_captured_normal_sampling_advances_matches_eager_and_stays_detached() -> None:
     loc = tynx.Tensor([0.0] * 32, requires_grad=True)
     scale = tynx.Tensor([1.0] * 32, requires_grad=True)

@@ -40,6 +40,45 @@ def test_categorical_sampling_is_seeded_detached_and_advances_rng() -> None:
     assert manual_first.tolist() == manual_repeated.tolist()
 
 
+def test_categorical_log_prob_broadcasts_leading_sample_dimensions() -> None:
+    distribution = tynx.distributions.Categorical(
+        logits=tynx.Tensor([[1.0, 2.0, 0.5], [0.0, 1.0, 3.0]])
+    )
+
+    selected = distribution.log_prob(tynx.Tensor([[1, 2], [0, 1]], dtype="int64"))
+
+    first_normalizer = math.log(math.exp(1.0) + math.exp(2.0) + math.exp(0.5))
+    second_normalizer = math.log(math.exp(0.0) + math.exp(1.0) + math.exp(3.0))
+    assert selected.shape == (2, 2)
+    assert selected.flatten().tolist() == pytest.approx(
+        [
+            2.0 - first_normalizer,
+            3.0 - second_normalizer,
+            1.0 - first_normalizer,
+            1.0 - second_normalizer,
+        ]
+    )
+
+
+def test_categorical_log_prob_broadcasts_singleton_batch_dimension() -> None:
+    distribution = tynx.distributions.Categorical(
+        logits=tynx.Tensor([[1.0, 2.0, 0.5], [0.0, 1.0, 3.0]])
+    )
+
+    selected = distribution.log_prob(tynx.Tensor([[1], [2]], dtype="int64"))
+
+    assert selected.shape == (2, 2)
+
+
+def test_categorical_log_prob_rejects_incompatible_batch_shape() -> None:
+    distribution = tynx.distributions.Categorical(
+        logits=tynx.Tensor([[1.0, 2.0, 0.5], [0.0, 1.0, 3.0]])
+    )
+
+    with pytest.raises(ValueError, match="not broadcastable"):
+        distribution.log_prob(tynx.Tensor([[1, 2, 0]], dtype="int64"))
+
+
 def test_normal_log_prob_entropy_gradients_and_seeded_sample() -> None:
     loc = tynx.Tensor([0.0, 1.0], requires_grad=True)
     scale = tynx.Tensor([1.0, 2.0], requires_grad=True)

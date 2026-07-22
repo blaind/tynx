@@ -7,6 +7,21 @@ from typing import Union as _Union
 from ._tynx import Tensor, _categorical_sample, _normal_sample
 
 
+def _broadcast_shape(left: tuple[int, ...], right: tuple[int, ...]) -> tuple[int, ...]:
+    rank = max(len(left), len(right))
+    left = (1,) * (rank - len(left)) + left
+    right = (1,) * (rank - len(right)) + right
+    output = []
+    for left_dim, right_dim in zip(left, right):
+        if left_dim != right_dim and left_dim != 1 and right_dim != 1:
+            raise ValueError(
+                "Categorical.log_prob value shape "
+                f"{left} is not broadcastable with batch shape {right}"
+            )
+        output.append(max(left_dim, right_dim))
+    return tuple(output)
+
+
 class Categorical:
     """Categorical distribution parameterized by logits or probabilities."""
 
@@ -32,9 +47,25 @@ class Categorical:
 
     def log_prob(self, value: Tensor) -> Tensor:
         """Return selected normalized log probabilities for int64 indices."""
-        index = value if self.logits.ndim == 1 else value.unsqueeze(-1)
-        selected = self.logits.gather(-1, index)
-        return selected if self.logits.ndim == 1 else selected.squeeze(-1)
+        batch_shape = self.logits.shape[:-1]
+        output_shape = _broadcast_shape(value.shape, batch_shape)
+
+        logits_shape = (1,) * (len(output_shape) - len(batch_shape)) + self.logits.shape
+        logits = (
+            self.logits if logits_shape == self.logits.shape else self.logits.reshape(logits_shape)
+        )
+        expanded_logits_shape = (*output_shape, self.logits.shape[-1])
+        if logits.shape != expanded_logits_shape:
+            logits = logits.expand(expanded_logits_shape)
+
+        index_shape = (1,) * (len(output_shape) - value.ndim) + value.shape + (1,)
+        index = value.unsqueeze(-1)
+        if index.shape != index_shape:
+            index = index.reshape(index_shape)
+        expanded_index_shape = (*output_shape, 1)
+        if index.shape != expanded_index_shape:
+            index = index.expand(expanded_index_shape)
+        return logits.gather(-1, index).squeeze(-1)
 
     def entropy(self) -> Tensor:
         """Return Shannon entropy over the final category dimension."""
