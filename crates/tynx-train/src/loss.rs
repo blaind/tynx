@@ -62,4 +62,21 @@ mod tests {
             )
         );
     }
+
+    #[test]
+    fn propagates_gradients_to_prediction() {
+        let device = Device::autodiff(Device::default());
+        let prediction = tensor(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], &device).require_grad();
+        let target = tensor(vec![0.0, 2.0, 5.0, 3.0], &[2, 2], &device);
+
+        let loss = mse(prediction.clone(), target).unwrap();
+        let gradients = loss.backward();
+        let gradient = prediction.grad(&gradients).unwrap();
+
+        assert_eq!(gradient.dims(), [2, 2]);
+        assert_eq!(
+            gradient.into_data().iter::<f32>().collect::<Vec<_>>(),
+            [0.5, 0.0, -1.0, 0.5]
+        );
+    }
 }

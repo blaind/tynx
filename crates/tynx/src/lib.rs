@@ -12,4 +12,7 @@ pub use session::Session;
 pub use tensor::{DynBool, DynInt, DynTensor, MAX_RANK};
 pub use value::{Scalar, Value};
 
+#[cfg(feature = "training")]
+pub use burn::tensor::Gradients;
+
 pub use onnx_ir;

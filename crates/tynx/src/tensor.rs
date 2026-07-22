@@ -315,6 +315,77 @@ impl_metadata!(DynTensor);
 impl_metadata!(DynInt);
 impl_metadata!(DynBool);
 
+#[cfg(feature = "training")]
+impl DynTensor {
+    /// Return whether this tensor is an autodiff leaf that requires gradients.
+    pub fn is_require_grad(&self) -> bool {
+        match self {
+            Self::R1(tensor) => tensor.is_require_grad(),
+            Self::R2(tensor) => tensor.is_require_grad(),
+            Self::R3(tensor) => tensor.is_require_grad(),
+            Self::R4(tensor) => tensor.is_require_grad(),
+            Self::R5(tensor) => tensor.is_require_grad(),
+            Self::R6(tensor) => tensor.is_require_grad(),
+        }
+    }
+
+    /// Mark this tensor as a differentiable leaf.
+    pub fn require_grad(self) -> Self {
+        map_float!(self, |tensor| tensor.require_grad())
+    }
+
+    /// Stop autodiff tracking while keeping the tensor on its current device/backend.
+    pub fn detach(self) -> Self {
+        map_float!(self, |tensor| tensor.detach().set_require_grad(false))
+    }
+
+    /// Return the underlying non-autodiff tensor for off-tape updates.
+    pub fn inner(self) -> Self {
+        map_float!(self, |tensor| tensor.inner())
+    }
+
+    /// Lift an underlying tensor back onto the autodiff backend.
+    pub fn to_autodiff(self) -> Self {
+        map_float!(self, |tensor| Tensor::from_inner(tensor))
+    }
+
+    /// Run reverse-mode autodiff from this tensor.
+    pub fn backward(&self) -> crate::Gradients {
+        match self {
+            Self::R1(tensor) => tensor.backward(),
+            Self::R2(tensor) => tensor.backward(),
+            Self::R3(tensor) => tensor.backward(),
+            Self::R4(tensor) => tensor.backward(),
+            Self::R5(tensor) => tensor.backward(),
+            Self::R6(tensor) => tensor.backward(),
+        }
+    }
+
+    /// Clone this tensor's gradient from a backward result without removing it.
+    pub fn grad(&self, gradients: &crate::Gradients) -> Option<Self> {
+        match self {
+            Self::R1(tensor) => tensor.grad(gradients).map(Self::R1),
+            Self::R2(tensor) => tensor.grad(gradients).map(Self::R2),
+            Self::R3(tensor) => tensor.grad(gradients).map(Self::R3),
+            Self::R4(tensor) => tensor.grad(gradients).map(Self::R4),
+            Self::R5(tensor) => tensor.grad(gradients).map(Self::R5),
+            Self::R6(tensor) => tensor.grad(gradients).map(Self::R6),
+        }
+    }
+
+    /// Remove this tensor's gradient from a backward result.
+    pub fn grad_remove(&self, gradients: &mut crate::Gradients) -> Option<Self> {
+        match self {
+            Self::R1(tensor) => tensor.grad_remove(gradients).map(Self::R1),
+            Self::R2(tensor) => tensor.grad_remove(gradients).map(Self::R2),
+            Self::R3(tensor) => tensor.grad_remove(gradients).map(Self::R3),
+            Self::R4(tensor) => tensor.grad_remove(gradients).map(Self::R4),
+            Self::R5(tensor) => tensor.grad_remove(gradients).map(Self::R5),
+            Self::R6(tensor) => tensor.grad_remove(gradients).map(Self::R6),
+        }
+    }
+}
+
 macro_rules! impl_concat {
     ($kind:ident) => {
         impl $kind {

@@ -1,6 +1,6 @@
 //! Element-wise binary operators.
 
-use burn::tensor::Device;
+use burn::tensor::{DType, Device, TensorData};
 use onnx_ir::node::{
     arithmetic::{AddNode, DivNode, MulNode, SubNode},
     prelu::PReluNode,
@@ -10,51 +10,27 @@ use super::{Env, resolve};
 use crate::{DynInt, DynTensor, Result, Scalar, TynxError, Value};
 
 pub(super) fn add(node: &AddNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
-    numeric_binary(
-        &node.name,
-        &node.inputs,
-        env,
-        device,
-        DynTensor::add_broadcast,
-        DynInt::add_broadcast,
-        add_scalars,
-    )
+    numeric_binary(&node.name, &node.inputs, env, device, BinaryOp::Add)
 }
 
 pub(super) fn sub(node: &SubNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
-    numeric_binary(
-        &node.name,
-        &node.inputs,
-        env,
-        device,
-        DynTensor::sub_broadcast,
-        DynInt::sub_broadcast,
-        sub_scalars,
-    )
+    numeric_binary(&node.name, &node.inputs, env, device, BinaryOp::Sub)
 }
 
 pub(super) fn mul(node: &MulNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
-    numeric_binary(
-        &node.name,
-        &node.inputs,
-        env,
-        device,
-        DynTensor::mul_broadcast,
-        DynInt::mul_broadcast,
-        mul_scalars,
-    )
+    numeric_binary(&node.name, &node.inputs, env, device, BinaryOp::Mul)
 }
 
 pub(super) fn div(node: &DivNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
-    numeric_binary(
-        &node.name,
-        &node.inputs,
-        env,
-        device,
-        DynTensor::div_broadcast,
-        DynInt::div_broadcast,
-        div_scalars,
-    )
+    numeric_binary(&node.name, &node.inputs, env, device, BinaryOp::Div)
+}
+
+#[derive(Debug, Clone, Copy)]
+enum BinaryOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
 }
 
 fn numeric_binary(
@@ -62,18 +38,44 @@ fn numeric_binary(
     inputs: &[onnx_ir::Argument],
     env: &Env,
     device: &Device,
-    float_op: impl FnOnce(DynTensor, DynTensor) -> Result<DynTensor>,
-    int_op: impl FnOnce(DynInt, DynInt) -> Result<DynInt>,
-    scalar_op: fn(Scalar, Scalar) -> Result<Scalar>,
+    operation: BinaryOp,
 ) -> Result<Vec<Value>> {
     let left = resolve::at(env, node_name, inputs, 0, device)?;
     let right = resolve::at(env, node_name, inputs, 1, device)?;
     let output = match (left, right) {
-        (Value::Tensor(left), Value::Tensor(right)) => Value::Tensor(float_op(left, right)?),
-        (Value::Int(left), Value::Int(right)) => Value::Int(int_op(left, right)?),
-        (Value::Scalar(left), Value::Scalar(right)) => Value::Scalar(scalar_op(left, right)?),
+        (Value::Tensor(left), Value::Tensor(right)) => {
+            Value::Tensor(float_binary(left, right, operation)?)
+        }
+        (Value::Tensor(left), Value::Scalar(right)) => {
+            let dtype = left.dtype();
+            let right = DynTensor::full(&[1], right.as_f64(), device, dtype)?;
+            Value::Tensor(float_binary(left, right, operation)?)
+        }
+        (Value::Scalar(left), Value::Tensor(right)) => {
+            let dtype = right.dtype();
+            let left = DynTensor::full(&[1], left.as_f64(), device, dtype)?;
+            Value::Tensor(float_binary(left, right, operation)?)
+        }
+        (Value::Int(left), Value::Int(right)) => Value::Int(int_binary(left, right, operation)?),
+        (Value::Int(left), Value::Scalar(right)) => {
+            let right = scalar_int_tensor(right, left.dtype(), device)?;
+            Value::Int(int_binary(left, right, operation)?)
+        }
+        (Value::Scalar(left), Value::Int(right)) => {
+            let left = scalar_int_tensor(left, right.dtype(), device)?;
+            Value::Int(int_binary(left, right, operation)?)
+        }
+        (Value::Scalar(left), Value::Scalar(right)) => {
+            Value::Scalar(scalar_binary(left, right, operation)?)
+        }
         (Value::Shape(left), Value::Shape(right)) => {
-            Value::Shape(shape_binary(left, right, scalar_op)?)
+            Value::Shape(shape_binary(left, right, operation)?)
+        }
+        (Value::Shape(left), Value::Int(right)) => {
+            Value::Int(int_binary(shape_tensor(left, device)?, right, operation)?)
+        }
+        (Value::Int(left), Value::Shape(right)) => {
+            Value::Int(int_binary(left, shape_tensor(right, device)?, operation)?)
         }
         (left, right) => {
             return Err(TynxError::TypeMismatch(format!(
@@ -84,44 +86,40 @@ fn numeric_binary(
     Ok(vec![output])
 }
 
-fn add_scalars(left: Scalar, right: Scalar) -> Result<Scalar> {
-    scalar_arithmetic(left, right, |a, b| a + b, |a, b| a + b, |a, b| a + b)
-}
-
-fn sub_scalars(left: Scalar, right: Scalar) -> Result<Scalar> {
-    scalar_arithmetic(left, right, |a, b| a - b, |a, b| a - b, |a, b| a - b)
-}
-
-fn mul_scalars(left: Scalar, right: Scalar) -> Result<Scalar> {
-    scalar_arithmetic(left, right, |a, b| a * b, |a, b| a * b, |a, b| a * b)
-}
-
-fn div_scalars(left: Scalar, right: Scalar) -> Result<Scalar> {
-    match (left, right) {
-        (Scalar::F64(left), Scalar::F64(right)) => Ok(Scalar::F64(left / right)),
-        (Scalar::I64(left), Scalar::I64(right)) => left
-            .checked_div(right)
-            .map(Scalar::I64)
-            .ok_or_else(|| TynxError::Shape("invalid signed integer division".to_string())),
-        (Scalar::U64(left), Scalar::U64(right)) => left
-            .checked_div(right)
-            .map(Scalar::U64)
-            .ok_or_else(|| TynxError::Shape("integer division by zero".to_string())),
-        (left, right) => Err(scalar_kind_error(left, right)),
+fn float_binary(left: DynTensor, right: DynTensor, operation: BinaryOp) -> Result<DynTensor> {
+    match operation {
+        BinaryOp::Add => left.add_broadcast(right),
+        BinaryOp::Sub => left.sub_broadcast(right),
+        BinaryOp::Mul => left.mul_broadcast(right),
+        BinaryOp::Div => left.div_broadcast(right),
     }
 }
 
-fn scalar_arithmetic(
-    left: Scalar,
-    right: Scalar,
-    float_op: fn(f64, f64) -> f64,
-    signed_op: fn(i64, i64) -> i64,
-    unsigned_op: fn(u64, u64) -> u64,
-) -> Result<Scalar> {
+fn int_binary(left: DynInt, right: DynInt, operation: BinaryOp) -> Result<DynInt> {
+    match operation {
+        BinaryOp::Add => left.add_broadcast(right),
+        BinaryOp::Sub => left.sub_broadcast(right),
+        BinaryOp::Mul => left.mul_broadcast(right),
+        BinaryOp::Div => left.div_broadcast(right),
+    }
+}
+
+fn scalar_binary(left: Scalar, right: Scalar, operation: BinaryOp) -> Result<Scalar> {
+    macro_rules! apply {
+        ($left:expr, $right:expr, $kind:ident) => {{
+            let value = match operation {
+                BinaryOp::Add => $left + $right,
+                BinaryOp::Sub => $left - $right,
+                BinaryOp::Mul => $left * $right,
+                BinaryOp::Div => $left / $right,
+            };
+            Ok(Scalar::$kind(value))
+        }};
+    }
     match (left, right) {
-        (Scalar::F64(left), Scalar::F64(right)) => Ok(Scalar::F64(float_op(left, right))),
-        (Scalar::I64(left), Scalar::I64(right)) => Ok(Scalar::I64(signed_op(left, right))),
-        (Scalar::U64(left), Scalar::U64(right)) => Ok(Scalar::U64(unsigned_op(left, right))),
+        (Scalar::F64(left), Scalar::F64(right)) => apply!(left, right, F64),
+        (Scalar::I64(left), Scalar::I64(right)) => apply!(left, right, I64),
+        (Scalar::U64(left), Scalar::U64(right)) => apply!(left, right, U64),
         (left, right) => Err(scalar_kind_error(left, right)),
     }
 }
@@ -132,11 +130,7 @@ fn scalar_kind_error(left: Scalar, right: Scalar) -> TynxError {
     ))
 }
 
-fn shape_binary(
-    left: Vec<i64>,
-    right: Vec<i64>,
-    operation: fn(Scalar, Scalar) -> Result<Scalar>,
-) -> Result<Vec<i64>> {
+fn shape_binary(left: Vec<i64>, right: Vec<i64>, operation: BinaryOp) -> Result<Vec<i64>> {
     if left.len() != right.len() {
         return Err(TynxError::Shape(format!(
             "shape operands have different lengths: {} and {}",
@@ -146,13 +140,39 @@ fn shape_binary(
     }
     left.into_iter()
         .zip(right)
-        .map(
-            |(left, right)| match operation(Scalar::I64(left), Scalar::I64(right))? {
+        .map(|(left, right)| {
+            match scalar_binary(Scalar::I64(left), Scalar::I64(right), operation)? {
                 Scalar::I64(value) => Ok(value),
                 _ => unreachable!("shape arithmetic preserves signed integers"),
-            },
-        )
+            }
+        })
         .collect()
+}
+
+fn shape_tensor(values: Vec<i64>, device: &Device) -> Result<DynInt> {
+    let length = values.len();
+    DynInt::from_data(TensorData::new(values, [length]), 1, device)
+}
+
+fn scalar_int_tensor(scalar: Scalar, dtype: DType, device: &Device) -> Result<DynInt> {
+    let data = if dtype.is_uint() {
+        let value = match scalar {
+            Scalar::U64(value) => value,
+            Scalar::I64(value) => value as u64,
+            Scalar::F64(value) => value as u64,
+            Scalar::Bool(value) => u64::from(value),
+        };
+        TensorData::new(vec![value], [1])
+    } else {
+        let value = match scalar {
+            Scalar::U64(value) => value as i64,
+            Scalar::I64(value) => value,
+            Scalar::F64(value) => value as i64,
+            Scalar::Bool(value) => i64::from(value),
+        };
+        TensorData::new(vec![value], [1])
+    };
+    Ok(DynInt::from_data(data, 1, device)?.cast(dtype))
 }
 
 pub(super) fn prelu(node: &PReluNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
