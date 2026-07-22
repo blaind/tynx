@@ -13,7 +13,7 @@ use pyo3::{
 };
 use tynx_core::{Device, DynTensor, Gradients, TensorData};
 
-use crate::to_python_error;
+use crate::{grad_mode::is_grad_enabled, to_python_error};
 
 /// Eager floating-point tensor.
 ///
@@ -90,9 +90,36 @@ impl PyTensor {
         other: &Self,
         operation: impl FnOnce(DynTensor, DynTensor) -> tynx_core::Result<DynTensor>,
     ) -> PyResult<Self> {
-        let inner = operation(self.inner.as_ref().clone(), other.inner.as_ref().clone())
-            .map_err(to_python_error)?;
-        Ok(Self::from_operation(inner, &[self, other]))
+        let tracking = is_grad_enabled();
+        let mut left = self.inner.as_ref().clone();
+        let mut right = other.inner.as_ref().clone();
+        if !tracking {
+            left = left.detach();
+            right = right.detach();
+        }
+        let inner = operation(left, right).map_err(to_python_error)?;
+        Ok(if tracking {
+            Self::from_operation(inner, &[self, other])
+        } else {
+            Self::from_inner(inner)
+        })
+    }
+
+    fn unary(
+        &self,
+        operation: impl FnOnce(DynTensor) -> tynx_core::Result<DynTensor>,
+    ) -> PyResult<Self> {
+        let tracking = is_grad_enabled();
+        let mut input = self.inner.as_ref().clone();
+        if !tracking {
+            input = input.detach();
+        }
+        let inner = operation(input).map_err(to_python_error)?;
+        Ok(if tracking {
+            Self::from_operation(inner, &[self])
+        } else {
+            Self::from_inner(inner)
+        })
     }
 }
 
@@ -206,11 +233,12 @@ impl PyTensor {
         }
     }
 
-    /// Run reverse-mode autodiff from a one-element tensor.
-    fn backward(&self) -> PyResult<()> {
-        if self.numel() != 1 {
+    /// Run reverse-mode autodiff, optionally seeded by a matching tensor.
+    #[pyo3(signature = (gradient=None))]
+    fn backward(&self, gradient: Option<PyRef<'_, Self>>) -> PyResult<()> {
+        if gradient.is_none() && self.numel() != 1 {
             return Err(PyValueError::new_err(format!(
-                "backward() requires a one-element tensor, got shape {:?}",
+                "backward() without an explicit gradient requires a one-element tensor, got shape {:?}",
                 self.inner.dims()
             )));
         }
@@ -219,7 +247,28 @@ impl PyTensor {
                 "backward() requires a tensor attached to an autodiff graph",
             ));
         }
-        let gradients = catch_unwind(AssertUnwindSafe(|| self.inner.backward())).map_err(|_| {
+        let root = match gradient {
+            Some(gradient) => {
+                if gradient.inner.dims() != self.inner.dims() {
+                    return Err(PyValueError::new_err(format!(
+                        "backward() gradient shape {:?} does not match output shape {:?}",
+                        gradient.inner.dims(),
+                        self.inner.dims()
+                    )));
+                }
+                let dims = (0..self.inner.rank()).collect::<Vec<_>>();
+                self.inner
+                    .as_ref()
+                    .clone()
+                    .mul_broadcast(gradient.inner.as_ref().clone().detach())
+                    .map_err(to_python_error)?
+                    .sum_dims(&dims)
+                    .reshape(vec![1])
+                    .map_err(to_python_error)?
+            }
+            None => self.inner.as_ref().clone(),
+        };
+        let gradients = catch_unwind(AssertUnwindSafe(|| root.backward())).map_err(|_| {
             PyValueError::new_err("backward() could not traverse the autodiff graph")
         })?;
         for leaf in &self.leaves {
@@ -233,14 +282,7 @@ impl PyTensor {
     /// Reduce all dimensions to the v1 one-element `(1,)` tensor shape.
     fn mean(&self) -> PyResult<Self> {
         let dims = (0..self.inner.rank()).collect::<Vec<_>>();
-        let inner = self
-            .inner
-            .as_ref()
-            .clone()
-            .mean_dims(&dims)
-            .reshape(vec![1])
-            .map_err(to_python_error)?;
-        Ok(Self::from_operation(inner, &[self]))
+        self.unary(|input| input.mean_dims(&dims).reshape(vec![1]))
     }
 
     fn __add__(&self, other: PyRef<'_, Self>) -> PyResult<Self> {
@@ -263,8 +305,8 @@ impl PyTensor {
         self.binary(&other, DynTensor::matmul)
     }
 
-    fn __neg__(&self) -> Self {
-        Self::from_operation(self.inner.as_ref().clone().negated(), &[self])
+    fn __neg__(&self) -> PyResult<Self> {
+        self.unary(|input| Ok(input.negated()))
     }
 
     fn __repr__(&self) -> String {

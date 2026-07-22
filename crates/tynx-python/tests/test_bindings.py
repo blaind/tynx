@@ -91,6 +91,37 @@ def test_tensor_backward_rejects_non_scalar_output() -> None:
         (value * value).backward()
 
 
+def test_tensor_backward_accepts_explicit_gradient() -> None:
+    value = tynx.Tensor([1.0, 2.0], requires_grad=True)
+    output = value * value
+
+    output.backward(tynx.Tensor([3.0, 4.0]))
+
+    assert value.grad is not None
+    assert value.grad.tolist() == pytest.approx([6.0, 16.0])
+
+    with pytest.raises(ValueError, match="gradient shape"):
+        (value * value).backward(tynx.Tensor([1.0]))
+
+
+def test_no_grad_is_nested_and_restores_tracking() -> None:
+    value = tynx.Tensor([2.0], requires_grad=True)
+    assert tynx.is_grad_enabled()
+
+    with tynx.no_grad():
+        assert not tynx.is_grad_enabled()
+        first = value * value
+        assert not first.requires_grad
+        with tynx.no_grad():
+            assert not tynx.is_grad_enabled()
+            second = -value
+            assert not second.requires_grad
+        assert not tynx.is_grad_enabled()
+
+    assert tynx.is_grad_enabled()
+    assert (value * value).requires_grad
+
+
 def test_missing_model_raises_os_error(tmp_path: Path) -> None:
     missing_model = tmp_path / "missing.onnx"
 
