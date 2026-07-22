@@ -1,12 +1,12 @@
 //! Element-wise ONNX comparison execution.
 
-use burn::tensor::Device;
+use burn::tensor::{Device, TensorData};
 use onnx_ir::node::comparison::{
     EqualNode, GreaterNode, GreaterOrEqualNode, LessNode, LessOrEqualNode,
 };
 
 use super::{Env, resolve};
-use crate::{Result, Scalar, TynxError, Value};
+use crate::{DynInt, Result, Scalar, TynxError, Value};
 
 #[derive(Debug, Clone, Copy)]
 enum Comparison {
@@ -85,6 +85,29 @@ fn compare(
         (Value::Scalar(left), Value::Scalar(right)) => {
             Value::Scalar(Scalar::Bool(compare_scalars(left, right, comparison)?))
         }
+        (Value::Shape(left), Value::Shape(right)) => {
+            if left.len() != right.len() {
+                return Err(TynxError::Shape(format!(
+                    "comparison shape operands have different lengths: {} and {}",
+                    left.len(),
+                    right.len()
+                )));
+            }
+            let values = left
+                .into_iter()
+                .zip(right)
+                .map(|(left, right)| {
+                    compare_scalars(Scalar::I64(left), Scalar::I64(right), comparison)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Value::from_tensor_data(TensorData::new(values.clone(), [values.len()]), 1, device)?
+        }
+        (Value::Shape(left), Value::Int(right)) => {
+            compare_ints(shape_tensor(left, device)?, right, comparison)?
+        }
+        (Value::Int(left), Value::Shape(right)) => {
+            compare_ints(left, shape_tensor(right, device)?, comparison)?
+        }
         (left, right) => {
             return Err(TynxError::TypeMismatch(format!(
                 "comparison inputs must have matching numeric kinds, got {left:?} and {right:?}"
@@ -93,6 +116,21 @@ fn compare(
     };
 
     Ok(vec![output])
+}
+
+fn compare_ints(left: DynInt, right: DynInt, comparison: Comparison) -> Result<Value> {
+    Ok(Value::Bool(match comparison {
+        Comparison::Equal => left.equal_broadcast(right)?,
+        Comparison::Greater => left.greater_broadcast(right)?,
+        Comparison::GreaterOrEqual => left.greater_equal_broadcast(right)?,
+        Comparison::Less => left.less_broadcast(right)?,
+        Comparison::LessOrEqual => left.less_equal_broadcast(right)?,
+    }))
+}
+
+fn shape_tensor(values: Vec<i64>, device: &Device) -> Result<DynInt> {
+    let length = values.len();
+    DynInt::from_data(TensorData::new(values, [length]), 1, device)
 }
 
 fn compare_scalars(left: Scalar, right: Scalar, comparison: Comparison) -> Result<bool> {

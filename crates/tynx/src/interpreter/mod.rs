@@ -1,5 +1,6 @@
 //! Runtime dispatch for individual ONNX nodes.
 
+mod attention;
 mod binary;
 mod broadcasting;
 mod cast;
@@ -19,6 +20,7 @@ mod pad;
 mod pooling;
 mod pow;
 mod quantization;
+mod range_op;
 mod reduction;
 mod resize;
 mod resolve;
@@ -28,6 +30,7 @@ mod shape;
 mod slice;
 mod softmax;
 mod spatial;
+mod trilu;
 mod unary;
 mod variadic;
 mod where_op;
@@ -69,6 +72,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Asinh(node) => unary::asinh(node, env, device),
         Node::Atan(node) => unary::atan(node, env, device),
         Node::Atanh(node) => unary::atanh(node, env, device),
+        Node::Attention(node) => attention::attention(node, env, device),
         Node::AveragePool1d(node) => pooling::average_pool1d(node, env, device),
         Node::AveragePool2d(node) => pooling::average_pool2d(node, env, device),
         Node::AveragePool3d(node) => pooling::average_pool3d(node, env, device),
@@ -84,6 +88,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Celu(node) => unary::celu(node, env, device),
         Node::Clip(node) => clip::clip(node, env, device),
         Node::Concat(node) => concat::concat(node, env, device),
+        Node::Constant(node) => Ok(vec![resolve::first(env, &node.name, &node.inputs, device)?]),
         Node::ConstantOfShape(node) => shape::constant_of_shape(node, env, device),
         Node::Conv1d(node) => convolution::conv1d(node, env, device),
         Node::Conv2d(node) => convolution::conv2d(node, env, device),
@@ -145,6 +150,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Pow(node) => pow::pow(node, env, device),
         Node::QLinearMatMul(node) => quantization::qlinear_matmul(node, env, device),
         Node::QuantizeLinear(node) => quantization::quantize_linear(node, env, device),
+        Node::Range(node) => range_op::range(node, env, device),
         Node::Reciprocal(node) => unary::reciprocal(node, env, device),
         Node::ReduceL1(node) => reduction::reduce_l1(node, env, device),
         Node::ReduceL2(node) => reduction::reduce_l2(node, env, device),
@@ -182,6 +188,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Tile(node) => broadcasting::tile(node, env, device),
         Node::TopK(node) => selection::topk(node, env, device),
         Node::Transpose(node) => shape::transpose(node, env, device),
+        Node::Trilu(node) => trilu::trilu(node, env, device),
         Node::Unsqueeze(node) => shape::unsqueeze(node, env, device),
         Node::Where(node) => where_op::where_op(node, env, device),
         Node::Xor(node) => logical::xor(node, env, device),

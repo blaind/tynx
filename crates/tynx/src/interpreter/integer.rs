@@ -14,7 +14,7 @@ use onnx_ir::{
 };
 
 use super::{Env, resolve};
-use crate::{DynInt, Result, TynxError, Value};
+use crate::{DynInt, Result, Scalar, TynxError, Value};
 
 pub(super) fn modulo(node: &ModNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
     let left = resolve::at(env, &node.name, &node.inputs, 0, device)?;
@@ -26,6 +26,15 @@ pub(super) fn modulo(node: &ModNode, env: &Env, device: &Device) -> Result<Vec<V
         (Value::Int(left), Value::Int(right)) => {
             Value::Int(left.modulo_broadcast(right, node.config.fmod)?)
         }
+        (Value::Scalar(Scalar::I64(left)), Value::Scalar(Scalar::I64(right))) => {
+            Value::Scalar(Scalar::I64(signed_modulo(left, right, node.config.fmod)?))
+        }
+        (Value::Shape(left), Value::Shape(right)) if left.len() == right.len() => Value::Shape(
+            left.into_iter()
+                .zip(right)
+                .map(|(left, right)| signed_modulo(left, right, node.config.fmod))
+                .collect::<Result<Vec<_>>>()?,
+        ),
         (left, right) => {
             return Err(TynxError::TypeMismatch(format!(
                 "Mod operands must have matching numeric tensor kinds, got {left:?} and {right:?}"
@@ -33,6 +42,18 @@ pub(super) fn modulo(node: &ModNode, env: &Env, device: &Device) -> Result<Vec<V
         }
     };
     Ok(vec![output])
+}
+
+fn signed_modulo(left: i64, right: i64, fmod: bool) -> Result<i64> {
+    if right == 0 {
+        return Err(TynxError::Shape("integer modulo by zero".to_string()));
+    }
+    let remainder = left % right;
+    Ok(if fmod {
+        remainder
+    } else {
+        (remainder + right) % right
+    })
 }
 
 pub(super) fn bitwise_and(node: &BitwiseAndNode, env: &Env, device: &Device) -> Result<Vec<Value>> {

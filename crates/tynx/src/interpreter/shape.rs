@@ -231,6 +231,12 @@ pub(super) fn reshape_value(value: Value, dims: Vec<usize>, device: &Device) -> 
         )));
     }
 
+    if let Value::Shape(values) = value {
+        let length = values.len();
+        let value = Value::from_tensor_data(TensorData::new(values, [length]), 1, device)?;
+        return reshape_value(value, dims, device);
+    }
+
     if dims.is_empty() {
         return match value {
             Value::Tensor(tensor) => Value::from_tensor_data(tensor.into_data(), 0, device),

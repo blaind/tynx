@@ -1,6 +1,6 @@
 //! ONNX Where execution.
 
-use burn::tensor::Device;
+use burn::tensor::{Device, TensorData};
 use onnx_ir::node::where_op::WhereNode;
 
 use super::{Env, resolve};
@@ -18,6 +18,16 @@ pub(super) fn where_op(node: &WhereNode, env: &Env, device: &Device) -> Result<V
         (Value::Int(then), Value::Int(otherwise)) => {
             Value::Int(DynInt::where_select(condition, then, otherwise)?)
         }
+        (Value::Shape(then), Value::Int(otherwise)) => Value::Int(DynInt::where_select(
+            condition,
+            shape_tensor(then, device)?,
+            otherwise,
+        )?),
+        (Value::Int(then), Value::Shape(otherwise)) => Value::Int(DynInt::where_select(
+            condition,
+            then,
+            shape_tensor(otherwise, device)?,
+        )?),
         (Value::Bool(then), Value::Bool(otherwise)) => {
             Value::Bool(DynBool::where_select(condition, then, otherwise)?)
         }
@@ -29,6 +39,11 @@ pub(super) fn where_op(node: &WhereNode, env: &Env, device: &Device) -> Result<V
     };
 
     Ok(vec![output])
+}
+
+fn shape_tensor(values: Vec<i64>, device: &Device) -> Result<DynInt> {
+    let length = values.len();
+    DynInt::from_data(TensorData::new(values, [length]), 1, device)
 }
 
 #[cfg(test)]

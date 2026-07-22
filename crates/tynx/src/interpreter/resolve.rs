@@ -37,7 +37,7 @@ pub(super) fn input(env: &Env, argument: &Argument, device: &Device) -> Result<V
         if matches!(argument.ty, ArgType::Shape(_)) {
             return Ok(Value::Shape(data.iter::<i64>().collect()));
         }
-        return Value::from_tensor_data(data, argument.ty.rank(), device);
+        return Value::from_tensor_data(data.clone(), data.shape.len(), device);
     }
 
     let name = if argument.name.is_empty() {

@@ -17,6 +17,21 @@ pub(super) fn clip(node: &ClipNode, env: &Env, device: &Device) -> Result<Vec<Va
             max.map(|value| value.as_f64()),
         )),
         Value::Int(tensor) => Value::Int(tensor.clip(min, max)),
+        Value::Scalar(Scalar::F64(value)) => Value::Scalar(Scalar::F64(
+            value
+                .max(min.map(|bound| bound.as_f64()).unwrap_or(f64::NEG_INFINITY))
+                .min(max.map(|bound| bound.as_f64()).unwrap_or(f64::INFINITY)),
+        )),
+        Value::Scalar(Scalar::I64(value)) => Value::Scalar(Scalar::I64(
+            value
+                .max(min.map(scalar_as_i64).unwrap_or(i64::MIN))
+                .min(max.map(scalar_as_i64).unwrap_or(i64::MAX)),
+        )),
+        Value::Scalar(Scalar::U64(value)) => Value::Scalar(Scalar::U64(
+            value
+                .max(min.map(scalar_as_u64).unwrap_or(u64::MIN))
+                .min(max.map(scalar_as_u64).unwrap_or(u64::MAX)),
+        )),
         other => {
             return Err(TynxError::TypeMismatch(format!(
                 "Clip expects a numeric tensor, got {other:?}"
@@ -25,6 +40,24 @@ pub(super) fn clip(node: &ClipNode, env: &Env, device: &Device) -> Result<Vec<Va
     };
 
     Ok(vec![output])
+}
+
+fn scalar_as_i64(value: Scalar) -> i64 {
+    match value {
+        Scalar::I64(value) => value,
+        Scalar::U64(value) => value as i64,
+        Scalar::F64(value) => value as i64,
+        Scalar::Bool(value) => i64::from(value),
+    }
+}
+
+fn scalar_as_u64(value: Scalar) -> u64 {
+    match value {
+        Scalar::I64(value) => value as u64,
+        Scalar::U64(value) => value,
+        Scalar::F64(value) => value as u64,
+        Scalar::Bool(value) => u64::from(value),
+    }
 }
 
 fn bound(
