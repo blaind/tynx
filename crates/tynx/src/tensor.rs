@@ -1400,6 +1400,13 @@ impl DynTensor {
 
     /// Select slices along one dimension using flattened indices.
     pub fn select(self, dim: usize, indices: DynInt) -> Result<Self> {
+        if dim >= self.rank() {
+            return Err(TynxError::Shape(format!(
+                "select axis {dim} is out of range for rank {}",
+                self.rank()
+            )));
+        }
+        ensure_same_device("select", &self.device(), &indices.device())?;
         Ok(select_dyn!(self, dim, indices, DynTensor))
     }
 
@@ -2376,8 +2383,49 @@ impl DynInt {
         }))
     }
 
+    /// Validate one-dimensional selection indices and normalize allowed negative values.
+    ///
+    /// Burn does not provide portable device-side bounds errors for selection. Reading the small
+    /// index tensor here prevents an invalid GPU index from becoming an unchecked device access.
+    pub fn checked_select_indices(self, size: usize, allow_negative: bool) -> Result<Self> {
+        if self.rank() != 1 {
+            return Err(TynxError::Shape(format!(
+                "select indices must be rank 1, got rank {}",
+                self.rank()
+            )));
+        }
+        let shape = self.dims();
+        let device = self.device();
+        let size = i64::try_from(size)
+            .map_err(|_| TynxError::Shape("indexed dimension exceeds i64".into()))?;
+        let mut values = self.into_data().iter::<i64>().collect::<Vec<_>>();
+        for value in &mut values {
+            let original = *value;
+            if allow_negative && *value < 0 {
+                *value = value.checked_add(size).ok_or_else(|| {
+                    TynxError::Shape(format!(
+                        "index {original} is out of bounds for dimension of size {size}"
+                    ))
+                })?;
+            }
+            if *value < 0 || *value >= size {
+                return Err(TynxError::Shape(format!(
+                    "index {original} is out of bounds for dimension of size {size}"
+                )));
+            }
+        }
+        DynInt::from_data(TensorData::new(values, shape), 1, &device)
+    }
+
     /// Select slices along one dimension using flattened indices.
     pub fn select(self, dim: usize, indices: DynInt) -> Result<Self> {
+        if dim >= self.rank() {
+            return Err(TynxError::Shape(format!(
+                "select axis {dim} is out of range for rank {}",
+                self.rank()
+            )));
+        }
+        ensure_same_device("select", &self.device(), &indices.device())?;
         Ok(select_dyn!(self, dim, indices, DynInt))
     }
 
@@ -3085,6 +3133,13 @@ impl DynBool {
 
     /// Select slices along one dimension using flattened indices.
     pub fn select(self, dim: usize, indices: DynInt) -> Result<Self> {
+        if dim >= self.rank() {
+            return Err(TynxError::Shape(format!(
+                "select axis {dim} is out of range for rank {}",
+                self.rank()
+            )));
+        }
+        ensure_same_device("select", &self.device(), &indices.device())?;
         Ok(select_dyn!(self, dim, indices, DynBool))
     }
 
@@ -3372,6 +3427,31 @@ mod tests {
             output.into_data().iter::<f32>().collect::<Vec<_>>(),
             [3.0, 1.0]
         );
+    }
+
+    #[test]
+    fn validates_and_normalizes_selection_indices_before_dispatch() {
+        let device = Device::default();
+        let indices =
+            DynInt::from_data(TensorData::new(vec![-3_i64, 0, 2], [3]), 1, &device).unwrap();
+
+        let checked = indices.checked_select_indices(3, true).unwrap();
+        assert_eq!(
+            checked.into_data().iter::<i64>().collect::<Vec<_>>(),
+            [0, 0, 2]
+        );
+
+        for values in [vec![3_i64], vec![-4_i64]] {
+            let indices = DynInt::from_data(TensorData::new(values, [1]), 1, &device).unwrap();
+            let error = indices.checked_select_indices(3, true).unwrap_err();
+            assert!(
+                matches!(error, TynxError::Shape(message) if message.contains("out of bounds"))
+            );
+        }
+
+        let negative = DynInt::from_data(TensorData::new(vec![-1_i64], [1]), 1, &device).unwrap();
+        let error = negative.checked_select_indices(3, false).unwrap_err();
+        assert!(matches!(error, TynxError::Shape(message) if message.contains("out of bounds")));
     }
 
     #[test]

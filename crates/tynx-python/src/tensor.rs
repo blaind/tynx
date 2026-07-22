@@ -1420,6 +1420,8 @@ impl PyTensor {
     /// Select whole slices along one dimension using a one-dimensional int64 tensor.
     fn index_select(&self, dim: isize, index: PyRef<'_, Self>) -> PyResult<Self> {
         let dim = shape::axis_value(dim, self.ndim(), false, "index_select")?;
+        let input = self.source.value();
+        let input_device = input.device();
         let index = match index.source.value() {
             TensorValue::Int(index) if index.rank() == 1 => index,
             TensorValue::Int(index) => {
@@ -1435,6 +1437,10 @@ impl PyTensor {
                 )));
             }
         };
+        ensure_index_device(&input_device, &index.device(), "index_select")?;
+        let index = index
+            .checked_select_indices(input.dims()[dim], false)
+            .map_err(index_error)?;
         self.select_indices(dim, index, "Tensor.index_select")
     }
 
@@ -1678,14 +1684,15 @@ impl PyTensor {
 impl PyTensor {
     fn advanced_getitem(&self, index: &Self) -> PyResult<Self> {
         self.capture_unsupported("Tensor.__getitem__ advanced indexing")?;
-        let size = self.source.value().dims()[0];
+        let input = self.source.value();
+        let size = input.dims()[0];
+        let input_device = input.device();
         let index = match index.source.value() {
             TensorValue::Int(index) if index.rank() == 1 => {
-                if size == 0 && index.dims()[0] == 0 {
-                    index
-                } else {
-                    index.normalize_indices(size).map_err(to_python_error)?
-                }
+                ensure_index_device(&input_device, &index.device(), "advanced indexing")?;
+                index
+                    .checked_select_indices(size, true)
+                    .map_err(index_error)?
             }
             TensorValue::Int(index) => {
                 return Err(PyIndexError::new_err(format!(
@@ -1694,6 +1701,7 @@ impl PyTensor {
                 )));
             }
             TensorValue::Bool(mask) if mask.rank() == 1 && mask.dims()[0] == size => {
+                ensure_index_device(&input_device, &mask.device(), "advanced indexing")?;
                 let coordinates = mask.nonzero();
                 let count = coordinates.dims()[1];
                 if count == 0 {
@@ -1916,6 +1924,19 @@ fn extract_scalar_operand(value: &Bound<'_, PyAny>) -> PyResult<f64> {
     value.extract::<f64>().map_err(|_| {
         PyTypeError::new_err("Tensor arithmetic expects another Tensor or a real number")
     })
+}
+
+fn ensure_index_device(left: &Device, right: &Device, operation: &str) -> PyResult<()> {
+    if left == right {
+        return Ok(());
+    }
+    Err(PyValueError::new_err(format!(
+        "{operation} requires input and index tensors on the same device, got {left:?} and {right:?}"
+    )))
+}
+
+fn index_error(error: tynx_core::TynxError) -> PyErr {
+    PyIndexError::new_err(error.to_string())
 }
 
 /// Select values from two tensor/scalar branches using a boolean tensor condition.

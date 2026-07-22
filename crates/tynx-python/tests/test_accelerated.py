@@ -102,6 +102,17 @@ def test_accelerated_cross_backend_operations_raise_python_exceptions() -> None:
         gpu.to(tynx.Device("cpu"))
     with pytest.raises(NotImplementedError, match="cannot move tensors between backends"):
         cpu.to(device)
+    cpu_index = tynx.Tensor([0], dtype="int64", device=tynx.Device("cpu"))
+    with pytest.raises(ValueError, match="same device"):
+        gpu[cpu_index]
+    with pytest.raises(ValueError, match="same device"):
+        gpu.index_select(0, cpu_index)
+    for value in (2, -3):
+        gpu_index = tynx.Tensor([value], dtype="int64")
+        with pytest.raises(IndexError, match="out of bounds"):
+            gpu[gpu_index]
+        with pytest.raises(IndexError, match="out of bounds"):
+            gpu.index_select(0, gpu_index)
     with (
         tynx.no_grad(),
         pytest.raises(NotImplementedError, match="cannot move tensors between backends"),

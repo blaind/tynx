@@ -97,6 +97,20 @@ def test_out_of_bounds_index_raises() -> None:
     with pytest.raises(IndexError, match="out of bounds"):
         value[[2]]
 
+    for index in (
+        tynx.Tensor([2], dtype="int64"),
+        tynx.Tensor([-3], dtype="int64"),
+    ):
+        with pytest.raises(IndexError, match="out of bounds"):
+            value[index]
+
+    for index in (
+        tynx.Tensor([2], dtype="int64"),
+        tynx.Tensor([-1], dtype="int64"),
+    ):
+        with pytest.raises(IndexError, match="out of bounds"):
+            value.index_select(0, index)
+
 
 def test_advanced_index_validation_is_explicit() -> None:
     value = tynx.Tensor([[1.0, 2.0], [3.0, 4.0]])
