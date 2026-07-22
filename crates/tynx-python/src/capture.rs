@@ -72,6 +72,20 @@ impl CaptureState {
         self.with_builder(|builder| builder.gather(input, dim, indices).map_err(to_python_error))
     }
 
+    fn index_select(
+        &self,
+        input: ValueId,
+        dim: usize,
+        indices: ValueId,
+        allow_negative: bool,
+    ) -> PyResult<ValueId> {
+        self.with_builder(|builder| {
+            builder
+                .index_select(input, dim, indices, allow_negative)
+                .map_err(to_python_error)
+        })
+    }
+
     fn operation(
         &self,
         operation: Rc<dyn CapturedOperation>,
@@ -319,6 +333,37 @@ pub(crate) fn record_gather(
     let indices = index_trace.expect("matched as a traced value").value;
     state
         .gather(input, dim, indices)
+        .map(|value| Some(TraceValue { state, value }))
+}
+
+pub(crate) fn record_index_select(
+    input: &PyTensor,
+    dim: usize,
+    indices: &PyTensor,
+    allow_negative: bool,
+) -> PyResult<Option<TraceValue>> {
+    let input_trace = trace_for(input)?;
+    let index_trace = trace_for(indices)?;
+    let state = match (&input_trace, &index_trace) {
+        (None, None) => return Ok(None),
+        (Some(trace), None) | (None, Some(trace)) => {
+            trace.state.unsupported(
+                "a closed-over Tensor value; pass changing tensors as function inputs",
+            )?;
+            return Ok(None);
+        }
+        (Some(input), Some(index)) if Rc::ptr_eq(&input.state, &index.state) => input.state.clone(),
+        (Some(input), Some(_)) => {
+            input
+                .state
+                .unsupported("tensors from different capture sessions")?;
+            return Ok(None);
+        }
+    };
+    let input = input_trace.expect("matched as a traced value").value;
+    let indices = index_trace.expect("matched as a traced value").value;
+    state
+        .index_select(input, dim, indices, allow_negative)
         .map(|value| Some(TraceValue { state, value }))
 }
 

@@ -8,7 +8,7 @@
 
 use std::{collections::HashSet, fmt::Debug, rc::Rc};
 
-use tynx_core::{DType, Device, Distribution, DynTensor, Result, TynxError, Value};
+use tynx_core::{DType, Device, Distribution, DynTensor, Result, Slice, TynxError, Value};
 use tynx_train::{ParamId, ParameterContract, ParameterSlot, backward_slots};
 
 /// Rust-only optimizer action retained by a captured whole-step program.
@@ -172,6 +172,13 @@ pub enum UnaryOp {
     Expand(Vec<usize>),
     /// Permute all tensor axes.
     Permute(Vec<usize>),
+    /// Slice and reshape using a trace-time basic Python index specification.
+    Slice {
+        /// One normalized slice for each input dimension.
+        slices: Vec<Slice>,
+        /// Binding-visible output shape, including inserted singleton dimensions.
+        output_shape: Vec<usize>,
+    },
     /// Sum selected axes and apply the binding-visible output shape.
     Sum {
         /// Reduced axes.
@@ -238,6 +245,12 @@ enum Node {
         input: ValueId,
         dim: usize,
         indices: ValueId,
+    },
+    IndexSelect {
+        input: ValueId,
+        dim: usize,
+        indices: ValueId,
+        allow_negative: bool,
     },
     Operation {
         operation: Rc<dyn CapturedOperation>,
@@ -359,6 +372,24 @@ impl GraphBuilder {
         }))
     }
 
+    /// Record one-dimensional selection with runtime bounds validation.
+    pub fn index_select(
+        &mut self,
+        input: ValueId,
+        dim: usize,
+        indices: ValueId,
+        allow_negative: bool,
+    ) -> Result<ValueId> {
+        self.require_value(input)?;
+        self.require_value(indices)?;
+        Ok(self.push(Node::IndexSelect {
+            input,
+            dim,
+            indices,
+            allow_negative,
+        }))
+    }
+
     /// Record one native multi-input/multi-output operation.
     pub fn operation(
         &mut self,
@@ -473,6 +504,7 @@ fn node_differentiability(nodes: &[Node]) -> Vec<bool> {
                 _ => differentiable[left.index()] || differentiable[right.index()],
             },
             Node::Gather { input, .. } => differentiable[input.index()],
+            Node::IndexSelect { input, .. } => differentiable[input.index()],
             Node::Operation { inputs, guards, .. } => {
                 inputs.iter().any(|input| differentiable[input.index()])
                     || guards.iter().any(|guard| guard.contract.trainable())
@@ -580,6 +612,17 @@ impl Graph {
                         value(&values, *input)?,
                         *dim,
                         value(&values, *indices)?,
+                    )?)),
+                    Node::IndexSelect {
+                        input,
+                        dim,
+                        indices,
+                        allow_negative,
+                    } => NodeValue::Tensor(Box::new(execute_index_select(
+                        value(&values, *input)?,
+                        *dim,
+                        value(&values, *indices)?,
+                        *allow_negative,
                     )?)),
                     Node::Operation {
                         operation,
@@ -737,6 +780,29 @@ fn execute_unary(op: &UnaryOp, input: Value) -> Result<Value> {
             )),
         };
     }
+    if let UnaryOp::Slice {
+        slices,
+        output_shape,
+    } = op
+    {
+        return match input {
+            Value::Tensor(value) => value
+                .slice(slices)
+                .reshape(output_shape.clone())
+                .map(Value::Tensor),
+            Value::Int(value) => value
+                .slice(slices)
+                .reshape(output_shape.clone())
+                .map(Value::Int),
+            Value::Bool(value) => value
+                .slice(slices)
+                .reshape(output_shape.clone())
+                .map(Value::Bool),
+            Value::Scalar(_) | Value::Shape(_) => Err(TynxError::TypeMismatch(
+                "captured slice requires a device tensor".to_string(),
+            )),
+        };
+    }
     if let UnaryOp::CategoricalSample { seed } = op {
         let logits = input.into_tensor()?.detach();
         let rank = logits.rank();
@@ -794,6 +860,7 @@ fn execute_unary(op: &UnaryOp, input: Value) -> Result<Value> {
         UnaryOp::Reshape(shape) => input.reshape(shape.clone()),
         UnaryOp::Expand(_) => unreachable!("handled before float unary dispatch"),
         UnaryOp::Permute(axes) => input.permute(axes.clone()),
+        UnaryOp::Slice { .. } => unreachable!("handled before float unary dispatch"),
         UnaryOp::Sum { dims, output_shape } => input.sum_dims(dims).reshape(output_shape.clone()),
         UnaryOp::Mean { dims, output_shape } => input.mean_dims(dims).reshape(output_shape.clone()),
         UnaryOp::Dropout(probability) => {
@@ -856,4 +923,36 @@ fn execute_gather(input: Value, dim: usize, indices: Value) -> Result<Value> {
     let input = input.into_tensor()?;
     let indices = indices.into_int()?;
     input.gather(dim, indices).map(Value::Tensor)
+}
+
+fn execute_index_select(
+    input: Value,
+    dim: usize,
+    indices: Value,
+    allow_negative: bool,
+) -> Result<Value> {
+    let indices = indices.into_int()?;
+    let input_shape = match &input {
+        Value::Tensor(value) => value.dims(),
+        Value::Int(value) => value.dims(),
+        Value::Bool(value) => value.dims(),
+        Value::Scalar(_) | Value::Shape(_) => {
+            return Err(TynxError::TypeMismatch(
+                "captured index_select requires a device tensor".to_string(),
+            ));
+        }
+    };
+    let size = input_shape.get(dim).copied().ok_or_else(|| {
+        TynxError::Shape(format!(
+            "captured index_select axis {dim} is out of range for rank {}",
+            input_shape.len()
+        ))
+    })?;
+    let indices = indices.checked_select_indices(size, allow_negative)?;
+    match input {
+        Value::Tensor(value) => value.select(dim, indices).map(Value::Tensor),
+        Value::Int(value) => value.select(dim, indices).map(Value::Int),
+        Value::Bool(value) => value.select(dim, indices).map(Value::Bool),
+        Value::Scalar(_) | Value::Shape(_) => unreachable!("input kind was validated above"),
+    }
 }

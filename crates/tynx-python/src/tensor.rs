@@ -27,7 +27,8 @@ use tynx_train::ParameterSlot;
 
 use crate::{
     capture::{
-        TraceValue, record_backward, record_binary, record_gather, record_unary, record_unsupported,
+        TraceValue, record_backward, record_binary, record_gather, record_index_select,
+        record_unary, record_unsupported,
     },
     device::{PyDevice, ensure_autodiff, raise_pending_device_error},
     grad_mode::is_grad_enabled,
@@ -811,36 +812,41 @@ impl PyTensor {
                 DynInt::from_data(TensorData::new(values, [count]), 1, &value.device())
             }
             .map_err(to_python_error)?;
-            return self.select_indices(0, index, "Tensor.__getitem__");
+            return self.select_indices(0, index, "Tensor.__getitem__", None);
         }
-        self.capture_unsupported("Tensor.__getitem__ indexing")?;
         let value = self.source.value();
         let spec = indexing::basic_index(key, &value.dims())?;
+        let capture_op = UnaryOp::Slice {
+            slices: spec.slices.clone(),
+            output_shape: spec.output_shape.clone(),
+        };
         let tracking = is_grad_enabled();
-        match value {
+        let mut output = match value {
             TensorValue::Float(_) => {
                 let output = self
                     .operation_input(tracking, "Tensor.__getitem__")?
                     .slice(&spec.slices)
-                    .reshape(spec.output_shape)
+                    .reshape(spec.output_shape.clone())
                     .map_err(to_python_error)?;
                 if tracking {
-                    Ok(Self::from_operation(output, &[self]))
+                    Self::from_operation(output, &[self])
                 } else {
-                    Ok(Self::from_inner(output))
+                    Self::from_inner(output)
                 }
             }
             TensorValue::Int(value) => value
                 .slice(&spec.slices)
-                .reshape(spec.output_shape)
+                .reshape(spec.output_shape.clone())
                 .map(Self::from_int_inner)
-                .map_err(to_python_error),
+                .map_err(to_python_error)?,
             TensorValue::Bool(value) => value
                 .slice(&spec.slices)
                 .reshape(spec.output_shape)
                 .map(|value| Self::from_value(TensorValue::Bool(value)))
-                .map_err(to_python_error),
-        }
+                .map_err(to_python_error)?,
+        };
+        output.trace = record_unary(self, capture_op)?;
+        Ok(output)
     }
 
     /// Split into ordinary tensor results along one dimension.
@@ -1422,7 +1428,7 @@ impl PyTensor {
         let dim = shape::axis_value(dim, self.ndim(), false, "index_select")?;
         let input = self.source.value();
         let input_device = input.device();
-        let index = match index.source.value() {
+        let checked_index = match index.source.value() {
             TensorValue::Int(index) if index.rank() == 1 => index,
             TensorValue::Int(index) => {
                 return Err(PyValueError::new_err(format!(
@@ -1437,11 +1443,16 @@ impl PyTensor {
                 )));
             }
         };
-        ensure_index_device(&input_device, &index.device(), "index_select")?;
-        let index = index
+        ensure_index_device(&input_device, &checked_index.device(), "index_select")?;
+        let checked_index = checked_index
             .checked_select_indices(input.dims()[dim], false)
             .map_err(index_error)?;
-        self.select_indices(dim, index, "Tensor.index_select")
+        self.select_indices(
+            dim,
+            checked_index,
+            "Tensor.index_select",
+            Some((&index, false)),
+        )
     }
 
     fn __add__(&self, other: &Bound<'_, PyAny>) -> PyResult<Self> {
@@ -1682,17 +1693,19 @@ impl PyTensor {
 }
 
 impl PyTensor {
-    fn advanced_getitem(&self, index: &Self) -> PyResult<Self> {
-        self.capture_unsupported("Tensor.__getitem__ advanced indexing")?;
+    fn advanced_getitem(&self, index_tensor: &Self) -> PyResult<Self> {
         let input = self.source.value();
         let size = input.dims()[0];
         let input_device = input.device();
-        let index = match index.source.value() {
+        let (index, trace_index) = match index_tensor.source.value() {
             TensorValue::Int(index) if index.rank() == 1 => {
                 ensure_index_device(&input_device, &index.device(), "advanced indexing")?;
-                index
-                    .checked_select_indices(size, true)
-                    .map_err(index_error)?
+                (
+                    index
+                        .checked_select_indices(size, true)
+                        .map_err(index_error)?,
+                    Some((index_tensor, true)),
+                )
             }
             TensorValue::Int(index) => {
                 return Err(PyIndexError::new_err(format!(
@@ -1701,15 +1714,17 @@ impl PyTensor {
                 )));
             }
             TensorValue::Bool(mask) if mask.rank() == 1 && mask.dims()[0] == size => {
+                self.capture_unsupported("boolean advanced indexing with a dynamic output shape")?;
                 ensure_index_device(&input_device, &mask.device(), "advanced indexing")?;
                 let coordinates = mask.nonzero();
                 let count = coordinates.dims()[1];
-                if count == 0 {
+                let indices = if count == 0 {
                     DynInt::empty(&[0], &coordinates.device(), tynx_core::DType::I64)
                         .map_err(to_python_error)?
                 } else {
                     coordinates.reshape(vec![count]).map_err(to_python_error)?
-                }
+                };
+                (indices, None)
             }
             TensorValue::Bool(mask) if mask.rank() != 1 => {
                 return Err(PyIndexError::new_err(format!(
@@ -1730,33 +1745,42 @@ impl PyTensor {
                 )));
             }
         };
-        self.select_indices(0, index, "Tensor.__getitem__")
+        self.select_indices(0, index, "Tensor.__getitem__", trace_index)
     }
 
-    fn select_indices(&self, dim: usize, index: DynInt, operation: &str) -> PyResult<Self> {
-        self.capture_unsupported(operation)?;
+    fn select_indices(
+        &self,
+        dim: usize,
+        index: DynInt,
+        operation: &str,
+        trace_index: Option<(&Self, bool)>,
+    ) -> PyResult<Self> {
         let tracking = is_grad_enabled();
-        match self.source.value() {
+        let mut output = match self.source.value() {
             TensorValue::Float(_) => {
                 let output = self
                     .operation_input(tracking, operation)?
                     .select(dim, index)
                     .map_err(to_python_error)?;
                 if tracking {
-                    Ok(Self::from_operation(output, &[self]))
+                    Self::from_operation(output, &[self])
                 } else {
-                    Ok(Self::from_inner(output))
+                    Self::from_inner(output)
                 }
             }
             TensorValue::Int(value) => value
                 .select(dim, index)
                 .map(Self::from_int_inner)
-                .map_err(to_python_error),
+                .map_err(to_python_error)?,
             TensorValue::Bool(value) => value
                 .select(dim, index)
                 .map(|value| Self::from_value(TensorValue::Bool(value)))
-                .map_err(to_python_error),
+                .map_err(to_python_error)?,
+        };
+        if let Some((index, allow_negative)) = trace_index {
+            output.trace = record_index_select(self, dim, index, allow_negative)?;
         }
+        Ok(output)
     }
 
     fn ordered(&self, dim: usize, descending: bool, k: Option<usize>) -> PyResult<(Self, Self)> {

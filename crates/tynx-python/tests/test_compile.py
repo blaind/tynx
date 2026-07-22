@@ -102,6 +102,92 @@ def test_compile_replays_integer_index_gather_and_gradient() -> None:
     assert select.replay_count == 1
 
 
+def test_compile_replays_basic_slicing_and_gradient() -> None:
+    calls = 0
+
+    @tynx.compile(fullgraph=True)
+    def select(input: tynx.Tensor) -> tynx.Tensor:
+        nonlocal calls
+        calls += 1
+        return input[::-1, None, 1:]
+
+    first = select(tynx.Tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]))
+    assert first.shape == (2, 1, 2)
+    assert first.tolist() == [[[5.0, 6.0]], [[2.0, 3.0]]]
+
+    second_input = tynx.Tensor([[7.0, 8.0, 9.0], [10.0, 11.0, 12.0]], requires_grad=True)
+    second = select(second_input)
+    second.sum().backward()
+
+    assert second.tolist() == [[[11.0, 12.0]], [[8.0, 9.0]]]
+    assert second_input.grad is not None
+    assert second_input.grad.tolist() == [[0.0, 1.0, 1.0], [0.0, 1.0, 1.0]]
+    assert calls == 1
+    assert select.replay_count == 1
+
+
+def test_compile_replays_index_select_with_runtime_indices() -> None:
+    calls = 0
+
+    @tynx.compile(fullgraph=True)
+    def select(input: tynx.Tensor, index: tynx.Tensor) -> tynx.Tensor:
+        nonlocal calls
+        calls += 1
+        return input.index_select(0, index)
+
+    first = select(
+        tynx.Tensor([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]),
+        tynx.Tensor([2, 0], dtype="int64"),
+    )
+    assert first.tolist() == [[5.0, 6.0], [1.0, 2.0]]
+
+    second_input = tynx.Tensor([[7.0, 8.0], [9.0, 10.0], [11.0, 12.0]], requires_grad=True)
+    second = select(second_input, tynx.Tensor([1, 1], dtype="int64"))
+    second.sum().backward()
+
+    assert second.tolist() == [[9.0, 10.0], [9.0, 10.0]]
+    assert second_input.grad is not None
+    assert second_input.grad.tolist() == [[0.0, 0.0], [2.0, 2.0], [0.0, 0.0]]
+    assert calls == 1
+    assert select.replay_count == 1
+    with pytest.raises(ValueError, match="out of bounds"):
+        select(second_input, tynx.Tensor([3, 0], dtype="int64"))
+    assert calls == 1
+
+
+def test_compile_replays_negative_advanced_integer_indices() -> None:
+    calls = 0
+
+    @tynx.compile(fullgraph=True)
+    def select(input: tynx.Tensor, index: tynx.Tensor) -> tynx.Tensor:
+        nonlocal calls
+        calls += 1
+        return input[index]
+
+    assert select(
+        tynx.Tensor([[1.0], [2.0], [3.0]]),
+        tynx.Tensor([-1, 0], dtype="int64"),
+    ).tolist() == [[3.0], [1.0]]
+    assert select(
+        tynx.Tensor([[4.0], [5.0], [6.0]]),
+        tynx.Tensor([-2, -2], dtype="int64"),
+    ).tolist() == [[5.0], [5.0]]
+    assert calls == 1
+    assert select.replay_count == 1
+
+
+def test_fullgraph_rejects_dynamic_boolean_indexing() -> None:
+    @tynx.compile(fullgraph=True)
+    def select(input: tynx.Tensor, mask: tynx.Tensor) -> tynx.Tensor:
+        return input[mask]
+
+    with pytest.raises(RuntimeError, match="dynamic output shape"):
+        select(
+            tynx.Tensor([[1.0], [2.0]]),
+            tynx.Tensor([True, False], dtype="bool"),
+        )
+
+
 def test_compile_replays_ppo_math_primitives() -> None:
     calls = 0
 
