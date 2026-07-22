@@ -611,3 +611,45 @@ def test_whole_step_checkpoint_resumes_exactly(tmp_path: Path) -> None:
     assert resumed_loss.item() == pytest.approx(expected_loss, abs=1.0e-6)
     for name, value in resumed.state_dict().items():
         assert value.flatten().tolist() == pytest.approx(expected_state[name].flatten().tolist())
+
+
+def test_compile_descriptor_binds_module_methods() -> None:
+    class Scale(tynx.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.weight = tynx.Parameter([2.0], name="weight")
+
+        @tynx.compile
+        def forward(self, input: tynx.Tensor) -> tynx.Tensor:
+            return input * self.weight
+
+    model = Scale()
+
+    assert model(tynx.Tensor([3.0])).tolist() == pytest.approx([6.0])
+    assert model(tynx.Tensor([4.0])).tolist() == pytest.approx([8.0])
+    assert model.forward.compile_count == 1
+    assert model.forward.replay_count == 1
+
+
+def test_compile_descriptor_fallback_is_isolated_per_instance() -> None:
+    class MaybeRead(tynx.nn.Module):
+        def __init__(self, read_on_host: bool) -> None:
+            super().__init__()
+            self.read_on_host = read_on_host
+
+        @tynx.compile
+        def forward(self, input: tynx.Tensor) -> tynx.Tensor:
+            if self.read_on_host:
+                input.item()
+            return input.relu()
+
+    eager = MaybeRead(True)
+    captured = MaybeRead(False)
+
+    with pytest.warns(RuntimeWarning, match="fell back to eager"):
+        eager(tynx.Tensor([-1.0]))
+    assert captured(tynx.Tensor([-1.0])).tolist() == pytest.approx([0.0])
+    assert captured(tynx.Tensor([2.0])).tolist() == pytest.approx([2.0])
+    assert eager.forward.fallback_count == 1
+    assert captured.forward.compile_count == 1
+    assert captured.forward.replay_count == 1
