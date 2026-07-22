@@ -15,6 +15,9 @@ Rust, Python, and the browser.
   requirement.
 - **ONNX models are trainable objects.** Load a model exported from PyTorch or anywhere else and
   fine-tune it in place; the train-here / deploy-there split disappears.
+- **For models that keep learning after deployment.** RL policies, on-device personalization,
+  and fine-tuning behind the firewall, with training and inference on the same weights in the
+  same process.
 
 ```python
 import tynx as tx
@@ -40,10 +43,9 @@ cargo add tynx -F training  # Rust: + autodiff, parameters, optimizers
 ## Backends
 
 The interpreter is backend-agnostic and executes through a Burn device. Flex, an optimized CPU
-backend, is enabled by default and also works on `wasm32-unknown-unknown`.
-
-WGPU/WebGPU, browser WebGPU, Vulkan, and CUDA feature wiring is being carried over and is not part
-of the current default build.
+backend, is enabled by default and also works on `wasm32-unknown-unknown`. GPU execution is
+available behind feature flags: `wgpu` (Vulkan / Metal / DX12) and `vulkan` (wgpu with the
+SPIR-V fast path).
 
 ## Relationship to Burn
 
