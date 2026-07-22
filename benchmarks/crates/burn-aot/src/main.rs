@@ -11,6 +11,17 @@ mod sign {
 mod matmul64 {
     include!(concat!(env!("OUT_DIR"), "/model/matmul64.rs"));
 }
+#[allow(dead_code)]
+mod matmul_dynamic {
+    include!(concat!(env!("OUT_DIR"), "/model/matmul_dynamic.rs"));
+}
+#[allow(dead_code)]
+mod matmul_add_relu_dynamic {
+    include!(concat!(
+        env!("OUT_DIR"),
+        "/model/matmul_add_relu_dynamic.rs"
+    ));
+}
 
 fn main() -> BenchResult<()> {
     require_release()?;
@@ -19,7 +30,9 @@ fn main() -> BenchResult<()> {
 
     match case.id.as_str() {
         "sign-11" => run_sign(case, backend, device, device_name),
-        "matmul-64x64" => run_matmul(case, backend, device, device_name),
+        "matmul-64x64" => run_matmul64(case, backend, device, device_name),
+        "matmul-256x256" => run_matmul_dynamic(case, backend, device, device_name),
+        "matmul-add-relu-256x256" => run_matmul_add_relu(case, backend, device, device_name),
         id => Err(format!("burn AOT runner does not embed case '{id}'").into()),
     }
 }
@@ -57,12 +70,45 @@ fn run_sign(
     print_report(&report)
 }
 
-fn run_matmul(
+fn run_matmul64(
     case: tynx_bench_protocol::Case,
     backend: &str,
     device: Device,
     device_name: Option<String>,
 ) -> BenchResult<()> {
+    let started = Instant::now();
+    let model = matmul64::Model::new(&device);
+    let load_ms = started.elapsed().as_secs_f64() * 1_000.0;
+    run_matmul(case, backend, device, device_name, load_ms, |lhs, rhs| {
+        model.forward(lhs, rhs)
+    })
+}
+
+fn run_matmul_dynamic(
+    case: tynx_bench_protocol::Case,
+    backend: &str,
+    device: Device,
+    device_name: Option<String>,
+) -> BenchResult<()> {
+    let started = Instant::now();
+    let model = matmul_dynamic::Model::new(&device);
+    let load_ms = started.elapsed().as_secs_f64() * 1_000.0;
+    run_matmul(case, backend, device, device_name, load_ms, |lhs, rhs| {
+        model.forward(lhs, rhs)
+    })
+}
+
+fn run_matmul<F>(
+    case: tynx_bench_protocol::Case,
+    backend: &str,
+    device: Device,
+    device_name: Option<String>,
+    load_ms: f64,
+    mut forward: F,
+) -> BenchResult<()>
+where
+    F: FnMut(Tensor<2>, Tensor<2>) -> Tensor<2>,
+{
     let [lhs, rhs] = case.inputs.as_slice() else {
         return Err("the MatMul AOT model expects two inputs".into());
     };
@@ -70,8 +116,45 @@ fn run_matmul(
         return Err("the MatMul AOT model expects rank-2 inputs".into());
     }
 
+    let report = measure(
+        "burn-onnx-aot",
+        backend,
+        device_name,
+        load_ms,
+        &case,
+        || {
+            let lhs = Tensor::<2>::from_data(
+                TensorData::new(lhs.values.clone(), lhs.shape.clone()),
+                &device,
+            );
+            let rhs = Tensor::<2>::from_data(
+                TensorData::new(rhs.values.clone(), rhs.shape.clone()),
+                &device,
+            );
+            let output = forward(lhs, rhs).into_data();
+            Ok(output.convert::<f32>().to_vec::<f32>()?)
+        },
+    )?;
+    print_report(&report)
+}
+
+fn run_matmul_add_relu(
+    case: tynx_bench_protocol::Case,
+    backend: &str,
+    device: Device,
+    device_name: Option<String>,
+) -> BenchResult<()> {
+    let [lhs, rhs, bias] = case.inputs.as_slice() else {
+        return Err("the MatMul-Add-ReLU AOT model expects three inputs".into());
+    };
+    if lhs.shape.len() != 2 || rhs.shape.len() != 2 || bias.shape.len() != 1 {
+        return Err(
+            "the MatMul-Add-ReLU AOT model expects rank-2, rank-2, and rank-1 inputs".into(),
+        );
+    }
+
     let started = Instant::now();
-    let model = matmul64::Model::new(&device);
+    let model = matmul_add_relu_dynamic::Model::new(&device);
     let load_ms = started.elapsed().as_secs_f64() * 1_000.0;
 
     let report = measure(
@@ -89,7 +172,11 @@ fn run_matmul(
                 TensorData::new(rhs.values.clone(), rhs.shape.clone()),
                 &device,
             );
-            let output = model.forward(lhs, rhs).into_data();
+            let bias = Tensor::<1>::from_data(
+                TensorData::new(bias.values.clone(), bias.shape.clone()),
+                &device,
+            );
+            let output = model.forward(lhs, rhs, bias).into_data();
             Ok(output.convert::<f32>().to_vec::<f32>()?)
         },
     )?;

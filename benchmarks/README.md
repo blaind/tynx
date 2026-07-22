@@ -6,9 +6,17 @@ This standalone Rust workspace compares the same ONNX model and input across:
 - ONNX Runtime
 - burn-onnx ahead-of-time generated Rust
 
-The `sign-11` case is intentionally tiny. It proves the shared protocol, output validation, backend
-selection, and JSON reporting. The `matmul-64x64` case exercises two runtime inputs and enough work
-to expose more than dispatch overhead, but larger models are still needed for system-level claims.
+The registry starts with four workloads:
+
+| Case | Purpose |
+| --- | --- |
+| `sign-11` | Protocol and dispatch baseline |
+| `matmul-64x64` | Small two-input matrix operation |
+| `matmul-256x256` | Compute-heavy dynamic-shape matrix operation |
+| `matmul-add-relu-256x256` | Small multi-op graph with broadcast input |
+
+These cases cover harness correctness and basic scaling. Larger representative models are still
+needed before drawing system-level performance conclusions.
 
 ## CPU
 
@@ -20,8 +28,8 @@ cargo run --manifest-path benchmarks/Cargo.toml --locked --release -p burn-aot-b
 
 ORT downloads its official CPU binary for the default configuration.
 
-Select the MatMul case by setting `TYNX_BENCH_CASE=matmul-64x64` for any runner. The manual GitHub
-workflow runs both registered cases and uploads their JSON reports.
+Select a case by setting `TYNX_BENCH_CASE` for any runner. The manual GitHub workflow runs every
+registered case and uploads its JSON reports.
 
 ## GPU
 

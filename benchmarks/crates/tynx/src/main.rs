@@ -29,8 +29,15 @@ fn main() -> BenchResult<()> {
     let report = measure("tynx", backend, device_name.clone(), load_ms, &case, || {
         let mut inputs = Env::new();
         for (model_input, input) in session.inputs().iter().zip(&case.inputs) {
+            if model_input.name != input.name {
+                return Err(format!(
+                    "model input '{}' does not match case input '{}'",
+                    model_input.name, input.name
+                )
+                .into());
+            }
             inputs.insert(
-                model_input.name.clone(),
+                input.name.clone(),
                 Value::from_tensor_data(
                     TensorData::new(input.values.clone(), input.shape.clone()),
                     input.shape.len(),
