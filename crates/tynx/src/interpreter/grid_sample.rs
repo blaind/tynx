@@ -1,7 +1,7 @@
 //! ONNX GridSample execution.
 
 use burn::tensor::{
-    Device, Slice, Tensor,
+    Device, Slice, Tensor, TensorData,
     ops::{GridSampleOptions, GridSamplePaddingMode as BurnPaddingMode, InterpolateMode},
 };
 use onnx_ir::node::grid_sample::{
@@ -50,6 +50,16 @@ pub(super) fn grid_sample(node: &GridSampleNode, env: &Env, device: &Device) -> 
         )));
     }
 
+    if matches!(node.config.mode, GridSampleMode::Bicubic) {
+        return Ok(vec![Value::Tensor(bicubic_grid_sample(
+            input,
+            grid,
+            &node.config.padding_mode,
+            node.config.align_corners,
+            device,
+        )?)]);
+    }
+
     let (mode, grid) = match node.config.mode {
         GridSampleMode::Bilinear => (InterpolateMode::Bilinear, grid),
         GridSampleMode::Nearest => (
@@ -63,7 +73,7 @@ pub(super) fn grid_sample(node: &GridSampleNode, env: &Env, device: &Device) -> 
         ),
         GridSampleMode::Bicubic => {
             return Err(TynxError::UnsupportedOp(
-                "GridSample bicubic interpolation".to_string(),
+                "GridSample bicubic dispatch invariant".to_string(),
             ));
         }
     };
@@ -79,6 +89,148 @@ pub(super) fn grid_sample(node: &GridSampleNode, env: &Env, device: &Device) -> 
     Ok(vec![Value::Tensor(DynTensor::R4(
         input.grid_sample_2d(grid, options),
     ))])
+}
+
+fn bicubic_grid_sample(
+    input: Tensor<4>,
+    grid: Tensor<4>,
+    padding: &OnnxPaddingMode,
+    align_corners: bool,
+    device: &Device,
+) -> Result<DynTensor> {
+    let [batch, channels, input_height, input_width] = input.dims();
+    let [_, output_height, output_width, _] = grid.dims();
+    if input_height == 0 || input_width == 0 {
+        return Err(TynxError::Shape(
+            "GridSample input spatial dimensions must be positive".into(),
+        ));
+    }
+    let dtype = input.dtype();
+    let input = input.into_data().iter::<f64>().collect::<Vec<_>>();
+    let grid = grid.into_data().iter::<f64>().collect::<Vec<_>>();
+    let mut output = Vec::with_capacity(batch * channels * output_height * output_width);
+
+    for n in 0..batch {
+        for c in 0..channels {
+            for output_y in 0..output_height {
+                for output_x in 0..output_width {
+                    let grid_offset =
+                        ((n * output_height + output_y) * output_width + output_x) * 2;
+                    let source_x = denormalize(grid[grid_offset], input_width, align_corners);
+                    let source_y = denormalize(grid[grid_offset + 1], input_height, align_corners);
+                    let base_x = source_x.floor() as i64;
+                    let base_y = source_y.floor() as i64;
+                    let mut value = 0.0;
+
+                    for y_tap in -1..=2 {
+                        let y = base_y + y_tap;
+                        let y_weight = cubic_weight(source_y - y as f64);
+                        for x_tap in -1..=2 {
+                            let x = base_x + x_tap;
+                            let x_weight = cubic_weight(source_x - x as f64);
+                            value += sample_value(
+                                &input,
+                                n,
+                                c,
+                                y,
+                                x,
+                                [channels, input_height, input_width],
+                                padding,
+                                align_corners,
+                            ) * y_weight
+                                * x_weight;
+                        }
+                    }
+                    output.push(value);
+                }
+            }
+        }
+    }
+
+    Ok(DynTensor::from_data(
+        TensorData::new(output, [batch, channels, output_height, output_width]),
+        4,
+        device,
+    )?
+    .cast(dtype))
+}
+
+fn denormalize(coordinate: f64, size: usize, align_corners: bool) -> f64 {
+    if align_corners {
+        (coordinate + 1.0) * (size.saturating_sub(1)) as f64 / 2.0
+    } else {
+        ((coordinate + 1.0) * size as f64 - 1.0) / 2.0
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn sample_value(
+    input: &[f64],
+    batch: usize,
+    channel: usize,
+    y: i64,
+    x: i64,
+    dims: [usize; 3],
+    padding: &OnnxPaddingMode,
+    align_corners: bool,
+) -> f64 {
+    let [channels, height, width] = dims;
+    let Some(y) = padded_index(y, height, padding, align_corners) else {
+        return 0.0;
+    };
+    let Some(x) = padded_index(x, width, padding, align_corners) else {
+        return 0.0;
+    };
+    input[((batch * channels + channel) * height + y) * width + x]
+}
+
+fn padded_index(
+    index: i64,
+    size: usize,
+    padding: &OnnxPaddingMode,
+    align_corners: bool,
+) -> Option<usize> {
+    match padding {
+        OnnxPaddingMode::Zeros => usize::try_from(index).ok().filter(|index| *index < size),
+        OnnxPaddingMode::Border => Some(index.clamp(0, size as i64 - 1) as usize),
+        OnnxPaddingMode::Reflection => {
+            let (low, high) = if align_corners {
+                (0.0, size.saturating_sub(1) as f64)
+            } else {
+                (-0.5, size as f64 - 0.5)
+            };
+            Some(reflect(index as f64, low, high).clamp(0.0, (size - 1) as f64) as usize)
+        }
+    }
+}
+
+fn reflect(coordinate: f64, low: f64, high: f64) -> f64 {
+    let span = high - low;
+    if span == 0.0 {
+        return 0.0;
+    }
+    let distance = (coordinate - low).abs();
+    let flips = (distance / span).floor() as i64;
+    let remainder = distance - flips as f64 * span;
+    if flips % 2 == 0 {
+        low + remainder
+    } else {
+        high - remainder
+    }
+}
+
+fn cubic_weight(distance: f64) -> f64 {
+    const COEFFICIENT: f64 = -0.75;
+    let distance = distance.abs();
+    if distance <= 1.0 {
+        (COEFFICIENT + 2.0) * distance.powi(3) - (COEFFICIENT + 3.0) * distance.powi(2) + 1.0
+    } else if distance < 2.0 {
+        COEFFICIENT * distance.powi(3) - 5.0 * COEFFICIENT * distance.powi(2)
+            + 8.0 * COEFFICIENT * distance
+            - 4.0 * COEFFICIENT
+    } else {
+        0.0
+    }
 }
 
 fn nearest_ties_to_even_grid(
@@ -229,14 +381,15 @@ mod tests {
     }
 
     #[test]
-    fn rejects_bicubic_without_panicking() {
+    fn samples_a_bicubic_integer_coordinate() {
         let node = GridSampleNodeBuilder::new("grid_sample")
             .input_tensor("x", 4, DType::F32)
             .input_tensor("grid", 4, DType::F32)
             .output_tensor("y", 4, DType::F32)
             .config(GridSampleConfig {
                 mode: GridSampleMode::Bicubic,
-                ..Default::default()
+                padding_mode: OnnxPaddingMode::Border,
+                align_corners: true,
             })
             .build();
         let device = Device::default();
@@ -252,11 +405,16 @@ mod tests {
                 .unwrap(),
         );
 
-        let error = grid_sample(&node, &env, &device).unwrap_err();
+        let output = grid_sample(&node, &env, &device)
+            .unwrap()
+            .pop()
+            .unwrap()
+            .into_tensor()
+            .unwrap()
+            .into_data()
+            .iter::<f32>()
+            .collect::<Vec<_>>();
 
-        assert_eq!(
-            error,
-            TynxError::UnsupportedOp("GridSample bicubic interpolation".to_string())
-        );
+        assert_eq!(output, [1.0]);
     }
 }
