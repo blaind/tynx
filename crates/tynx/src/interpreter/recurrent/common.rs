@@ -31,7 +31,7 @@ pub(super) fn optional_rank2(
     let Some(input) = inputs.get(index).filter(|input| !input.is_optional()) else {
         return Ok(None);
     };
-    match resolve::input(env, input, device)?.into_tensor()? {
+    match resolve::input_at(env, input, index, device)?.into_tensor()? {
         DynTensor::R2(tensor) => Ok(Some(tensor)),
         tensor => Err(TynxError::Shape(format!(
             "recurrent input {index} must have rank 2, got rank {}",
@@ -49,7 +49,7 @@ pub(super) fn optional_rank3(
     let Some(input) = inputs.get(index).filter(|input| !input.is_optional()) else {
         return Ok(None);
     };
-    match resolve::input(env, input, device)?.into_tensor()? {
+    match resolve::input_at(env, input, index, device)?.into_tensor()? {
         DynTensor::R3(tensor) => Ok(Some(tensor)),
         tensor => Err(TynxError::Shape(format!(
             "recurrent input {index} must have rank 3, got rank {}",
@@ -68,7 +68,7 @@ pub(super) fn sequence_lengths(
     let Some(input) = inputs.get(4).filter(|input| !input.is_optional()) else {
         return Ok(None);
     };
-    let raw = match resolve::input(env, input, device)? {
+    let raw = match resolve::input_at(env, input, 4, device)? {
         Value::Int(tensor) => tensor.into_data().iter::<i64>().collect(),
         Value::Shape(values) => values,
         Value::Scalar(Scalar::I64(value)) => vec![value],

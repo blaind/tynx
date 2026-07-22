@@ -10,7 +10,8 @@ pub(super) fn concat(node: &ConcatNode, env: &Env, device: &Device) -> Result<Ve
     let values = node
         .inputs
         .iter()
-        .map(|input| resolve::input(env, input, device))
+        .enumerate()
+        .map(|(index, input)| resolve::input_at(env, input, index, device))
         .collect::<Result<Vec<_>>>()?;
 
     if matches!(
