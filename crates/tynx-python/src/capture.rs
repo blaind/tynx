@@ -7,7 +7,7 @@ use std::{
 };
 
 use pyo3::{exceptions::PyRuntimeError, prelude::*, types::PyTuple};
-use tynx_capture::{BinaryOp, Graph, GraphBuilder, UnaryOp, ValueId};
+use tynx_capture::{BinaryOp, CapturedOptimizer, Graph, GraphBuilder, UnaryOp, ValueId};
 use tynx_train::{ParamId, ParameterSlot};
 
 use crate::{grad_mode::is_grad_enabled, tensor::PyTensor, to_python_error};
@@ -64,6 +64,24 @@ impl CaptureState {
 
     fn binary(&self, op: BinaryOp, left: ValueId, right: ValueId) -> PyResult<ValueId> {
         self.with_builder(|builder| builder.binary(op, left, right).map_err(to_python_error))
+    }
+
+    fn zero_grad(&self, parameters: Vec<ParameterSlot>) -> PyResult<()> {
+        self.with_builder(|builder| {
+            builder.zero_grad(parameters);
+            Ok(())
+        })
+    }
+
+    fn backward(&self, loss: ValueId, parameters: Vec<ParameterSlot>) -> PyResult<()> {
+        self.with_builder(|builder| builder.backward(loss, parameters).map_err(to_python_error))
+    }
+
+    fn optimizer_step(&self, optimizer: Rc<dyn CapturedOptimizer>) -> PyResult<()> {
+        self.with_builder(|builder| {
+            builder.optimizer_step(optimizer);
+            Ok(())
+        })
     }
 
     fn with_builder<T>(
@@ -186,6 +204,33 @@ pub(crate) fn record_unary(tensor: &PyTensor, op: UnaryOp) -> PyResult<Option<Tr
 pub(crate) fn record_unsupported(tensor: &PyTensor, reason: &str) -> PyResult<()> {
     if let Some(trace) = trace_for(tensor)? {
         trace.unsupported(reason)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn record_zero_grad(parameters: &[ParameterSlot]) -> PyResult<()> {
+    if let Some(state) = active() {
+        state.zero_grad(parameters.to_vec())?;
+    }
+    Ok(())
+}
+
+pub(crate) fn record_backward(loss: &PyTensor, parameters: Vec<ParameterSlot>) -> PyResult<()> {
+    let Some(active) = active() else {
+        return Ok(());
+    };
+    let Some(trace) = trace_for(loss)? else {
+        return active.unsupported("backward from a loss disconnected from captured inputs");
+    };
+    if !Rc::ptr_eq(&active, &trace.state) {
+        return active.unsupported("backward from another capture session");
+    }
+    active.backward(trace.value, parameters)
+}
+
+pub(crate) fn record_optimizer_step(optimizer: Rc<dyn CapturedOptimizer>) -> PyResult<()> {
+    if let Some(state) = active() {
+        state.optimizer_step(optimizer)?;
     }
     Ok(())
 }

@@ -24,7 +24,7 @@ use tynx_core::{Device, DynInt, DynTensor, Gradients};
 use tynx_train::ParameterSlot;
 
 use crate::{
-    capture::{TraceValue, record_binary, record_unary, record_unsupported},
+    capture::{TraceValue, record_backward, record_binary, record_unary, record_unsupported},
     device::{PyDevice, raise_pending_device_error},
     grad_mode::is_grad_enabled,
     to_python_error,
@@ -686,6 +686,19 @@ impl PyTensor {
     /// Run reverse-mode autodiff, optionally seeded by a matching tensor.
     #[pyo3(signature = (gradient=None))]
     fn backward(&self, gradient: Option<PyRef<'_, Self>>) -> PyResult<()> {
+        if gradient.is_some() {
+            self.capture_unsupported("backward with an explicit gradient")?;
+        } else {
+            let parameters = self
+                .targets
+                .iter()
+                .filter_map(|target| match target {
+                    GradTarget::Parameter(parameter) => Some(parameter.clone()),
+                    GradTarget::Tensor(_) => None,
+                })
+                .collect();
+            record_backward(self, parameters)?;
+        }
         if gradient.is_none() && self.numel() != 1 {
             return Err(PyValueError::new_err(format!(
                 "backward() without an explicit gradient requires a one-element tensor, got shape {:?}",

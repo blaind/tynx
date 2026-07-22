@@ -4,14 +4,21 @@ mod adam;
 mod parameters;
 mod state;
 
+use std::{cell::RefCell, rc::Rc};
+
 use pyo3::{
     exceptions::PyValueError,
     prelude::*,
     types::{PyAny, PyDict},
 };
+use tynx_capture::CapturedOptimizer;
+use tynx_core::Result;
 use tynx_train::{ParameterSlot, ParameterStore, Sgd, SgdConfig};
 
-use crate::to_python_error;
+use crate::{
+    capture::{record_optimizer_step, record_zero_grad},
+    to_python_error,
+};
 pub(crate) use parameters::collect_parameters;
 
 pub(crate) use adam::{PyAdam, PyAdamW};
@@ -19,7 +26,7 @@ pub(crate) use adam::{PyAdam, PyAdamW};
 /// Stochastic gradient descent over an explicit, stable parameter list.
 #[pyclass(name = "SGD", unsendable)]
 pub(crate) struct PySgd {
-    inner: Sgd,
+    inner: Rc<RefCell<Sgd>>,
     parameters: Vec<ParameterSlot>,
     named_parameters: Option<ParameterStore>,
 }
@@ -44,20 +51,27 @@ impl PySgd {
             .with_nesterov(nesterov);
         let inner = Sgd::with_config(config).map_err(to_python_error)?;
         Ok(Self {
-            inner,
+            inner: Rc::new(RefCell::new(inner)),
             parameters: collected.slots,
             named_parameters: collected.named,
         })
     }
 
     /// Clear every managed parameter's persistent gradient.
-    fn zero_grad(&self) {
+    fn zero_grad(&self) -> PyResult<()> {
+        record_zero_grad(&self.parameters)?;
         zero_grad(&self.parameters);
+        Ok(())
     }
 
     /// Apply one serialized off-tape update without clearing gradients.
     fn step(&mut self) -> PyResult<()> {
+        record_optimizer_step(Rc::new(CapturedSgd {
+            inner: self.inner.clone(),
+            parameters: self.parameters.clone(),
+        }))?;
         self.inner
+            .borrow_mut()
             .step_slots(&self.parameters)
             .map(|_| ())
             .map_err(to_python_error)
@@ -66,7 +80,8 @@ impl PySgd {
     /// Return a portable optimizer dictionary when constructed from named parameters.
     fn state_dict(&self, py: Python<'_>) -> PyResult<Py<PyDict>> {
         let parameters = require_named_parameters(&self.named_parameters, "SGD")?;
-        state::sgd_to_python(py, &self.inner.state_dict(parameters))
+        let state_dict = self.inner.borrow().state_dict(parameters);
+        state::sgd_to_python(py, &state_dict)
     }
 
     /// Restore a portable optimizer dictionary by stable parameter name.
@@ -74,6 +89,7 @@ impl PySgd {
         let parameters = require_named_parameters(&self.named_parameters, "SGD")?;
         let state_dict = state::sgd_from_python(state_dict)?;
         self.inner
+            .borrow_mut()
             .load_state_dict(parameters, &state_dict)
             .map_err(to_python_error)
     }
@@ -81,12 +97,15 @@ impl PySgd {
     /// Mutable learning rate shorthand.
     #[getter]
     fn lr(&self) -> f64 {
-        self.inner.config().learning_rate()
+        self.inner.borrow().config().learning_rate()
     }
 
     #[setter]
     fn set_lr(&mut self, value: f64) -> PyResult<()> {
-        self.inner.set_learning_rate(value).map_err(to_python_error)
+        self.inner
+            .borrow_mut()
+            .set_learning_rate(value)
+            .map_err(to_python_error)
     }
 
     /// Long-form alias for `lr`.
@@ -109,6 +128,7 @@ impl PySgd {
         nesterov: bool,
     ) -> PyResult<()> {
         self.inner
+            .borrow_mut()
             .set_config(
                 SgdConfig::new(lr)
                     .with_momentum(momentum)
@@ -121,22 +141,22 @@ impl PySgd {
 
     #[getter]
     fn momentum(&self) -> f64 {
-        self.inner.config().momentum()
+        self.inner.borrow().config().momentum()
     }
 
     #[getter]
     fn dampening(&self) -> f64 {
-        self.inner.config().dampening()
+        self.inner.borrow().config().dampening()
     }
 
     #[getter]
     fn weight_decay(&self) -> f64 {
-        self.inner.config().weight_decay()
+        self.inner.borrow().config().weight_decay()
     }
 
     #[getter]
     fn nesterov(&self) -> bool {
-        self.inner.config().is_nesterov()
+        self.inner.borrow().config().is_nesterov()
     }
 
     /// Number of unique managed parameters.
@@ -148,11 +168,11 @@ impl PySgd {
     /// Number of allocated momentum buffers.
     #[getter]
     fn state_size(&self) -> usize {
-        self.inner.state_len()
+        self.inner.borrow().state_len()
     }
 
     fn __repr__(&self) -> String {
-        let config = self.inner.config();
+        let config = self.inner.borrow().config();
         format!(
             "SGD(lr={}, momentum={}, dampening={}, weight_decay={}, nesterov={})",
             config.learning_rate(),
@@ -161,6 +181,21 @@ impl PySgd {
             config.weight_decay(),
             config.is_nesterov()
         )
+    }
+}
+
+#[derive(Debug)]
+struct CapturedSgd {
+    inner: Rc<RefCell<Sgd>>,
+    parameters: Vec<ParameterSlot>,
+}
+
+impl CapturedOptimizer for CapturedSgd {
+    fn step(&self) -> Result<()> {
+        self.inner
+            .borrow_mut()
+            .step_slots(&self.parameters)
+            .map(|_| ())
     }
 }
 
