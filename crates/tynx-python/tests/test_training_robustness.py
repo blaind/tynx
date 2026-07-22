@@ -112,6 +112,32 @@ def test_multiple_forwards_share_one_parameter_generation_until_step() -> None:
     assert layer.bias.grad.tolist() == pytest.approx([2.0])
 
 
+def test_backward_rejects_parameter_mutation_after_forward() -> None:
+    weight = tynx.Parameter([1.0, 2.0, 3.0], name="weight")
+    loss = (weight * tynx.Tensor([4.0, 5.0, 6.0])).sum()
+
+    weight.copy_(tynx.Tensor([10.0, 20.0, 30.0]))
+
+    with pytest.raises(RuntimeError, match=r"weight.*modified after the forward pass"):
+        loss.backward()
+    assert weight.grad is None
+
+
+@pytest.mark.parametrize("new_branch_first", [False, True])
+def test_backward_rejects_mixed_parameter_generations_regardless_of_operand_order(
+    new_branch_first: bool,
+) -> None:
+    weight = tynx.Parameter([1.0], name="weight")
+    old_branch = weight * tynx.Tensor([2.0])
+    weight.copy_(tynx.Tensor([3.0]))
+    new_branch = weight * tynx.Tensor([4.0])
+    loss = new_branch + old_branch if new_branch_first else old_branch + new_branch
+
+    with pytest.raises(RuntimeError, match=r"weight.*multiple value generations"):
+        loss.backward()
+    assert weight.grad is None
+
+
 def test_failed_backward_and_native_shape_errors_do_not_corrupt_gradients() -> None:
     value = tynx.Tensor([2.0], requires_grad=True)
     (value * value).backward()
