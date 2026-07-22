@@ -88,6 +88,32 @@ macro_rules! map_bool {
     };
 }
 
+macro_rules! map_float_bool {
+    ($tensor:expr, |$value:ident| $body:expr) => {
+        match $tensor {
+            DynTensor::R1($value) => DynBool::R1($body),
+            DynTensor::R2($value) => DynBool::R2($body),
+            DynTensor::R3($value) => DynBool::R3($body),
+            DynTensor::R4($value) => DynBool::R4($body),
+            DynTensor::R5($value) => DynBool::R5($body),
+            DynTensor::R6($value) => DynBool::R6($body),
+        }
+    };
+}
+
+macro_rules! map_int_bool {
+    ($tensor:expr, |$value:ident| $body:expr) => {
+        match $tensor {
+            DynInt::R1($value) => DynBool::R1($body),
+            DynInt::R2($value) => DynBool::R2($body),
+            DynInt::R3($value) => DynBool::R3($body),
+            DynInt::R4($value) => DynBool::R4($body),
+            DynInt::R5($value) => DynBool::R5($body),
+            DynInt::R6($value) => DynBool::R6($body),
+        }
+    };
+}
+
 macro_rules! reshape_dyn {
     ($tensor:expr, $dims:expr, $kind:ident) => {
         match $dims.as_slice() {
@@ -1081,10 +1107,20 @@ impl DynTensor {
         Ok(zip_float_bool!(left, right, |left, right| left.equal(right)))
     }
 
+    /// Compare every element with a scalar for equality.
+    pub fn equal_scalar(self, other: f64) -> DynBool {
+        map_float_bool!(self, |tensor| tensor.equal_elem(other))
+    }
+
     /// Compare two tensors using greater-than with multidirectional broadcasting.
     pub fn greater_broadcast(self, other: Self) -> Result<DynBool> {
         let (left, right) = Self::broadcast_pair(self, other)?;
         Ok(zip_float_bool!(left, right, |left, right| left.greater(right)))
+    }
+
+    /// Compare every element with a scalar using greater-than.
+    pub fn greater_scalar(self, other: f64) -> DynBool {
+        map_float_bool!(self, |tensor| tensor.greater_elem(other))
     }
 
     /// Compare two tensors using greater-or-equal with multidirectional broadcasting.
@@ -1093,16 +1129,31 @@ impl DynTensor {
         Ok(zip_float_bool!(left, right, |left, right| left.greater_equal(right)))
     }
 
+    /// Compare every element with a scalar using greater-or-equal.
+    pub fn greater_equal_scalar(self, other: f64) -> DynBool {
+        map_float_bool!(self, |tensor| tensor.greater_equal_elem(other))
+    }
+
     /// Compare two tensors using less-than with multidirectional broadcasting.
     pub fn less_broadcast(self, other: Self) -> Result<DynBool> {
         let (left, right) = Self::broadcast_pair(self, other)?;
         Ok(zip_float_bool!(left, right, |left, right| left.lower(right)))
     }
 
+    /// Compare every element with a scalar using less-than.
+    pub fn less_scalar(self, other: f64) -> DynBool {
+        map_float_bool!(self, |tensor| tensor.lower_elem(other))
+    }
+
     /// Compare two tensors using less-or-equal with multidirectional broadcasting.
     pub fn less_equal_broadcast(self, other: Self) -> Result<DynBool> {
         let (left, right) = Self::broadcast_pair(self, other)?;
         Ok(zip_float_bool!(left, right, |left, right| left.lower_equal(right)))
+    }
+
+    /// Compare every element with a scalar using less-or-equal.
+    pub fn less_equal_scalar(self, other: f64) -> DynBool {
+        map_float_bool!(self, |tensor| tensor.lower_equal_elem(other))
     }
 
     /// Apply parametric rectified linear unit with a broadcastable slope tensor.
@@ -1979,10 +2030,20 @@ impl DynInt {
         Ok(zip_int_bool!(left, right, |left, right| left.equal(right)))
     }
 
+    /// Compare every element with an integer scalar for equality.
+    pub fn equal_scalar(self, other: i64) -> DynBool {
+        map_int_bool!(self, |tensor| tensor.equal_elem(other))
+    }
+
     /// Compare two integer tensors using greater-than with multidirectional broadcasting.
     pub fn greater_broadcast(self, other: Self) -> Result<DynBool> {
         let (left, right) = Self::broadcast_pair(self, other)?;
         Ok(zip_int_bool!(left, right, |left, right| left.greater(right)))
+    }
+
+    /// Compare every element with an integer scalar using greater-than.
+    pub fn greater_scalar(self, other: i64) -> DynBool {
+        map_int_bool!(self, |tensor| tensor.greater_elem(other))
     }
 
     /// Compare two integer tensors using greater-or-equal with multidirectional broadcasting.
@@ -1991,16 +2052,31 @@ impl DynInt {
         Ok(zip_int_bool!(left, right, |left, right| left.greater_equal(right)))
     }
 
+    /// Compare every element with an integer scalar using greater-or-equal.
+    pub fn greater_equal_scalar(self, other: i64) -> DynBool {
+        map_int_bool!(self, |tensor| tensor.greater_equal_elem(other))
+    }
+
     /// Compare two integer tensors using less-than with multidirectional broadcasting.
     pub fn less_broadcast(self, other: Self) -> Result<DynBool> {
         let (left, right) = Self::broadcast_pair(self, other)?;
         Ok(zip_int_bool!(left, right, |left, right| left.lower(right)))
     }
 
+    /// Compare every element with an integer scalar using less-than.
+    pub fn less_scalar(self, other: i64) -> DynBool {
+        map_int_bool!(self, |tensor| tensor.lower_elem(other))
+    }
+
     /// Compare two integer tensors using less-or-equal with multidirectional broadcasting.
     pub fn less_equal_broadcast(self, other: Self) -> Result<DynBool> {
         let (left, right) = Self::broadcast_pair(self, other)?;
         Ok(zip_int_bool!(left, right, |left, right| left.lower_equal(right)))
+    }
+
+    /// Compare every element with an integer scalar using less-or-equal.
+    pub fn less_equal_scalar(self, other: i64) -> DynBool {
+        map_int_bool!(self, |tensor| tensor.lower_equal_elem(other))
     }
 
     fn broadcast_pair(left: Self, right: Self) -> Result<(Self, Self)> {
