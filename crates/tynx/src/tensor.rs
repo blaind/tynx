@@ -28,6 +28,17 @@ fn rank_overflow(rank: usize) -> TynxError {
     }
 }
 
+fn ensure_same_device(operation: &str, left: &Device, right: &Device) -> Result<()> {
+    if left.clone().inner() == right.clone().inner() {
+        return Ok(());
+    }
+    Err(TynxError::TensorDeviceMismatch {
+        operation: operation.to_string(),
+        left: format!("{left:?}"),
+        right: format!("{right:?}"),
+    })
+}
+
 fn broadcast_shape(left: &[usize], right: &[usize]) -> Result<Vec<usize>> {
     let rank = left.len().max(right.len());
     let mut output = Vec::with_capacity(rank);
@@ -1608,6 +1619,7 @@ impl DynTensor {
 
     /// Multiply matrices or batches of matrices with matching runtime ranks.
     pub fn matmul(self, other: Self) -> Result<Self> {
+        ensure_same_device("matmul", &self.device(), &other.device())?;
         validate_matmul_shapes(&self.dims(), &other.dims())?;
         Ok(match (self, other) {
             (Self::R2(left), Self::R2(right)) => Self::R2(left.matmul(right)),
@@ -1804,6 +1816,7 @@ impl DynTensor {
     }
 
     fn broadcast_pair(left: Self, right: Self) -> Result<(Self, Self)> {
+        ensure_same_device("elementwise operation", &left.device(), &right.device())?;
         broadcast_shape(&left.dims(), &right.dims())?;
         let rank = left.rank().max(right.rank());
         Ok((left.to_rank(rank)?, right.to_rank(rank)?))
@@ -2584,6 +2597,7 @@ impl DynInt {
 
     /// Multiply matrices or batches of matrices with matching runtime ranks.
     pub fn matmul(self, other: Self) -> Result<Self> {
+        ensure_same_device("matmul", &self.device(), &other.device())?;
         validate_matmul_shapes(&self.dims(), &other.dims())?;
         Ok(match (self, other) {
             (Self::R2(left), Self::R2(right)) => Self::R2(left.matmul(right)),
@@ -2762,6 +2776,7 @@ impl DynInt {
     }
 
     fn broadcast_pair(left: Self, right: Self) -> Result<(Self, Self)> {
+        ensure_same_device("elementwise operation", &left.device(), &right.device())?;
         broadcast_shape(&left.dims(), &right.dims())?;
         let rank = left.rank().max(right.rank());
         Ok((left.to_rank(rank)?, right.to_rank(rank)?))
@@ -3154,6 +3169,7 @@ impl DynBool {
     }
 
     fn broadcast_pair(left: Self, right: Self) -> Result<(Self, Self)> {
+        ensure_same_device("elementwise operation", &left.device(), &right.device())?;
         broadcast_shape(&left.dims(), &right.dims())?;
         let rank = left.rank().max(right.rank());
         Ok((left.to_rank(rank)?, right.to_rank(rank)?))

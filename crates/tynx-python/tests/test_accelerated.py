@@ -66,6 +66,29 @@ def test_accelerated_boolean_construction_avoids_backend_bool_upload() -> None:
     assert value.tolist() == [[True, False], [False, True]]
 
 
+def test_accelerated_cross_backend_operations_raise_python_exceptions() -> None:
+    device = _accelerated_device()
+    gpu = tynx.ones((2,))
+    cpu = tynx.ones((2,), device=tynx.Device("cpu"))
+
+    with pytest.raises(ValueError, match="same device"):
+        cpu + gpu
+    with pytest.raises(ValueError, match="same device"):
+        cpu.reshape(1, 2) @ gpu.reshape(2, 1)
+    with pytest.raises(ValueError, match="same device"):
+        tynx.maximum(cpu, gpu)
+    with pytest.raises(NotImplementedError, match="cannot move tensors between backends"):
+        gpu.to(tynx.Device("cpu"))
+    with pytest.raises(NotImplementedError, match="cannot move tensors between backends"):
+        cpu.to(device)
+    with tynx.no_grad(), pytest.raises(
+        NotImplementedError, match="cannot move tensors between backends"
+    ):
+        gpu.to(tynx.Device("cpu"))
+
+    tynx.synchronize(device)
+
+
 def test_accelerated_tape_survives_intermediate_drop_and_optimizer_step() -> None:
     device = _accelerated_device()
     input = tynx.Tensor([[1.0, 2.0]], requires_grad=True)
