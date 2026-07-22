@@ -1,30 +1,41 @@
 """Opt-in whole-function model capture."""
 
-import warnings
-from collections import OrderedDict
-from collections.abc import Callable, Iterable, Iterator
-from inspect import BoundArguments, Parameter, Signature, signature
-from typing import Any, Generic, Optional, TypeVar, Union, cast, overload
+import warnings as _warnings
+from collections import OrderedDict as _OrderedDict
+from collections.abc import Callable as _Callable
+from collections.abc import Iterable as _Iterable
+from collections.abc import Iterator as _Iterator
+from inspect import BoundArguments as _BoundArguments
+from inspect import Parameter as _Parameter
+from inspect import Signature as _Signature
+from inspect import signature as _signature
+from typing import Any as _Any
+from typing import Generic as _Generic
+from typing import Optional as _Optional
+from typing import TypeVar as _TypeVar
+from typing import Union as _Union
+from typing import cast as _cast
+from typing import overload as _overload
 
 from ._tynx import Tensor, _CapturedGraph, _CaptureSession
 
-R = TypeVar("R")
+R = _TypeVar("R")
 
 
-class CompiledFunction(Generic[R]):
+class CompiledFunction(_Generic[R]):
     """Callable exact-signature graph cache returned by :func:`tynx.compile`."""
 
     def __init__(
         self,
-        function: Callable[..., R],
+        function: _Callable[..., R],
         *,
         fullgraph: bool = False,
-        static_argnames: Iterable[str] = (),
+        static_argnames: _Iterable[str] = (),
     ) -> None:
         if not callable(function):
             raise TypeError(f"compile expected a callable, got {type(function).__qualname__}")
         self._function = function
-        self._signature = signature(function)
+        self._signature = _signature(function)
         self._fullgraph = fullgraph
         self._static_argnames = _validate_static_argnames(self._signature, static_argnames)
         self._graphs: list[
@@ -36,7 +47,7 @@ class CompiledFunction(Generic[R]):
         self.invalidation_count = 0
         self.fallback_count = 0
         self.replay_count = 0
-        self.last_fallback_reason: Optional[str] = None
+        self.last_fallback_reason: _Optional[str] = None
 
     @property
     def graph_count(self) -> int:
@@ -78,7 +89,7 @@ class CompiledFunction(Generic[R]):
         for cached_static_key, graph, output_spec in self._graphs:
             if cached_static_key == static_key and graph.matches(*tensor_args):
                 self.replay_count += 1
-                return cast(R, _restore_output(iter(graph(*tensor_args)), output_spec))
+                return _cast(R, _restore_output(iter(graph(*tensor_args)), output_spec))
 
         session = _CaptureSession(fullgraph=self._fullgraph)
         try:
@@ -106,19 +117,19 @@ class CompiledFunction(Generic[R]):
         if captured_graph is None:
             self._disable("an unsupported tensor operation or trace-disconnected output")
             self.fallback_count += 1
-            return cast(R, released_output)
+            return _cast(R, released_output)
         self._graphs.append((static_key, captured_graph, output_spec))
         self.compile_count += 1
-        return cast(R, released_output)
+        return _cast(R, released_output)
 
     def _prepare_call(
-        self, bound: BoundArguments
-    ) -> Union[tuple[tuple[Tensor, ...], tuple[tuple[str, type[object], object], ...]], str]:
+        self, bound: _BoundArguments
+    ) -> _Union[tuple[tuple[Tensor, ...], tuple[tuple[str, type[object], object], ...]], str]:
         tensors: list[Tensor] = []
         static_key: list[tuple[str, type[object], object]] = []
         for name, value in bound.arguments.items():
             parameter = self._signature.parameters[name]
-            if parameter.kind in (Parameter.VAR_POSITIONAL, Parameter.VAR_KEYWORD):
+            if parameter.kind in (_Parameter.VAR_POSITIONAL, _Parameter.VAR_KEYWORD):
                 return "variadic Python arguments"
             if name in self._static_argnames:
                 if isinstance(value, Tensor):
@@ -140,7 +151,7 @@ class CompiledFunction(Generic[R]):
         self._fallback = True
         self.last_fallback_reason = reason
         if not self._warned:
-            warnings.warn(
+            _warnings.warn(
                 f"tynx.compile fell back to eager execution for the whole function: {reason}",
                 RuntimeWarning,
                 stacklevel=3,
@@ -148,15 +159,15 @@ class CompiledFunction(Generic[R]):
             self._warned = True
 
 
-def _replace_tensor_arguments(bound: BoundArguments, traced: Iterator[Tensor]) -> BoundArguments:
-    arguments: OrderedDict[str, Any] = OrderedDict(
+def _replace_tensor_arguments(bound: _BoundArguments, traced: _Iterator[Tensor]) -> _BoundArguments:
+    arguments: _OrderedDict[str, _Any] = _OrderedDict(
         (name, next(traced) if isinstance(value, Tensor) else value)
         for name, value in bound.arguments.items()
     )
-    return BoundArguments(bound.signature, arguments)
+    return _BoundArguments(bound.signature, arguments)
 
 
-def _flatten_output(output: object) -> Union[tuple[list[Tensor], object], str]:
+def _flatten_output(output: object) -> _Union[tuple[list[Tensor], object], str]:
     tensors: list[Tensor] = []
 
     def visit(value: object) -> object:
@@ -181,23 +192,23 @@ def _flatten_output(output: object) -> Union[tuple[list[Tensor], object], str]:
     return tensors, spec
 
 
-def _restore_output(tensors: Iterator[Tensor], spec: object) -> object:
-    kind, contents = cast(tuple[str, object], spec)
+def _restore_output(tensors: _Iterator[Tensor], spec: object) -> object:
+    kind, contents = _cast(tuple[str, object], spec)
     if kind == "tensor":
         return next(tensors)
     if kind == "tuple":
-        return tuple(_restore_output(tensors, item) for item in cast(tuple[object, ...], contents))
+        return tuple(_restore_output(tensors, item) for item in _cast(tuple[object, ...], contents))
     if kind == "list":
-        return [_restore_output(tensors, item) for item in cast(tuple[object, ...], contents)]
+        return [_restore_output(tensors, item) for item in _cast(tuple[object, ...], contents)]
     if kind == "dict":
         return {
             key: _restore_output(tensors, item)
-            for key, item in cast(tuple[tuple[str, object], ...], contents)
+            for key, item in _cast(tuple[tuple[str, object], ...], contents)
         }
     raise RuntimeError(f"unknown captured output kind {kind!r}")
 
 
-def _validate_static_argnames(signature: Signature, names: Iterable[str]) -> frozenset[str]:
+def _validate_static_argnames(signature: _Signature, names: _Iterable[str]) -> frozenset[str]:
     if isinstance(names, str):
         names = (names,)
     normalized = tuple(names)
@@ -209,37 +220,37 @@ def _validate_static_argnames(signature: Signature, names: Iterable[str]) -> fro
     return frozenset(normalized)
 
 
-@overload
+@_overload
 def compile(
-    function: Callable[..., R],
+    function: _Callable[..., R],
     *,
     fullgraph: bool = False,
-    static_argnames: Iterable[str] = (),
+    static_argnames: _Iterable[str] = (),
 ) -> CompiledFunction[R]: ...
 
 
-@overload
+@_overload
 def compile(
     function: None = None,
     *,
     fullgraph: bool = False,
-    static_argnames: Iterable[str] = (),
-) -> Callable[[Callable[..., R]], CompiledFunction[R]]: ...
+    static_argnames: _Iterable[str] = (),
+) -> _Callable[[_Callable[..., R]], CompiledFunction[R]]: ...
 
 
 def compile(
-    function: Optional[Callable[..., R]] = None,
+    function: _Optional[_Callable[..., R]] = None,
     *,
     fullgraph: bool = False,
-    static_argnames: Iterable[str] = (),
-) -> Union[CompiledFunction[R], Callable[[Callable[..., R]], CompiledFunction[R]]]:
+    static_argnames: _Iterable[str] = (),
+) -> _Union[CompiledFunction[R], _Callable[[_Callable[..., R]], CompiledFunction[R]]]:
     """Capture a Tensor-only forward function on first use and replay it in Rust.
 
     The initial cache specializes on exact tensor signatures. Unsupported behavior falls back for
     the whole function unless ``fullgraph=True`` is requested.
     """
 
-    def decorate(target: Callable[..., R]) -> CompiledFunction[R]:
+    def decorate(target: _Callable[..., R]) -> CompiledFunction[R]:
         return CompiledFunction(
             target,
             fullgraph=fullgraph,

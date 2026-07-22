@@ -1,24 +1,29 @@
 """PyTorch-style parameter groups over Tynx's native optimizers."""
 
-from collections.abc import Iterable, Mapping
-from typing import Callable, Generic, TypeVar, Union, cast
+from collections.abc import Iterable as _Iterable
+from collections.abc import Mapping as _Mapping
+from typing import Callable as _Callable
+from typing import Generic as _Generic
+from typing import TypeVar as _TypeVar
+from typing import Union as _Union
+from typing import cast as _cast
 
 from ._tynx import SGD as _NativeSGD
 from ._tynx import Adam as _NativeAdam
 from ._tynx import AdamW as _NativeAdamW
-from ._tynx import Parameter
+from ._tynx import Parameter as _Parameter
 
-OptimizerParameter = Union[Parameter, tuple[str, Parameter]]
-OptimizerParameterGroup = Mapping[str, object]
-_Parameters = Iterable[Union[OptimizerParameter, OptimizerParameterGroup]]
-_Native = TypeVar("_Native", _NativeSGD, _NativeAdam, _NativeAdamW)
+OptimizerParameter = _Union[_Parameter, tuple[str, _Parameter]]
+OptimizerParameterGroup = _Mapping[str, object]
+_Parameters = _Iterable[_Union[OptimizerParameter, OptimizerParameterGroup]]
+_Native = _TypeVar("_Native", _NativeSGD, _NativeAdam, _NativeAdamW)
 
 
 def _float(value: object) -> float:
-    return float(cast(Union[str, int, float], value))
+    return float(_cast(_Union[str, int, float], value))
 
 
-class _GroupedOptimizer(Generic[_Native]):
+class _GroupedOptimizer(_Generic[_Native]):
     _name: str
     _option_names: tuple[str, ...]
 
@@ -26,13 +31,13 @@ class _GroupedOptimizer(Generic[_Native]):
         self,
         parameters: _Parameters,
         defaults: dict[str, object],
-        factory: Callable[[list[OptimizerParameter], dict[str, object]], _Native],
+        factory: _Callable[[list[OptimizerParameter], dict[str, object]], _Native],
     ) -> None:
         items = list(parameters)
         if not items:
             raise ValueError(f"{self._name} requires at least one Parameter")
-        grouped = isinstance(items[0], Mapping)
-        if any(isinstance(item, Mapping) != grouped for item in items):
+        grouped = isinstance(items[0], _Mapping)
+        if any(isinstance(item, _Mapping) != grouped for item in items):
             raise TypeError(
                 f"{self._name} parameters cannot mix parameter groups and individual parameters"
             )
@@ -40,7 +45,7 @@ class _GroupedOptimizer(Generic[_Native]):
         specifications: list[tuple[list[OptimizerParameter], dict[str, object]]] = []
         if grouped:
             for item in items:
-                group = cast(OptimizerParameterGroup, item)
+                group = _cast(OptimizerParameterGroup, item)
                 unknown = set(group).difference((*self._option_names, "params"))
                 if unknown:
                     supported = ("params", *self._option_names)
@@ -51,7 +56,7 @@ class _GroupedOptimizer(Generic[_Native]):
                 if "params" not in group:
                     raise ValueError(f"{self._name} parameter group is missing 'params'")
                 try:
-                    group_parameters = list(cast(Iterable[OptimizerParameter], group["params"]))
+                    group_parameters = list(_cast(_Iterable[OptimizerParameter], group["params"]))
                 except TypeError as error:
                     raise TypeError(
                         f"{self._name} parameter group 'params' must be an iterable"
@@ -62,7 +67,7 @@ class _GroupedOptimizer(Generic[_Native]):
                 options.update({name: group[name] for name in self._option_names if name in group})
                 specifications.append((group_parameters, options))
         else:
-            specifications.append((cast(list[OptimizerParameter], items), dict(defaults)))
+            specifications.append((_cast(list[OptimizerParameter], items), dict(defaults)))
 
         self._reject_duplicates(specifications)
         self._groups: list[dict[str, object]] = []
@@ -149,7 +154,7 @@ class _GroupedOptimizer(Generic[_Native]):
         previous = [native.state_dict() for native in self._native]
         try:
             for native, state in zip(self._native, states):
-                native.load_state_dict(cast(dict[str, object], state))
+                native.load_state_dict(_cast(dict[str, object], state))
         except BaseException:
             for native, state in zip(self._native, previous):
                 native.load_state_dict(state)
@@ -245,7 +250,7 @@ class SGD(_GroupedOptimizer[_NativeSGD]):
             if options == synced:
                 continue
             _NativeSGD(
-                cast(list[OptimizerParameter], group["params"]),
+                _cast(list[OptimizerParameter], group["params"]),
                 lr=_float(options["lr"]),
                 momentum=_float(options["momentum"]),
                 dampening=_float(options["dampening"]),
@@ -268,7 +273,7 @@ class SGD(_GroupedOptimizer[_NativeSGD]):
 class _AdamBase(_GroupedOptimizer[_Native]):
     @property
     def betas(self) -> tuple[float, float]:
-        return cast(tuple[float, float], self._groups[0]["betas"])
+        return _cast(tuple[float, float], self._groups[0]["betas"])
 
     @property
     def eps(self) -> float:
@@ -317,7 +322,7 @@ class Adam(_AdamBase[_NativeAdam]):
             return _NativeAdam(
                 params,
                 lr=_float(options["lr"]),
-                betas=cast(tuple[float, float], options["betas"]),
+                betas=_cast(tuple[float, float], options["betas"]),
                 eps=_float(options["eps"]),
                 weight_decay=_float(options["weight_decay"]),
                 amsgrad=bool(options["amsgrad"]),
@@ -332,9 +337,9 @@ class Adam(_AdamBase[_NativeAdam]):
             if options == synced:
                 continue
             _NativeAdam(
-                cast(list[OptimizerParameter], group["params"]),
+                _cast(list[OptimizerParameter], group["params"]),
                 lr=_float(options["lr"]),
-                betas=cast(tuple[float, float], options["betas"]),
+                betas=_cast(tuple[float, float], options["betas"]),
                 eps=_float(options["eps"]),
                 weight_decay=_float(options["weight_decay"]),
                 amsgrad=bool(options["amsgrad"]),
@@ -343,7 +348,7 @@ class Adam(_AdamBase[_NativeAdam]):
         for native, options, synced in pending:
             native._set_config(
                 _float(options["lr"]),
-                cast(tuple[float, float], options["betas"]),
+                _cast(tuple[float, float], options["betas"]),
                 _float(options["eps"]),
                 _float(options["weight_decay"]),
                 bool(options["amsgrad"]),
@@ -379,7 +384,7 @@ class AdamW(_AdamBase[_NativeAdamW]):
             return _NativeAdamW(
                 params,
                 lr=_float(options["lr"]),
-                betas=cast(tuple[float, float], options["betas"]),
+                betas=_cast(tuple[float, float], options["betas"]),
                 eps=_float(options["eps"]),
                 weight_decay=_float(options["weight_decay"]),
                 amsgrad=bool(options["amsgrad"]),
@@ -394,9 +399,9 @@ class AdamW(_AdamBase[_NativeAdamW]):
             if options == synced:
                 continue
             _NativeAdamW(
-                cast(list[OptimizerParameter], group["params"]),
+                _cast(list[OptimizerParameter], group["params"]),
                 lr=_float(options["lr"]),
-                betas=cast(tuple[float, float], options["betas"]),
+                betas=_cast(tuple[float, float], options["betas"]),
                 eps=_float(options["eps"]),
                 weight_decay=_float(options["weight_decay"]),
                 amsgrad=bool(options["amsgrad"]),
@@ -405,7 +410,7 @@ class AdamW(_AdamBase[_NativeAdamW]):
         for native, options, synced in pending:
             native._set_config(
                 _float(options["lr"]),
-                cast(tuple[float, float], options["betas"]),
+                _cast(tuple[float, float], options["betas"]),
                 _float(options["eps"]),
                 _float(options["weight_decay"]),
                 bool(options["amsgrad"]),

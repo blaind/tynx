@@ -13,6 +13,24 @@ import tynx
 
 def test_module_metadata() -> None:
     assert tynx.__version__
+
+
+def test_public_modules_do_not_expose_imported_typing_helpers() -> None:
+    assert not {
+        "Literal",
+        "Mapping",
+        "Optional",
+        "PathLike",
+        "Union",
+        "overload",
+    }.intersection(dir(tynx))
+    assert not {"Callable", "Generic", "Mapping", "TypeVar", "Union", "cast"}.intersection(
+        dir(tynx.optim)
+    )
+    assert not {"Callable", "Generic", "Optional", "TypeVar", "Union", "overload"}.intersection(
+        dir(tynx.compiler)
+    )
+    assert not {"Optional", "Union"}.intersection(dir(tynx.distributions))
     assert callable(tynx.Session)
     assert callable(tynx.Tensor)
     assert callable(tynx.Parameter)
