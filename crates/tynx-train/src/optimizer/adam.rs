@@ -1,12 +1,14 @@
 //! Adam-family optimizers.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use tynx_core::{DynTensor, Result, TynxError};
 
 use crate::{ParamId, ParameterSlot, ParameterStore};
 
-use super::validate_state_tensor;
+use super::{
+    trainable_by_name, validate_parameter_name_match, validate_state_names, validate_state_tensor,
+};
 
 /// Configuration shared by Adam's adaptive-moment update.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -205,6 +207,78 @@ impl AdamParameterState {
     }
 }
 
+/// Name-keyed, portable Adam-family configuration and adaptive state.
+#[derive(Debug, Clone)]
+pub struct AdamStateDict {
+    kind: AdamStateKind,
+    config: AdamConfig,
+    parameter_names: Vec<String>,
+    state: BTreeMap<String, AdamParameterState>,
+}
+
+/// Adam-family update rule recorded in a portable state dictionary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdamStateKind {
+    /// Coupled L2 weight decay used by Adam.
+    Adam,
+    /// Decoupled weight decay used by AdamW.
+    AdamW,
+}
+
+impl AdamStateDict {
+    /// Construct and structurally validate a portable Adam-family state dictionary.
+    pub fn new(
+        kind: AdamStateKind,
+        config: AdamConfig,
+        parameter_names: Vec<String>,
+        state: BTreeMap<String, AdamParameterState>,
+    ) -> Result<Self> {
+        validate_config(config)?;
+        let parameter_names = validate_state_names(parameter_names, state.keys(), "Adam")?;
+        for (name, parameter_state) in &state {
+            if parameter_state.step == 0 {
+                return Err(TynxError::TypeMismatch(format!(
+                    "Adam state step for '{name}' must be positive"
+                )));
+            }
+            if config.amsgrad != parameter_state.max_second_moment.is_some() {
+                return Err(TynxError::TypeMismatch(format!(
+                    "Adam state maximum second moment for '{name}' must match amsgrad={} configuration",
+                    config.amsgrad
+                )));
+            }
+        }
+        Ok(Self {
+            kind,
+            config,
+            parameter_names,
+            state,
+        })
+    }
+
+    /// Return whether the payload belongs to Adam or AdamW.
+    pub fn kind(&self) -> AdamStateKind {
+        self.kind
+    }
+
+    /// Return the serialized Adam-family configuration.
+    pub fn config(&self) -> AdamConfig {
+        self.config
+    }
+
+    /// Return stable parameter names in lexical order, including entries without adaptive state.
+    pub fn parameter_names(&self) -> &[String] {
+        &self.parameter_names
+    }
+
+    /// Iterate allocated adaptive state by stable parameter name.
+    pub fn state(&self) -> impl ExactSizeIterator<Item = (&str, &AdamParameterState)> {
+        self.state
+            .iter()
+            .map(|(name, state)| (name.as_str(), state))
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 enum WeightDecayMode {
     Coupled,
@@ -250,6 +324,51 @@ impl AdamEngine {
                     state.max_second_moment.clone().map(DynTensor::detach),
                 )
             })
+    }
+
+    fn state_dict(&self, parameters: &ParameterStore, kind: AdamStateKind) -> AdamStateDict {
+        let named = parameters
+            .named()
+            .filter(|(_, parameter)| parameter.contract().trainable())
+            .collect::<Vec<_>>();
+        let parameter_names = named.iter().map(|(name, _)| (*name).to_string()).collect();
+        let state = named
+            .into_iter()
+            .filter_map(|(name, parameter)| {
+                self.state_for(parameter)
+                    .map(|state| (name.to_string(), state))
+            })
+            .collect();
+        AdamStateDict::new(kind, self.config, parameter_names, state)
+            .expect("live Adam configuration and ParameterStore names are valid")
+    }
+
+    fn load_state_dict(
+        &mut self,
+        parameters: &ParameterStore,
+        state_dict: &AdamStateDict,
+        expected_kind: AdamStateKind,
+    ) -> Result<()> {
+        if state_dict.kind != expected_kind {
+            return Err(TynxError::TypeMismatch(format!(
+                "cannot load {:?} state into {:?} optimizer",
+                state_dict.kind, expected_kind
+            )));
+        }
+        let current = trainable_by_name(parameters);
+        validate_parameter_name_match(
+            current.keys().copied(),
+            &state_dict.parameter_names,
+            "Adam",
+        )?;
+        let states = current
+            .into_iter()
+            .map(|(name, parameter)| (parameter.clone(), state_dict.state.get(name).cloned()))
+            .collect::<Vec<_>>();
+        let mut replacement = Self::new(state_dict.config)?;
+        replacement.replace_slot_states(&states)?;
+        *self = replacement;
+        Ok(())
     }
 
     fn replace_slot_states(
@@ -445,6 +564,21 @@ impl Adam {
         self.engine.state_for(parameter)
     }
 
+    /// Export configuration and adaptive state by canonical parameter name.
+    pub fn state_dict(&self, parameters: &ParameterStore) -> AdamStateDict {
+        self.engine.state_dict(parameters, AdamStateKind::Adam)
+    }
+
+    /// Restore configuration and adaptive state by canonical name onto fresh runtime slots.
+    pub fn load_state_dict(
+        &mut self,
+        parameters: &ParameterStore,
+        state_dict: &AdamStateDict,
+    ) -> Result<()> {
+        self.engine
+            .load_state_dict(parameters, state_dict, AdamStateKind::Adam)
+    }
+
     /// Atomically replace all adaptive state for a runtime parameter list.
     pub fn replace_slot_states(
         &mut self,
@@ -513,6 +647,21 @@ impl AdamW {
     /// Snapshot the current-generation adaptive state for one parameter.
     pub fn state_for(&self, parameter: &ParameterSlot) -> Option<AdamParameterState> {
         self.engine.state_for(parameter)
+    }
+
+    /// Export configuration and adaptive state by canonical parameter name.
+    pub fn state_dict(&self, parameters: &ParameterStore) -> AdamStateDict {
+        self.engine.state_dict(parameters, AdamStateKind::AdamW)
+    }
+
+    /// Restore configuration and adaptive state by canonical name onto fresh runtime slots.
+    pub fn load_state_dict(
+        &mut self,
+        parameters: &ParameterStore,
+        state_dict: &AdamStateDict,
+    ) -> Result<()> {
+        self.engine
+            .load_state_dict(parameters, state_dict, AdamStateKind::AdamW)
     }
 
     /// Atomically replace all adaptive state for a runtime parameter list.
@@ -673,6 +822,41 @@ mod tests {
 
         assert!((scalar_value(&resumed_parameter) - scalar_value(&parameter)).abs() < 1.0e-7);
         assert_eq!(resumed.step_for(resumed_parameter.id()), Some(2));
+    }
+
+    #[test]
+    fn named_adam_state_restores_config_on_a_fresh_parameter_identity() {
+        let device = Device::autodiff(Device::default());
+        let (parameter, store) = scalar_parameter("policy.weight", 2.0, &device);
+        let config = AdamConfig::new(0.03)
+            .with_betas(0.8, 0.95)
+            .with_epsilon(1.0e-6)
+            .with_amsgrad(true);
+        let mut baseline = Adam::with_config(config).unwrap();
+        set_gradient(&parameter, &store, 2.0);
+        baseline.step(&store).unwrap();
+        let state_dict = baseline.state_dict(&store);
+        assert_eq!(state_dict.kind(), AdamStateKind::Adam);
+        assert_eq!(state_dict.parameter_names(), ["policy.weight"]);
+        assert_eq!(state_dict.state().len(), 1);
+
+        let mut wrong_kind = AdamW::new(0.4).unwrap();
+        assert!(wrong_kind.load_state_dict(&store, &state_dict).is_err());
+        assert_eq!(wrong_kind.config().learning_rate(), 0.4);
+
+        let (resumed_parameter, resumed_store) =
+            scalar_parameter("policy.weight", scalar_value(&parameter), &device);
+        let mut resumed = Adam::new(0.9).unwrap();
+        resumed
+            .load_state_dict(&resumed_store, &state_dict)
+            .unwrap();
+        assert_eq!(resumed.config(), config);
+
+        set_gradient(&parameter, &store, -1.5);
+        baseline.step(&store).unwrap();
+        set_gradient(&resumed_parameter, &resumed_store, -1.5);
+        resumed.step(&resumed_store).unwrap();
+        assert!((scalar_value(&resumed_parameter) - scalar_value(&parameter)).abs() < 1.0e-7);
     }
 
     #[test]

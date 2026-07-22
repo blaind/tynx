@@ -2,9 +2,11 @@
 
 mod adam;
 
-pub use adam::{Adam, AdamConfig, AdamParameterState, AdamW, AdamWConfig};
+pub use adam::{
+    Adam, AdamConfig, AdamParameterState, AdamStateDict, AdamStateKind, AdamW, AdamWConfig,
+};
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use tynx_core::{DynTensor, Result, TynxError};
 
@@ -116,6 +118,53 @@ impl SgdParameterState {
     }
 }
 
+/// Name-keyed, portable SGD configuration and momentum state.
+#[derive(Debug, Clone)]
+pub struct SgdStateDict {
+    config: SgdConfig,
+    parameter_names: Vec<String>,
+    state: BTreeMap<String, SgdParameterState>,
+}
+
+impl SgdStateDict {
+    /// Construct and structurally validate a portable SGD state dictionary.
+    pub fn new(
+        config: SgdConfig,
+        parameter_names: Vec<String>,
+        state: BTreeMap<String, SgdParameterState>,
+    ) -> Result<Self> {
+        validate_config(config)?;
+        let parameter_names = validate_state_names(parameter_names, state.keys(), "SGD")?;
+        if config.momentum == 0.0 && !state.is_empty() {
+            return Err(TynxError::TypeMismatch(
+                "SGD without momentum cannot contain momentum state".to_string(),
+            ));
+        }
+        Ok(Self {
+            config,
+            parameter_names,
+            state,
+        })
+    }
+
+    /// Return the serialized optimizer configuration.
+    pub fn config(&self) -> SgdConfig {
+        self.config
+    }
+
+    /// Return stable parameter names in lexical order, including entries without momentum state.
+    pub fn parameter_names(&self) -> &[String] {
+        &self.parameter_names
+    }
+
+    /// Iterate allocated momentum state by stable parameter name.
+    pub fn state(&self) -> impl ExactSizeIterator<Item = (&str, &SgdParameterState)> {
+        self.state
+            .iter()
+            .map(|(name, state)| (name.as_str(), state))
+    }
+}
+
 impl Sgd {
     /// Create plain SGD with the given learning rate.
     pub fn new(learning_rate: f64) -> Result<Self> {
@@ -156,6 +205,42 @@ impl Sgd {
             .get(&parameter.id())
             .filter(|(generation, _)| *generation == parameter.structure_generation())
             .map(|(_, momentum_buffer)| SgdParameterState::new(momentum_buffer.clone().detach()))
+    }
+
+    /// Export configuration and current-generation momentum state by canonical parameter name.
+    pub fn state_dict(&self, parameters: &ParameterStore) -> SgdStateDict {
+        let named = parameters
+            .named()
+            .filter(|(_, parameter)| parameter.contract().trainable())
+            .collect::<Vec<_>>();
+        let parameter_names = named.iter().map(|(name, _)| (*name).to_string()).collect();
+        let state = named
+            .into_iter()
+            .filter_map(|(name, parameter)| {
+                self.state_for(parameter)
+                    .map(|state| (name.to_string(), state))
+            })
+            .collect();
+        SgdStateDict::new(self.config, parameter_names, state)
+            .expect("live SGD configuration and ParameterStore names are valid")
+    }
+
+    /// Restore configuration and momentum state by canonical name onto fresh runtime slots.
+    pub fn load_state_dict(
+        &mut self,
+        parameters: &ParameterStore,
+        state_dict: &SgdStateDict,
+    ) -> Result<()> {
+        let current = trainable_by_name(parameters);
+        validate_parameter_name_match(current.keys().copied(), &state_dict.parameter_names, "SGD")?;
+        let states = current
+            .into_iter()
+            .map(|(name, parameter)| (parameter.clone(), state_dict.state.get(name).cloned()))
+            .collect::<Vec<_>>();
+        let mut replacement = Self::with_config(state_dict.config)?;
+        replacement.replace_slot_states(&states)?;
+        *self = replacement;
+        Ok(())
     }
 
     /// Atomically replace all SGD state for a runtime parameter list.
@@ -306,6 +391,61 @@ fn validate_state_tensor(label: &str, tensor: &DynTensor, parameter: &ParameterS
     Ok(())
 }
 
+fn validate_state_names<'a>(
+    parameter_names: Vec<String>,
+    state_names: impl IntoIterator<Item = &'a String>,
+    optimizer: &str,
+) -> Result<Vec<String>> {
+    let mut names = BTreeSet::new();
+    for name in parameter_names {
+        if name.trim().is_empty() {
+            return Err(TynxError::TypeMismatch(format!(
+                "{optimizer} parameter state name cannot be empty"
+            )));
+        }
+        if !names.insert(name.clone()) {
+            return Err(TynxError::TypeMismatch(format!(
+                "duplicate {optimizer} parameter state name '{name}'"
+            )));
+        }
+    }
+    for name in state_names {
+        if !names.contains(name) {
+            return Err(TynxError::TypeMismatch(format!(
+                "{optimizer} state for unknown parameter name '{name}'"
+            )));
+        }
+    }
+    Ok(names.into_iter().collect())
+}
+
+fn trainable_by_name(parameters: &ParameterStore) -> BTreeMap<&str, &ParameterSlot> {
+    parameters
+        .named()
+        .filter(|(_, parameter)| parameter.contract().trainable())
+        .collect()
+}
+
+fn validate_parameter_name_match<'a>(
+    current_names: impl IntoIterator<Item = &'a str>,
+    saved_names: &[String],
+    optimizer: &str,
+) -> Result<()> {
+    let current = current_names.into_iter().collect::<BTreeSet<_>>();
+    let saved = saved_names
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let missing = current.difference(&saved).copied().collect::<Vec<_>>();
+    let unexpected = saved.difference(&current).copied().collect::<Vec<_>>();
+    if !missing.is_empty() || !unexpected.is_empty() {
+        return Err(TynxError::TypeMismatch(format!(
+            "{optimizer} parameter names do not match: missing={missing:?}, unexpected={unexpected:?}"
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use burn::tensor::{Device, TensorData};
@@ -412,6 +552,60 @@ mod tests {
 
         assert_eq!(values(resumed_parameter.value()), values(parameter.value()));
         assert_eq!(resumed.state_len(), 1);
+    }
+
+    #[test]
+    fn named_sgd_state_restores_config_and_slots_independent_of_discovery_order() {
+        let device = Device::autodiff(Device::default());
+        let weight = ParameterSlot::new(None, tensor(vec![2.0], &[1], &device), true).unwrap();
+        let bias = ParameterSlot::new(None, tensor(vec![1.0], &[1], &device), true).unwrap();
+        let mut store = ParameterStore::new();
+        store.insert("weight", weight.clone()).unwrap();
+        store.insert("bias", bias.clone()).unwrap();
+        let config = SgdConfig::new(0.1).with_momentum(0.9);
+        let mut baseline = Sgd::with_config(config).unwrap();
+        set_gradient(&weight, &store, 2.0);
+        set_gradient(&bias, &store, 3.0);
+        baseline.step(&store).unwrap();
+        let state_dict = baseline.state_dict(&store);
+        assert_eq!(state_dict.parameter_names(), ["bias", "weight"]);
+        assert_eq!(state_dict.state().len(), 2);
+
+        let resumed_weight =
+            ParameterSlot::new(None, weight.value(), true).expect("weight contract remains valid");
+        let resumed_bias =
+            ParameterSlot::new(None, bias.value(), true).expect("bias contract remains valid");
+        let mut resumed_store = ParameterStore::new();
+        resumed_store.insert("bias", resumed_bias.clone()).unwrap();
+        resumed_store
+            .insert("weight", resumed_weight.clone())
+            .unwrap();
+        let mut resumed = Sgd::new(0.8).unwrap();
+        resumed
+            .load_state_dict(&resumed_store, &state_dict)
+            .unwrap();
+        assert_eq!(resumed.config(), config);
+
+        store.zero_grad();
+        set_gradient(&weight, &store, 2.0);
+        set_gradient(&bias, &store, 3.0);
+        baseline.step(&store).unwrap();
+        set_gradient(&resumed_weight, &resumed_store, 2.0);
+        set_gradient(&resumed_bias, &resumed_store, 3.0);
+        resumed.step(&resumed_store).unwrap();
+
+        assert_eq!(values(resumed_weight.value()), values(weight.value()));
+        assert_eq!(values(resumed_bias.value()), values(bias.value()));
+
+        let (wrong_parameter, wrong_store) = scalar_parameter("other", 0.0, &device);
+        let mut unchanged = Sgd::new(0.7).unwrap();
+        assert!(
+            unchanged
+                .load_state_dict(&wrong_store, &state_dict)
+                .is_err()
+        );
+        assert_eq!(unchanged.config().learning_rate(), 0.7);
+        assert_eq!(wrong_parameter.value_generation(), 0);
     }
 
     #[test]
