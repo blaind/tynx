@@ -13,6 +13,7 @@ mod cumsum;
 mod dropout;
 mod extrema;
 mod gather;
+mod hardmax;
 mod integer;
 mod logical;
 mod matrix;
@@ -120,6 +121,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Greater(node) => comparison::greater(node, env, device),
         Node::GreaterOrEqual(node) => comparison::greater_or_equal(node, env, device),
         Node::HardSigmoid(node) => unary::hard_sigmoid(node, env, device),
+        Node::Hardmax(node) => hardmax::hardmax(node, env, device),
         Node::HardSwish(node) => unary::hard_swish(node, env, device),
         Node::Identity(node) => Ok(vec![resolve::first(env, &node.name, &node.inputs, device)?]),
         Node::InstanceNormalization(node) => {
