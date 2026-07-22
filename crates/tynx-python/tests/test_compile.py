@@ -154,3 +154,60 @@ def test_fullgraph_rejects_random_dropout() -> None:
 
     with pytest.raises(RuntimeError, match="random Dropout"):
         forward(tynx.Tensor([1.0, 1.0]))
+
+
+def test_declared_static_arguments_guard_separate_graphs() -> None:
+    calls = 0
+
+    @tynx.compile(fullgraph=True, static_argnames=("activation",))
+    def forward(input: tynx.Tensor, activation: str = "relu") -> tynx.Tensor:
+        nonlocal calls
+        calls += 1
+        if activation == "relu":
+            return input.relu()
+        return input.sigmoid()
+
+    assert forward(tynx.Tensor([-1.0, 2.0]), activation="relu").tolist() == [0.0, 2.0]
+    assert forward(tynx.Tensor([3.0, -4.0]), activation="relu").tolist() == [3.0, 0.0]
+    sigmoid = forward(tynx.Tensor([0.0]), activation="sigmoid")
+    assert sigmoid.item() == pytest.approx(0.5)
+    assert calls == 2
+    assert forward.compile_count == 2
+    assert forward.graph_count == 2
+
+
+def test_non_tensor_argument_must_be_declared_static() -> None:
+    @tynx.compile(fullgraph=True)
+    def forward(input: tynx.Tensor, enabled: bool) -> tynx.Tensor:
+        return input.relu() if enabled else -input
+
+    with pytest.raises(RuntimeError, match="declare it with static_argnames"):
+        forward(tynx.Tensor([1.0]), True)
+
+
+def test_unknown_or_unhashable_static_arguments_are_visible() -> None:
+    def forward(input: tynx.Tensor, options: object) -> tynx.Tensor:
+        return input.relu()
+
+    with pytest.raises(ValueError, match="unknown static_argnames"):
+        tynx.compile(forward, static_argnames=("missing",))
+
+    compiled = tynx.compile(forward, static_argnames=("options",), fullgraph=True)
+    with pytest.raises(RuntimeError, match="unhashable static argument 'options'"):
+        compiled(tynx.Tensor([1.0]), [])
+
+
+def test_undeclared_closure_values_are_frozen_at_capture_time() -> None:
+    use_relu = True
+    calls = 0
+
+    @tynx.compile(fullgraph=True)
+    def forward(input: tynx.Tensor) -> tynx.Tensor:
+        nonlocal calls
+        calls += 1
+        return input.relu() if use_relu else input.sigmoid()
+
+    assert forward(tynx.Tensor([-1.0])).item() == 0.0
+    use_relu = False
+    assert forward(tynx.Tensor([-2.0])).item() == 0.0
+    assert calls == 1
