@@ -27,6 +27,27 @@ pub enum InitializerId {
     },
 }
 
+impl InitializerId {
+    /// Identify an embedded graph input, or return `None` for runtime/optional inputs.
+    ///
+    /// `node_index` and `input_index` provide a deterministic fallback identity for malformed
+    /// unnamed constants. Normal named constants and lifted static tensors do not depend on their
+    /// consumer position.
+    pub fn from_argument(input: &Argument, node_index: usize, input_index: usize) -> Option<Self> {
+        match input.value_source {
+            ValueSource::Static(data_id) => Some(Self::Static(data_id)),
+            ValueSource::Constant if !input.name.is_empty() => {
+                Some(Self::Named(input.name.clone()))
+            }
+            ValueSource::Constant => Some(Self::Unnamed {
+                node_index,
+                input_index,
+            }),
+            ValueSource::Dynamic | ValueSource::Optional => None,
+        }
+    }
+}
+
 /// Semantic state role assigned to an ONNX initializer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum InitializerRole {
@@ -750,17 +771,8 @@ fn parameters_for_argument(
 }
 
 fn initializer_id(input: &Argument, node_index: usize, input_index: usize) -> InitializerId {
-    match input.value_source {
-        ValueSource::Static(data_id) => InitializerId::Static(data_id),
-        ValueSource::Constant if !input.name.is_empty() => InitializerId::Named(input.name.clone()),
-        ValueSource::Constant => InitializerId::Unnamed {
-            node_index,
-            input_index,
-        },
-        ValueSource::Dynamic | ValueSource::Optional => {
-            unreachable!("initializer_id is called only for embedded inputs")
-        }
-    }
+    InitializerId::from_argument(input, node_index, input_index)
+        .unwrap_or_else(|| unreachable!("initializer_id is called only for embedded inputs"))
 }
 
 fn initializer_name(input: &Argument, id: &InitializerId) -> (String, bool) {

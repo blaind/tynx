@@ -7,6 +7,7 @@
 
 pub mod autograd;
 pub mod backward_support;
+pub mod imported_state;
 pub mod loss;
 pub mod optimizer;
 pub mod parameter;
@@ -15,6 +16,7 @@ pub mod trainability;
 
 pub use autograd::{BackwardResult, backward};
 pub use backward_support::{BackwardCapability, BackwardSupportRegistry};
+pub use imported_state::{ImportedState, InitializerNameOverrides};
 pub use optimizer::{Adam, AdamConfig, AdamW, AdamWConfig, Sgd, SgdConfig};
 pub use parameter::{ParamId, ParameterContract, ParameterSlot};
 pub use store::ParameterStore;
