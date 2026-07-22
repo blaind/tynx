@@ -6,3 +6,6 @@
 //! ONNX interpreter. Autodiff integration remains feature-gated in the Tynx core.
 
 pub mod loss;
+pub mod parameter;
+
+pub use parameter::{ParamId, ParameterContract, ParameterSlot};
