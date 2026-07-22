@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from os import PathLike
 from typing import Literal, Optional, Union, overload
 
-from . import nn, optim
+from . import distributions, nn, optim
 from ._tynx import (
     Buffer,
     ImportedModel,
@@ -14,6 +14,7 @@ from ._tynx import (
     TrainabilityReport,
     __version__,
     is_grad_enabled,
+    manual_seed,
     maximum,
     minimum,
     no_grad,
@@ -75,9 +76,11 @@ __all__ = [
     "Tensor",
     "TrainabilityReport",
     "__version__",
+    "distributions",
     "is_grad_enabled",
     "load",
     "load_checkpoint",
+    "manual_seed",
     "maximum",
     "minimum",
     "nn",

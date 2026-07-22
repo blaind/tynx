@@ -1,0 +1,76 @@
+//! Native random-state and sampling operations shared by Python distributions and layers.
+
+use pyo3::{exceptions::PyValueError, prelude::*};
+use tynx_core::{DType, Device, Distribution, DynTensor};
+
+use crate::{tensor::PyTensor, to_python_error};
+
+#[pyfunction(name = "manual_seed")]
+pub(crate) fn manual_seed_py(seed: u64) {
+    Device::autodiff(tynx_core::default_device()).seed(seed);
+}
+
+#[pyfunction(name = "_normal_sample")]
+#[pyo3(signature = (loc, scale, seed=None))]
+pub(crate) fn normal_sample_py(
+    loc: PyRef<'_, PyTensor>,
+    scale: PyRef<'_, PyTensor>,
+    seed: Option<u64>,
+) -> PyResult<PyTensor> {
+    let loc = loc.detached_float_value("Normal.sample")?;
+    let scale = scale.detached_float_value("Normal.sample")?;
+    let device = loc.device();
+    if let Some(seed) = seed {
+        device.seed(seed);
+    }
+    let dims = loc.dims();
+    let noise = DynTensor::random(&dims, Distribution::Normal(0.0, 1.0), &device, DType::F32)
+        .map_err(to_python_error)?;
+    let sample = loc
+        .add_broadcast(scale.mul_broadcast(noise).map_err(to_python_error)?)
+        .map_err(to_python_error)?;
+    Ok(PyTensor::from_inner(sample.detach()))
+}
+
+#[pyfunction(name = "_categorical_sample")]
+#[pyo3(signature = (logits, seed=None))]
+pub(crate) fn categorical_sample_py(
+    logits: PyRef<'_, PyTensor>,
+    seed: Option<u64>,
+) -> PyResult<PyTensor> {
+    let logits = logits.detached_float_value("Categorical.sample")?;
+    let rank = logits.rank();
+    if rank == 0 {
+        return Err(PyValueError::new_err(
+            "Categorical logits must have at least one dimension",
+        ));
+    }
+    let categories = logits.dims()[rank - 1];
+    if categories == 0 {
+        return Err(PyValueError::new_err(
+            "Categorical logits must contain at least one category",
+        ));
+    }
+    let device = logits.device();
+    if let Some(seed) = seed {
+        device.seed(seed);
+    }
+    let dims = logits.dims();
+    let uniform = DynTensor::random(
+        &dims,
+        Distribution::Uniform(1.0e-7, 1.0 - 1.0e-7),
+        &device,
+        DType::F32,
+    )
+    .map_err(to_python_error)?;
+    let gumbel = uniform.log().mul_scalar(-1.0).log().mul_scalar(-1.0);
+    let perturbed = logits.add_broadcast(gumbel).map_err(to_python_error)?;
+    let indices = perturbed.arg_extreme(rank - 1, true, false);
+    let mut output_shape = dims[..rank - 1].to_vec();
+    if output_shape.is_empty() {
+        output_shape.push(1);
+    }
+    Ok(PyTensor::from_int_inner(
+        indices.reshape(output_shape).map_err(to_python_error)?,
+    ))
+}

@@ -19,7 +19,7 @@ use pyo3::{
     prelude::*,
     types::{PyAny, PyTuple},
 };
-use tynx_core::{Device, DynTensor, Gradients};
+use tynx_core::{Device, DynInt, DynTensor, Gradients};
 use tynx_train::ParameterSlot;
 
 use crate::{grad_mode::is_grad_enabled, to_python_error};
@@ -121,6 +121,10 @@ impl PyTensor {
             targets: Vec::new(),
             leaf: None,
         }
+    }
+
+    pub(crate) fn from_int_inner(inner: DynInt) -> Self {
+        Self::from_value(TensorValue::Int(inner))
     }
 
     fn from_value(value: TensorValue) -> Self {

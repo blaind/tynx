@@ -1,0 +1,82 @@
+"""Categorical and Normal distribution behavior."""
+
+import math
+
+import pytest
+import tynx
+
+
+def test_categorical_log_prob_entropy_and_gradients() -> None:
+    logits = tynx.Tensor([[0.0, math.log(3.0)]], requires_grad=True)
+    distribution = tynx.distributions.Categorical(logits=logits)
+    action = tynx.Tensor([0], dtype="int64")
+
+    log_prob = distribution.log_prob(action)
+    entropy = distribution.entropy()
+    (-log_prob).mean().backward()
+
+    assert log_prob.tolist() == pytest.approx([math.log(0.25)])
+    assert entropy.tolist() == pytest.approx([-(0.25 * math.log(0.25) + 0.75 * math.log(0.75))])
+    assert logits.grad is not None
+    assert logits.grad.flatten().tolist() == pytest.approx([-0.75, 0.75])
+
+
+def test_categorical_sampling_is_seeded_detached_and_advances_rng() -> None:
+    distribution = tynx.distributions.Categorical(logits=tynx.Tensor([[0.0, 0.0]] * 128))
+
+    first = distribution.sample(seed=123)
+    repeated = distribution.sample(seed=123)
+    advanced = distribution.sample()
+
+    assert first.dtype == "int64"
+    assert first.shape == (128,)
+    assert first.tolist() == repeated.tolist()
+    assert advanced.tolist() != repeated.tolist()
+
+    tynx.manual_seed(77)
+    manual_first = distribution.sample()
+    tynx.manual_seed(77)
+    manual_repeated = distribution.sample()
+    assert manual_first.tolist() == manual_repeated.tolist()
+
+
+def test_normal_log_prob_entropy_gradients_and_seeded_sample() -> None:
+    loc = tynx.Tensor([0.0, 1.0], requires_grad=True)
+    scale = tynx.Tensor([1.0, 2.0], requires_grad=True)
+    distribution = tynx.distributions.Normal(loc, scale)
+    value = tynx.Tensor([1.0, 1.0])
+
+    log_prob = distribution.log_prob(value)
+    entropy = distribution.entropy()
+    (-log_prob).sum().backward()
+
+    assert log_prob.tolist() == pytest.approx(
+        [-0.5 - 0.5 * math.log(2.0 * math.pi), -math.log(2.0) - 0.5 * math.log(2.0 * math.pi)]
+    )
+    assert entropy.tolist() == pytest.approx(
+        [
+            0.5 * math.log(2.0 * math.pi * math.e),
+            math.log(2.0) + 0.5 * math.log(2.0 * math.pi * math.e),
+        ]
+    )
+    assert loc.grad is not None
+    assert loc.grad.tolist() == pytest.approx([-1.0, 0.0])
+    assert scale.grad is not None
+    assert scale.grad.tolist() == pytest.approx([0.0, 0.5])
+
+    first = distribution.sample(seed=42)
+    repeated = distribution.sample(seed=42)
+    assert first.tolist() == repeated.tolist()
+    assert first.requires_grad is False
+    assert tynx.distributions.Normal(loc, 1.0).entropy().shape == (2,)
+
+
+def test_distribution_argument_errors_are_visible() -> None:
+    with pytest.raises(ValueError, match="exactly one"):
+        tynx.distributions.Categorical()
+    with pytest.raises(ValueError, match="exactly one"):
+        tynx.distributions.Categorical(
+            probs=tynx.Tensor([0.5, 0.5]), logits=tynx.Tensor([0.0, 0.0])
+        )
+    with pytest.raises(TypeError, match="float32"):
+        tynx.distributions.Normal(tynx.Tensor([0], dtype="int64"), tynx.Tensor([1.0]))

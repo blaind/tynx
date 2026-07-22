@@ -5,6 +5,7 @@ mod gradient;
 mod imported_model;
 mod optimizer;
 mod parameter;
+mod random;
 mod tensor;
 
 use std::path::PathBuf;
@@ -18,6 +19,7 @@ use gradient::{clip_grad_norm_py, clip_grad_value_py};
 use imported_model::{PyImportedModel, PyTrainabilityReport};
 use optimizer::{PyAdam, PyAdamW, PySgd};
 use parameter::{PyBuffer, PyParameter};
+use random::{categorical_sample_py, manual_seed_py, normal_sample_py};
 use tensor::{PyTensor, maximum_py, minimum_py, where_py};
 
 /// A parsed ONNX model.
@@ -96,5 +98,8 @@ fn _tynx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(minimum_py, module)?)?;
     module.add_function(wrap_pyfunction!(clip_grad_norm_py, module)?)?;
     module.add_function(wrap_pyfunction!(clip_grad_value_py, module)?)?;
+    module.add_function(wrap_pyfunction!(manual_seed_py, module)?)?;
+    module.add_function(wrap_pyfunction!(normal_sample_py, module)?)?;
+    module.add_function(wrap_pyfunction!(categorical_sample_py, module)?)?;
     Ok(())
 }
