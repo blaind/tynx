@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 import tynx
 
@@ -319,3 +321,46 @@ def test_whole_adam_step_replay_matches_eager_updates() -> None:
     assert calls == 1
     assert captured_step.replay_count == 49
     assert captured_optimizer.state_size == eager_optimizer.state_size == 1
+
+
+def test_whole_step_checkpoint_resumes_exactly(tmp_path: Path) -> None:
+    model = tynx.nn.Linear(1, 1)
+    model.weight.copy_(tynx.Tensor([[0.5]]))
+    assert model.bias is not None
+    model.bias.copy_(tynx.Tensor([0.25]))
+    optimizer = tynx.optim.Adam(
+        model.named_parameters(), lr=0.02, betas=(0.8, 0.95), eps=1.0e-6, amsgrad=True
+    )
+
+    @tynx.compile(fullgraph=True)
+    def train_step(input: tynx.Tensor, target: tynx.Tensor) -> tynx.Tensor:
+        optimizer.zero_grad()
+        loss = tynx.nn.functional.mse_loss(model(input), target)
+        loss.backward()
+        optimizer.step()
+        return loss
+
+    input = tynx.Tensor([[1.0], [2.0], [3.0]])
+    target = tynx.Tensor([[2.0], [4.0], [6.0]])
+    for _ in range(12):
+        train_step(input, target)
+
+    checkpoint = tmp_path / "captured-step.tynx"
+    tynx.save_checkpoint(checkpoint, model, optimizer)
+
+    expected_loss = train_step(input, target).item()
+    expected_state = model.state_dict()
+
+    resumed = tynx.nn.Linear(1, 1)
+    resumed_optimizer = tynx.optim.Adam(
+        resumed.named_parameters(), lr=0.9, betas=(0.8, 0.95), eps=1.0e-6, amsgrad=True
+    )
+    tynx.load_checkpoint(checkpoint, resumed, resumed_optimizer)
+    resumed_optimizer.zero_grad()
+    resumed_loss = tynx.nn.functional.mse_loss(resumed(input), target)
+    resumed_loss.backward()
+    resumed_optimizer.step()
+
+    assert resumed_loss.item() == pytest.approx(expected_loss, abs=1.0e-6)
+    for name, value in resumed.state_dict().items():
+        assert value.flatten().tolist() == pytest.approx(expected_state[name].flatten().tolist())
