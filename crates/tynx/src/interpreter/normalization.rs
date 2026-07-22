@@ -1,11 +1,14 @@
-//! Batch and instance normalization execution.
+//! ONNX normalization operator execution.
 
-use burn::tensor::{DType, Device};
+use burn::tensor::{DType, Device, Slice};
 use onnx_ir::{
     ir::Argument,
     node::{
         batch_norm::{BatchNormConfig, BatchNormalizationNode},
+        group_norm::GroupNormalizationNode,
         instance_norm::InstanceNormalizationNode,
+        layer_norm::LayerNormalizationNode,
+        lrn::LrnNode,
     },
 };
 
@@ -85,6 +88,144 @@ pub(super) fn instance_normalization(
     Ok(vec![Value::Tensor(output)])
 }
 
+pub(super) fn layer_normalization(
+    node: &LayerNormalizationNode,
+    env: &Env,
+    device: &Device,
+) -> Result<Vec<Value>> {
+    let input = resolve::at(env, &node.name, &node.inputs, 0, device)?.into_tensor()?;
+    let output_dtype = input.dtype();
+    let scale = resolve::at(env, &node.name, &node.inputs, 1, device)?.into_tensor()?;
+    let normalized_rank = scale.rank();
+    if normalized_rank > input.rank() {
+        return Err(TynxError::Shape(format!(
+            "LayerNormalization scale rank {normalized_rank} exceeds input rank {}",
+            input.rank()
+        )));
+    }
+    let expected = &input.dims()[input.rank() - normalized_rank..];
+    if scale.dims() != expected {
+        return Err(TynxError::Shape(format!(
+            "LayerNormalization scale shape {:?} does not match normalized shape {expected:?}",
+            scale.dims()
+        )));
+    }
+    let compute_dtype =
+        if node.config.full_precision && matches!(output_dtype, DType::F16 | DType::BF16) {
+            DType::F32
+        } else {
+            output_dtype
+        };
+    let input = input.cast(compute_dtype);
+    let input_rank = input.rank();
+    let axes = (input_rank - normalized_rank..input_rank).collect::<Vec<_>>();
+    let mean = input.clone().mean_dims(&axes);
+    let centered = input.sub_broadcast(mean.clone())?;
+    let variance = centered.clone().powi_scalar(2).mean_dims(&axes);
+    let inv_std = variance.add_scalar(node.config.epsilon).powf_scalar(-0.5);
+    let scale = scale.cast(compute_dtype).to_rank(input_rank)?;
+    let mut output = centered
+        .mul_broadcast(inv_std.clone())?
+        .mul_broadcast(scale)?;
+    if let Some(bias) = node.inputs.get(2).filter(|input| !input.is_optional()) {
+        let bias = resolve::input(env, bias, device)?
+            .into_tensor()?
+            .cast(compute_dtype)
+            .to_rank(input_rank)?;
+        output = output.add_broadcast(bias)?;
+    }
+
+    let mut outputs = vec![Value::Tensor(output.cast(output_dtype))];
+    if node.outputs.len() > 1 {
+        outputs.push(Value::Tensor(mean));
+    }
+    if node.outputs.len() > 2 {
+        outputs.push(Value::Tensor(inv_std));
+    }
+    Ok(outputs)
+}
+
+pub(super) fn group_normalization(
+    node: &GroupNormalizationNode,
+    env: &Env,
+    device: &Device,
+) -> Result<Vec<Value>> {
+    let input = resolve::at(env, &node.name, &node.inputs, 0, device)?.into_tensor()?;
+    let dims = input.dims();
+    let channels = channels(&input, "GroupNormalization", 3)?;
+    if node.config.num_groups == 0 || !channels.is_multiple_of(node.config.num_groups) {
+        return Err(TynxError::Shape(format!(
+            "GroupNormalization channels {channels} are not divisible by {} groups",
+            node.config.num_groups
+        )));
+    }
+    if input.rank() >= crate::MAX_RANK {
+        return Err(TynxError::UnsupportedOp(format!(
+            "GroupNormalization rank {} requires an internal rank {} tensor",
+            input.rank(),
+            input.rank() + 1
+        )));
+    }
+    let output_dtype = input.dtype();
+    let compute_dtype =
+        if node.config.full_precision && matches!(output_dtype, DType::F16 | DType::BF16) {
+            DType::F32
+        } else {
+            output_dtype
+        };
+    let mut grouped_dims = Vec::with_capacity(dims.len() + 1);
+    grouped_dims.push(dims[0]);
+    grouped_dims.push(node.config.num_groups);
+    grouped_dims.push(channels / node.config.num_groups);
+    grouped_dims.extend_from_slice(&dims[2..]);
+    let grouped = input.cast(compute_dtype).reshape(grouped_dims)?;
+    let axes = (2..grouped.rank()).collect::<Vec<_>>();
+    let mean = grouped.clone().mean_dims(&axes);
+    let centered = grouped.sub_broadcast(mean)?;
+    let variance = centered.clone().powi_scalar(2).mean_dims(&axes);
+    let normalized = centered
+        .div_broadcast(variance.add_scalar(node.config.epsilon).sqrt())?
+        .reshape(dims.clone())?;
+    let parameters = ChannelParameters {
+        node_name: &node.name,
+        inputs: &node.inputs,
+        channels,
+        input_rank: dims.len(),
+        dtype: compute_dtype,
+        env,
+        device,
+    };
+    let output = normalized
+        .mul_broadcast(parameters.get(1)?)?
+        .add_broadcast(parameters.get(2)?)?
+        .cast(output_dtype);
+    Ok(vec![Value::Tensor(output)])
+}
+
+pub(super) fn lrn(node: &LrnNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
+    let input = resolve::first(env, &node.name, &node.inputs, device)?.into_tensor()?;
+    let channel_count = channels(&input, "LRN", 3)?;
+    let size = usize::try_from(node.config.size)
+        .map_err(|_| TynxError::Shape(format!("LRN size {} is invalid", node.config.size)))?;
+    let squares = input.clone().powi_scalar(2);
+    let left = (size - 1) / 2;
+    let right = size / 2;
+    let mut channel_sums = Vec::with_capacity(channel_count);
+    for channel in 0..channel_count {
+        let start = channel.saturating_sub(left);
+        let end = (channel + right + 1).min(channel_count);
+        let mut slices = vec![Slice::full(); input.rank()];
+        slices[1] = Slice::new(start as isize, Some(end as isize), 1);
+        channel_sums.push(squares.clone().slice(&slices).sum_dims(&[1]));
+    }
+    let local_sum = DynTensor::concat(channel_sums, 1)?;
+    let scale = local_sum
+        .mul_scalar(node.config.alpha as f64 / size as f64)
+        .add_scalar(node.config.bias as f64)
+        .powf_scalar(node.config.beta as f64);
+    Ok(vec![Value::Tensor(input.div_broadcast(scale)?)])
+}
+
 struct ChannelParameters<'a> {
     node_name: &'a str,
     inputs: &'a [Argument],
@@ -131,6 +272,7 @@ mod tests {
         node::{
             batch_norm::{BatchNormConfig, BatchNormRuntimeConfig, BatchNormalizationNodeBuilder},
             instance_norm::{InstanceNormConfig, InstanceNormalizationNodeBuilder},
+            layer_norm::{LayerNormConfig, LayerNormalizationNodeBuilder},
         },
     };
 
@@ -237,6 +379,34 @@ mod tests {
             device: &device,
         };
         assert!(parameters.get(1).is_err());
+    }
+
+    #[test]
+    fn layer_norm_normalizes_the_scale_shape_axes() {
+        let node = LayerNormalizationNodeBuilder::new("layer_norm")
+            .input_tensor("x", 2, DType::F32)
+            .input_tensor("scale", 1, DType::F32)
+            .input_tensor("bias", 1, DType::F32)
+            .output_tensor("y", 2, DType::F32)
+            .config(LayerNormConfig::new(0.0, false))
+            .build();
+        let device = Device::default();
+        let mut env = Env::new();
+        insert(&mut env, "x", vec![1.0, 2.0], [1, 2], &device);
+        insert_1d(&mut env, "scale", vec![1.0, 1.0], &device);
+        insert_1d(&mut env, "bias", vec![0.0, 0.0], &device);
+
+        let output = layer_normalization(&node, &env, &device)
+            .unwrap()
+            .remove(0)
+            .into_tensor()
+            .unwrap()
+            .into_data();
+
+        output.assert_approx_eq(
+            &TensorData::new(vec![-1.0_f32, 1.0], [1, 2]),
+            Tolerance::<f32>::absolute(1e-6),
+        );
     }
 
     fn insert<const D: usize>(

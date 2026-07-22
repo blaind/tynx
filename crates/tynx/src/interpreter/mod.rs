@@ -99,6 +99,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::GatherND(node) => gather::gather_nd(node, env, device),
         Node::GlobalAveragePool(node) => pooling::global_average_pool(node, env, device),
         Node::GlobalMaxPool(node) => pooling::global_max_pool(node, env, device),
+        Node::GroupNormalization(node) => normalization::group_normalization(node, env, device),
         Node::Greater(node) => comparison::greater(node, env, device),
         Node::GreaterOrEqual(node) => comparison::greater_or_equal(node, env, device),
         Node::HardSigmoid(node) => unary::hard_sigmoid(node, env, device),
@@ -108,10 +109,12 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
             normalization::instance_normalization(node, env, device)
         }
         Node::LeakyRelu(node) => unary::leaky_relu(node, env, device),
+        Node::LayerNormalization(node) => normalization::layer_normalization(node, env, device),
         Node::Less(node) => comparison::less(node, env, device),
         Node::LessOrEqual(node) => comparison::less_or_equal(node, env, device),
         Node::Log(node) => unary::log(node, env, device),
         Node::LogSoftmax(node) => softmax::log_softmax(node, env, device),
+        Node::Lrn(node) => normalization::lrn(node, env, device),
         Node::Gemm(node) => matrix::gemm(node, env, device),
         Node::Max(node) => variadic::max(node, env, device),
         Node::MatMul(node) => matrix::matmul(node, env, device),
