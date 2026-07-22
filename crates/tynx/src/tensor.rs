@@ -28,6 +28,17 @@ fn rank_overflow(rank: usize) -> TynxError {
     }
 }
 
+fn ensure_same_device(operation: &str, left: &Device, right: &Device) -> Result<()> {
+    if left.clone().inner() == right.clone().inner() {
+        return Ok(());
+    }
+    Err(TynxError::TensorDeviceMismatch {
+        operation: operation.to_string(),
+        left: format!("{left:?}"),
+        right: format!("{right:?}"),
+    })
+}
+
 fn broadcast_shape(left: &[usize], right: &[usize]) -> Result<Vec<usize>> {
     let rank = left.len().max(right.len());
     let mut output = Vec::with_capacity(rank);
@@ -1608,6 +1619,7 @@ impl DynTensor {
 
     /// Multiply matrices or batches of matrices with matching runtime ranks.
     pub fn matmul(self, other: Self) -> Result<Self> {
+        ensure_same_device("matmul", &self.device(), &other.device())?;
         validate_matmul_shapes(&self.dims(), &other.dims())?;
         Ok(match (self, other) {
             (Self::R2(left), Self::R2(right)) => Self::R2(left.matmul(right)),
@@ -1804,6 +1816,7 @@ impl DynTensor {
     }
 
     fn broadcast_pair(left: Self, right: Self) -> Result<(Self, Self)> {
+        ensure_same_device("elementwise operation", &left.device(), &right.device())?;
         broadcast_shape(&left.dims(), &right.dims())?;
         let rank = left.rank().max(right.rank());
         Ok((left.to_rank(rank)?, right.to_rank(rank)?))
@@ -2584,6 +2597,7 @@ impl DynInt {
 
     /// Multiply matrices or batches of matrices with matching runtime ranks.
     pub fn matmul(self, other: Self) -> Result<Self> {
+        ensure_same_device("matmul", &self.device(), &other.device())?;
         validate_matmul_shapes(&self.dims(), &other.dims())?;
         Ok(match (self, other) {
             (Self::R2(left), Self::R2(right)) => Self::R2(left.matmul(right)),
@@ -2762,6 +2776,7 @@ impl DynInt {
     }
 
     fn broadcast_pair(left: Self, right: Self) -> Result<(Self, Self)> {
+        ensure_same_device("elementwise operation", &left.device(), &right.device())?;
         broadcast_shape(&left.dims(), &right.dims())?;
         let rank = left.rank().max(right.rank());
         Ok((left.to_rank(rank)?, right.to_rank(rank)?))
@@ -2864,32 +2879,10 @@ impl DynBool {
 
     /// Create a boolean tensor filled with one value.
     pub fn full(dims: &[usize], value: bool, device: &Device) -> Result<Self> {
-        let dtype = DType::Bool(burn::tensor::BoolStore::Native);
-        Ok(match dims {
-            [d0] => Self::R1(Tensor::<1, Bool>::full([*d0], value, (device, dtype))),
-            [d0, d1] => Self::R2(Tensor::<2, Bool>::full([*d0, *d1], value, (device, dtype))),
-            [d0, d1, d2] => Self::R3(Tensor::<3, Bool>::full(
-                [*d0, *d1, *d2],
-                value,
-                (device, dtype),
-            )),
-            [d0, d1, d2, d3] => Self::R4(Tensor::<4, Bool>::full(
-                [*d0, *d1, *d2, *d3],
-                value,
-                (device, dtype),
-            )),
-            [d0, d1, d2, d3, d4] => Self::R5(Tensor::<5, Bool>::full(
-                [*d0, *d1, *d2, *d3, *d4],
-                value,
-                (device, dtype),
-            )),
-            [d0, d1, d2, d3, d4, d5] => Self::R6(Tensor::<6, Bool>::full(
-                [*d0, *d1, *d2, *d3, *d4, *d5],
-                value,
-                (device, dtype),
-            )),
-            _ => return Err(rank_overflow(dims.len())),
-        })
+        // CubeCL has no boolean scalar representation on WGPU. Construct exact 0/1 integer
+        // storage and compare instead of sending a bool fill scalar to the backend.
+        DynInt::full(dims, i64::from(value), device, DType::I64)
+            .map(|tensor| tensor.equal_scalar(1))
     }
 
     /// Return coordinates of all true elements in row-major order.
@@ -3094,7 +3087,11 @@ impl DynBool {
 
     /// Create a boolean tensor with the same shape and device filled with one scalar.
     pub fn full_like(self, value: bool) -> Self {
-        map_bool!(self, |tensor| tensor.full_like(value))
+        map_bool!(self, |tensor| tensor
+            .int()
+            .cast(DType::I64)
+            .full_like(i64::from(value))
+            .equal_elem(1))
     }
 
     /// Convert the boolean tensor to an integer tensor with an explicit dtype.
@@ -3154,6 +3151,7 @@ impl DynBool {
     }
 
     fn broadcast_pair(left: Self, right: Self) -> Result<(Self, Self)> {
+        ensure_same_device("elementwise operation", &left.device(), &right.device())?;
         broadcast_shape(&left.dims(), &right.dims())?;
         let rank = left.rank().max(right.rank());
         Ok((left.to_rank(rank)?, right.to_rank(rank)?))

@@ -17,7 +17,7 @@ use std::{
 };
 
 use pyo3::{
-    exceptions::{PyRuntimeError, PyTypeError, PyValueError},
+    exceptions::{PyNotImplementedError, PyRuntimeError, PyTypeError, PyValueError},
     prelude::*,
     types::{PyAny, PyTuple},
 };
@@ -929,6 +929,12 @@ impl PyTensor {
         let target_device = ensure_autodiff(
             device.map_or_else(|| current.device(), |device| device.inner.as_ref().clone()),
         );
+        let current_device = current.device();
+        if current_device.clone().inner() != target_device.clone().inner() {
+            return Err(PyNotImplementedError::new_err(format!(
+                "Tensor.to() cannot move tensors between backends ({current_device:?} to {target_device:?}); create the tensor on the target device instead"
+            )));
+        }
         let tracking = is_grad_enabled();
         if matches!(current, TensorValue::Float(_)) && dtype == "float32" {
             let output = self

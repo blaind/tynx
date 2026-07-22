@@ -39,6 +39,17 @@ pub enum TynxError {
         actual: String,
     },
 
+    /// An eager operation received tensors allocated on different physical devices.
+    #[error("{operation} requires tensors on the same device, got {left} and {right}")]
+    TensorDeviceMismatch {
+        /// Operation that rejected the tensors.
+        operation: String,
+        /// Left or primary tensor device.
+        left: String,
+        /// Right or secondary tensor device.
+        right: String,
+    },
+
     /// A device reported an asynchronous execution failure.
     #[error("asynchronous device error: {0}")]
     AsynchronousDevice(String),

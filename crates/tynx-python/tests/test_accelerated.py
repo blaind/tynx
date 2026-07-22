@@ -57,13 +57,44 @@ def test_accelerated_multidimensional_extrema_avoid_i64_mask_reductions() -> Non
     tynx.synchronize(device)
 
 
-def test_accelerated_boolean_construction_avoids_backend_bool_upload() -> None:
+def test_accelerated_boolean_construction_and_factories_avoid_bool_scalars() -> None:
     device = _accelerated_device()
 
     value = tynx.Tensor([[True, False], [False, True]], dtype="bool")
+    zeros = tynx.zeros((2,), dtype="bool")
+    ones = tynx.ones((2,), dtype="bool")
+    full = tynx.full((2,), True, dtype="bool")
+    ones_like = tynx.ones_like(value)
 
     tynx.synchronize(device)
     assert value.tolist() == [[True, False], [False, True]]
+    assert zeros.tolist() == [False, False]
+    assert ones.tolist() == [True, True]
+    assert full.tolist() == [True, True]
+    assert ones_like.tolist() == [[True, True], [True, True]]
+
+
+def test_accelerated_cross_backend_operations_raise_python_exceptions() -> None:
+    device = _accelerated_device()
+    gpu = tynx.ones((2,))
+    cpu = tynx.ones((2,), device=tynx.Device("cpu"))
+
+    with pytest.raises(ValueError, match="same device"):
+        cpu + gpu
+    with pytest.raises(ValueError, match="same device"):
+        cpu.reshape(1, 2) @ gpu.reshape(2, 1)
+    with pytest.raises(ValueError, match="same device"):
+        tynx.maximum(cpu, gpu)
+    with pytest.raises(NotImplementedError, match="cannot move tensors between backends"):
+        gpu.to(tynx.Device("cpu"))
+    with pytest.raises(NotImplementedError, match="cannot move tensors between backends"):
+        cpu.to(device)
+    with tynx.no_grad(), pytest.raises(
+        NotImplementedError, match="cannot move tensors between backends"
+    ):
+        gpu.to(tynx.Device("cpu"))
+
+    tynx.synchronize(device)
 
 
 def test_accelerated_tape_survives_intermediate_drop_and_optimizer_step() -> None:
