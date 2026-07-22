@@ -59,6 +59,64 @@ def test_tensor_typed_storage_rejects_invalid_contracts() -> None:
         tynx.Tensor([1], dtype="int64").relu()
 
 
+def test_tensor_float_comparisons_return_detached_boolean_masks() -> None:
+    values = tynx.Tensor([[1.0, 2.0], [3.0, 4.0]], requires_grad=True)
+    bounds = tynx.Tensor([[2.0], [4.0]])
+
+    assert (values == bounds).tolist() == [[False, True], [False, True]]
+    assert (values != bounds).tolist() == [[True, False], [True, False]]
+    assert (values < bounds).tolist() == [[True, False], [True, False]]
+    assert (values <= 2).tolist() == [[True, True], [False, False]]
+    assert (values > 2).tolist() == [[False, False], [True, True]]
+    assert (2 < values).tolist() == [[False, False], [True, True]]  # noqa: SIM300
+    result = values >= bounds
+    assert result.tolist() == [[False, True], [False, True]]
+    assert result.dtype == "bool"
+    assert not result.requires_grad
+
+
+def test_tensor_integer_and_boolean_comparisons() -> None:
+    values = tynx.Tensor([[1, 2], [3, 4]], dtype="int64")
+
+    assert (values == 3).tolist() == [[False, False], [True, False]]
+    assert (values != 3).tolist() == [[True, True], [False, True]]
+    assert (values < 3).tolist() == [[True, True], [False, False]]
+    assert (values <= 3).tolist() == [[True, True], [True, False]]
+    assert (values > 3).tolist() == [[False, False], [False, True]]
+    assert (values >= 3).tolist() == [[False, False], [True, True]]
+
+    mask = tynx.Tensor([True, False], dtype="bool")
+    assert (mask == True).tolist() == [True, False]  # noqa: E712
+    assert (mask != False).tolist() == [True, False]  # noqa: E712
+
+
+def test_tensor_boolean_mask_algebra_broadcasts() -> None:
+    left = tynx.Tensor([[True], [False]], dtype="bool")
+    right = tynx.Tensor([[True, False]], dtype="bool")
+
+    assert (left & right).tolist() == [[True, False], [False, False]]
+    assert (left | right).tolist() == [[True, True], [True, False]]
+    assert (left ^ right).tolist() == [[False, True], [True, False]]
+    assert (~left).tolist() == [[False], [True]]
+
+
+def test_tensor_comparisons_and_masks_reject_invalid_types() -> None:
+    floats = tynx.Tensor([1.0])
+    integers = tynx.Tensor([1], dtype="int64")
+    booleans = tynx.Tensor([True], dtype="bool")
+
+    with pytest.raises(TypeError, match="matching dtypes"):
+        _ = floats == integers
+    with pytest.raises(TypeError, match="integer scalar"):
+        _ = integers > 1.5
+    with pytest.raises(TypeError, match="not defined for bool"):
+        _ = booleans < True
+    with pytest.raises(TypeError, match="requires bool Tensors"):
+        _ = booleans & floats
+    with pytest.raises(TypeError, match="requires a bool Tensor"):
+        _ = ~floats
+
+
 def test_tensor_eager_operators() -> None:
     left = tynx.Tensor([[1.0, 2.0], [3.0, 4.0]])
     right = tynx.Tensor([[2.0, 0.5], [1.0, 2.0]])

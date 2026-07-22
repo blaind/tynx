@@ -1,5 +1,6 @@
 //! Eager CPython tensor projection over the binding-neutral Rust tensor facade.
 
+mod comparison;
 mod data;
 mod reduction;
 mod shape;
@@ -19,6 +20,7 @@ use tynx_core::{Device, DynTensor, Gradients};
 use tynx_train::ParameterSlot;
 
 use crate::{grad_mode::is_grad_enabled, to_python_error};
+use comparison::{Comparison, MaskOperation};
 use data::TensorValue;
 use reduction::ReductionSpec;
 
@@ -208,8 +210,26 @@ impl PyTensor {
         })
     }
 
+    fn compare(&self, other: &Bound<'_, PyAny>, comparison: Comparison) -> PyResult<Self> {
+        let left = self.source.value().detach();
+        let value = if let Ok(other) = other.extract::<PyRef<'_, Self>>() {
+            left.compare_tensor(other.source.value().detach(), comparison)?
+        } else {
+            left.compare_scalar(other, comparison)?
+        };
+        Ok(Self::from_value(value))
+    }
+
+    fn mask_binary(&self, other: &Self, operation: MaskOperation) -> PyResult<Self> {
+        self.source
+            .value()
+            .detach()
+            .mask_binary(other.source.value().detach(), operation)
+            .map(Self::from_value)
+    }
+
     pub(crate) fn tensor_from_python(data: &Bound<'_, PyAny>) -> PyResult<DynTensor> {
-        let device = Device::autodiff(Device::default());
+        let device = Device::autodiff(tynx_core::default_device());
         TensorValue::float_from_python(data, &device)
     }
 
@@ -227,7 +247,7 @@ impl PyTensor {
     #[new]
     #[pyo3(signature = (data, *, dtype="float32", requires_grad=false))]
     fn new(data: &Bound<'_, PyAny>, dtype: &str, requires_grad: bool) -> PyResult<Self> {
-        let device = Device::autodiff(Device::default());
+        let device = Device::autodiff(tynx_core::default_device());
         let value = TensorValue::from_python(data, dtype, &device)?;
         if requires_grad {
             return Ok(Self::from_leaf(value.float("requires_grad=True")?));
@@ -525,6 +545,50 @@ impl PyTensor {
 
     fn __neg__(&self) -> PyResult<Self> {
         self.unary(|input| Ok(input.negated()))
+    }
+
+    fn __eq__(&self, other: &Bound<'_, PyAny>) -> PyResult<Self> {
+        self.compare(other, Comparison::Equal)
+    }
+
+    fn __ne__(&self, other: &Bound<'_, PyAny>) -> PyResult<Self> {
+        self.compare(other, Comparison::NotEqual)
+    }
+
+    fn __lt__(&self, other: &Bound<'_, PyAny>) -> PyResult<Self> {
+        self.compare(other, Comparison::Less)
+    }
+
+    fn __le__(&self, other: &Bound<'_, PyAny>) -> PyResult<Self> {
+        self.compare(other, Comparison::LessEqual)
+    }
+
+    fn __gt__(&self, other: &Bound<'_, PyAny>) -> PyResult<Self> {
+        self.compare(other, Comparison::Greater)
+    }
+
+    fn __ge__(&self, other: &Bound<'_, PyAny>) -> PyResult<Self> {
+        self.compare(other, Comparison::GreaterEqual)
+    }
+
+    fn __and__(&self, other: PyRef<'_, Self>) -> PyResult<Self> {
+        self.mask_binary(&other, MaskOperation::And)
+    }
+
+    fn __or__(&self, other: PyRef<'_, Self>) -> PyResult<Self> {
+        self.mask_binary(&other, MaskOperation::Or)
+    }
+
+    fn __xor__(&self, other: PyRef<'_, Self>) -> PyResult<Self> {
+        self.mask_binary(&other, MaskOperation::Xor)
+    }
+
+    fn __invert__(&self) -> PyResult<Self> {
+        self.source
+            .value()
+            .detach()
+            .mask_not()
+            .map(Self::from_value)
     }
 
     fn __repr__(&self) -> String {
