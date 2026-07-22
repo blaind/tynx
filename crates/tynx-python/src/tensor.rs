@@ -364,6 +364,13 @@ impl PyTensor {
             TensorSource::Owned(_) => None,
         }
     }
+
+    pub(crate) fn parameter_slot(&self) -> Option<ParameterSlot> {
+        match &self.source {
+            TensorSource::Parameter(slot) => Some(slot.clone()),
+            TensorSource::Owned(_) => None,
+        }
+    }
 }
 
 #[pymethods]

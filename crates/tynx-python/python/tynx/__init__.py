@@ -1,5 +1,6 @@
 """Python bindings for the Tynx neural network runtime."""
 
+from . import optim
 from ._tynx import (
     Parameter,
     Session,
@@ -21,5 +22,6 @@ __all__ = [
     "maximum",
     "minimum",
     "no_grad",
+    "optim",
     "where",
 ]

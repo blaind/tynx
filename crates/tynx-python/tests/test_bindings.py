@@ -257,6 +257,69 @@ def test_tensor_elementwise_minimum_maximum_support_typed_values_and_errors() ->
         integers.minimum(1.5)
 
 
+def test_sgd_updates_parameters_without_clearing_gradients() -> None:
+    parameter = tynx.Parameter([2.0])
+    optimizer = tynx.optim.SGD([parameter, parameter], lr=0.1)
+
+    (parameter * 3).backward()
+    optimizer.step()
+
+    assert parameter.tolist() == pytest.approx([1.7])
+    assert parameter.grad is not None
+    assert parameter.grad.tolist() == pytest.approx([3.0])
+    assert parameter.name is None
+    assert optimizer.parameter_count == 1
+    optimizer.zero_grad()
+    assert parameter.grad is None
+
+
+def test_sgd_configuration_momentum_and_mutable_learning_rate() -> None:
+    parameter = tynx.Parameter([2.0])
+    optimizer = tynx.optim.SGD([parameter], lr=0.1, momentum=0.9)
+
+    (parameter * 2).backward()
+    optimizer.step()
+    optimizer.zero_grad()
+    (parameter * 2).backward()
+    optimizer.lr = 0.2
+    optimizer.step()
+
+    assert optimizer.lr == pytest.approx(0.2)
+    assert optimizer.learning_rate == pytest.approx(0.2)
+    assert optimizer.state_size == 1
+    assert parameter.tolist() == pytest.approx([1.04])
+    assert "momentum=0.9" in repr(optimizer)
+
+
+def test_sgd_rejects_invalid_parameters_and_configuration() -> None:
+    with pytest.raises(ValueError, match="at least one Parameter"):
+        tynx.optim.SGD([], lr=0.1)
+    with pytest.raises(TypeError, match="only Parameter objects"):
+        tynx.optim.SGD([tynx.Tensor([1.0])], lr=0.1)  # type: ignore[list-item]
+    with pytest.raises(ValueError, match="learning rate"):
+        tynx.optim.SGD([tynx.Parameter([1.0])], lr=-0.1)
+    with pytest.raises(ValueError, match="Nesterov"):
+        tynx.optim.SGD([tynx.Parameter([1.0])], lr=0.1, nesterov=True)
+
+
+def test_sgd_trains_an_authored_python_linear_model() -> None:
+    weight = tynx.Parameter([0.0], name="weight")
+    bias = tynx.Parameter([0.0], name="bias")
+    optimizer = tynx.optim.SGD([weight, bias], lr=0.1)
+    inputs = tynx.Tensor([-2.0, -1.0, 0.0, 1.0, 2.0])
+    targets = tynx.Tensor([-3.0, -1.0, 1.0, 3.0, 5.0])
+
+    for _ in range(100):
+        optimizer.zero_grad()
+        prediction = inputs * weight + bias
+        error = prediction - targets
+        (error * error).mean().backward()
+        optimizer.step()
+
+    assert weight.item() == pytest.approx(2.0, abs=1e-4)
+    assert bias.item() == pytest.approx(1.0, abs=1e-4)
+
+
 def test_tensor_eager_operators() -> None:
     left = tynx.Tensor([[1.0, 2.0], [3.0, 4.0]])
     right = tynx.Tensor([[2.0, 0.5], [1.0, 2.0]])

@@ -4,11 +4,11 @@ mod adam;
 
 pub use adam::{Adam, AdamConfig, AdamW, AdamWConfig};
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use tynx_core::{DynTensor, Result, TynxError};
 
-use crate::{ParamId, ParameterStore};
+use crate::{ParamId, ParameterSlot, ParameterStore};
 
 /// Configuration for stochastic gradient descent.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -133,10 +133,30 @@ impl Sgd {
     /// skipped. All update tensors are computed before publication, providing one serialized
     /// multi-parameter commit in the initial single-threaded runtime.
     pub fn step(&mut self, parameters: &ParameterStore) -> Result<usize> {
+        self.step_parameters(parameters.trainable())
+    }
+
+    /// Update a runtime list of parameter slots without requiring persisted state names.
+    ///
+    /// Repeated/tied identities are updated once in first-occurrence order. Frozen slots and slots
+    /// without gradients are skipped, matching [`Self::step`].
+    pub fn step_slots(&mut self, parameters: &[ParameterSlot]) -> Result<usize> {
+        let mut seen = HashSet::new();
+        let unique = parameters
+            .iter()
+            .filter(|parameter| parameter.contract().trainable() && seen.insert(parameter.id()))
+            .collect::<Vec<_>>();
+        self.step_parameters(unique)
+    }
+
+    fn step_parameters<'a>(
+        &mut self,
+        parameters: impl IntoIterator<Item = &'a ParameterSlot>,
+    ) -> Result<usize> {
         let mut next_momentum = self.momentum_buffers.clone();
         let mut updates = Vec::new();
 
-        for parameter in parameters.trainable() {
+        for parameter in parameters {
             let Some(gradient) = parameter.grad() else {
                 continue;
             };
@@ -314,6 +334,26 @@ mod tests {
         assert_eq!(values(active.value()), [1.9]);
         assert_eq!(values(missing.value()), [4.0]);
         assert_eq!(values(frozen.value()), [6.0]);
+    }
+
+    #[test]
+    fn slot_list_updates_tied_identity_once_without_requiring_a_name() {
+        let device = Device::autodiff(Device::default());
+        let parameter = ParameterSlot::new(None, tensor(vec![2.0], &[1], &device), true).unwrap();
+        let store = {
+            let mut store = ParameterStore::new();
+            store.insert("weight", parameter.clone()).unwrap();
+            store
+        };
+        set_gradient(&parameter, &store, 3.0);
+        let mut sgd = Sgd::new(0.1).unwrap();
+
+        assert_eq!(
+            sgd.step_slots(&[parameter.clone(), parameter.clone()])
+                .unwrap(),
+            1
+        );
+        assert_eq!(values(parameter.value()), [1.7]);
     }
 
     #[test]
