@@ -27,6 +27,12 @@ _MULTI_MODEL = bytes.fromhex(
     "0c080112080a0208020a02080162190a0770726f64756374120e0a0c080112080a0208020a02"
     "0801"
 )
+_MATMUL_MODEL = bytes.fromhex(
+    "080d3a7e0a260a01780a0e656e636f6465722e7765696768741201791a066d61746d756c"
+    "22064d61744d756c120c6d61746d756c5f6d6f64656c2a1c080108011001220400000040"
+    "420e656e636f6465722e7765696768745a130a0178120e0a0c080112080a0208020a020801"
+    "62130a0179120e0a0c080112080a0208020a02080142040a00100d"
+)
 
 
 def _model_path(tmp_path: Path) -> Path:
@@ -40,7 +46,7 @@ def _load_model(tmp_path: Path) -> tynx.ImportedModel:
         _model_path(tmp_path),
         trainable="auto",
         simplify=False,
-        initializer_names={"constant1_out1": "head.weight", "constant2_out1": "head.bias"},
+        initializer_names={"weight": "head.weight", "bias": "head.bias"},
     )
 
 
@@ -109,7 +115,7 @@ def test_no_grad_imported_call_is_detached_and_plain_load_remains_inference(tmp_
         path,
         trainable=True,
         simplify=False,
-        initializer_names={"constant1_out1": "head.weight", "constant2_out1": "head.bias"},
+        initializer_names={"weight": "head.weight", "bias": "head.bias"},
     )
     with tynx.no_grad():
         output = model(tynx.Tensor([[2.0], [-1.0]], requires_grad=True))
@@ -126,8 +132,8 @@ def test_imported_trainability_report_is_structured_and_output_specific(tmp_path
     assert isinstance(report, tynx.TrainabilityReport)
     assert report.is_trainable is True
     assert report.selected_outputs == [output_name]
-    assert sorted(report.trainable_parameters) == ["constant1_out1", "constant2_out1"]
-    assert sorted(report.output_parameters[output_name]) == ["constant1_out1", "constant2_out1"]
+    assert sorted(report.trainable_parameters) == ["bias", "weight"]
+    assert sorted(report.output_parameters[output_name]) == ["bias", "weight"]
     assert report.backward_issues == []
     assert {entry["role"] for entry in report.initializers}.issuperset({"parameter"})
     assert "Trainable parameters" in str(report)
@@ -144,7 +150,7 @@ def test_simplified_imported_trainability_uses_declared_output_names(tmp_path: P
         _model_path(tmp_path),
         trainable="auto",
         simplify=True,
-        initializer_names={"constant1_out1": "head.weight", "constant2_out1": "head.bias"},
+        initializer_names={"weight": "head.weight", "bias": "head.bias"},
     )
 
     assert model.outputs == ["y"]
@@ -155,6 +161,22 @@ def test_simplified_imported_trainability_uses_declared_output_names(tmp_path: P
     selected = model.require_trainable(outputs=["y"])
     assert selected.selected_outputs == ["y"]
     assert "y" in selected.output_parameters
+
+
+@pytest.mark.parametrize("simplify", [False, True])
+def test_matmul_initializer_preserves_onnx_name_without_override(
+    tmp_path: Path, simplify: bool
+) -> None:
+    path = tmp_path / "matmul.onnx"
+    path.write_bytes(_MATMUL_MODEL)
+
+    model = tynx.load(path, trainable="auto", simplify=simplify)
+
+    assert [name for name, _ in model.named_parameters()] == ["encoder.weight"]
+    report = model.trainability_report()
+    assert report.trainable_parameters == ["encoder.weight"]
+    assert report.initializers[0]["synthetic_name"] is False
+    assert model(tynx.Tensor([[3.0], [4.0]])).tolist() == [[6.0], [8.0]]
 
 
 def test_imported_model_binds_multiple_named_inputs_and_returns_named_outputs(

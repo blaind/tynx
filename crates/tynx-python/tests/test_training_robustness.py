@@ -81,7 +81,7 @@ def test_imported_output_retains_parameter_tape_after_model_drop(tmp_path: Path)
         path,
         trainable="auto",
         simplify=False,
-        initializer_names={"constant1_out1": "weight", "constant2_out1": "bias"},
+        initializer_names={"weight": "weight", "bias": "bias"},
     )
     parameters = dict(model.named_parameters())
     output = model(tynx.Tensor([[2.0], [-1.0]]))

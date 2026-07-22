@@ -13,9 +13,8 @@ use crate::{
 
 /// Stable checkpoint-name replacements for processed initializer names.
 ///
-/// Lifted static inputs currently lose their original ONNX name in the pinned `onnx-ir`. Tynx
-/// refuses to persist generated `__static#N` names, so callers must supply a stable replacement
-/// until provenance is preserved during graph import.
+/// Tynx refuses to persist generated `__static#N` names for genuinely synthetic graph values, so
+/// callers may supply a stable replacement for those values before materialization.
 #[derive(Debug, Clone, Default)]
 pub struct InitializerNameOverrides {
     names: HashMap<String, String>,
@@ -77,7 +76,28 @@ impl ImportedState {
         role_overrides: &TrainabilityOverrides,
         name_overrides: &InitializerNameOverrides,
     ) -> Result<Self> {
-        let report = TrainabilityReport::analyze_initializers_with(graph, role_overrides);
+        Self::materialize_with_names(
+            graph,
+            device,
+            role_overrides,
+            name_overrides,
+            &HashMap::new(),
+        )
+    }
+
+    /// Classify and materialize graph state using preserved ONNX initializer provenance.
+    pub fn materialize_with_names(
+        graph: &OnnxGraph,
+        device: &Device,
+        role_overrides: &TrainabilityOverrides,
+        name_overrides: &InitializerNameOverrides,
+        stable_names: &HashMap<InitializerId, String>,
+    ) -> Result<Self> {
+        let report = TrainabilityReport::analyze_initializers_with_names(
+            graph,
+            role_overrides,
+            stable_names,
+        );
         let mut values = HashMap::<InitializerId, TensorData>::new();
         for (node_index, node) in graph.nodes.iter().enumerate() {
             for (input_index, input) in node.inputs().iter().enumerate() {
