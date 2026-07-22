@@ -195,3 +195,64 @@ jobs:
           npm run check
           npm test
           npm pack --dry-run
+
+  size:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    env:
+      WHEEL_MAX_MIB: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: size
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Build release wheel with wgpu
+        run: |
+          pip install maturin
+          maturin build --release --features wgpu -m crates/tynx-python/Cargo.toml --out dist
+      - name: Build fully-linked release binary
+        run: |
+          cargo build --release --tests -p tynx --features wgpu
+          bin=$(ls -t target/release/deps/conformance-* | grep -v '\.d$' | head -1)
+          cp "$bin" conformance-size-probe
+          strip conformance-size-probe
+      - name: Report sizes and enforce wheel budget
+        run: |
+          python - <<'EOF'
+          import glob, gzip, os, sys
+
+          def mib(n):
+              return f"{n / 1024 / 1024:.1f} MiB"
+
+          wheels = glob.glob("dist/*.whl")
+          if not wheels:
+              sys.exit("no wheel built")
+          wheel = wheels[0]
+          wheel_size = os.path.getsize(wheel)
+
+          bin_path = "conformance-size-probe"
+          bin_size = os.path.getsize(bin_path)
+          with open(bin_path, "rb") as f:
+              bin_gz = len(gzip.compress(f.read(), 9))
+
+          rows = [
+              "| Artifact (release profile, no LTO) | Size |",
+              "| --- | --- |",
+              f"| wheel ({os.path.basename(wheel)}) | {mib(wheel_size)} |",
+              f"| conformance binary, fully linked, wgpu, stripped | {mib(bin_size)} |",
+              f"| conformance binary, gzip -9 | {mib(bin_gz)} |",
+          ]
+          summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary:
+              with open(summary, "a") as f:
+                  f.write("### Artifact sizes\n\n" + "\n".join(rows) + "\n")
+          print("\n".join(rows))
+
+          limit = int(os.environ["WHEEL_MAX_MIB"]) * 1024 * 1024
+          if wheel_size > limit:
+              sys.exit(f"wheel exceeds {os.environ['WHEEL_MAX_MIB']} MiB budget")
+          EOF
