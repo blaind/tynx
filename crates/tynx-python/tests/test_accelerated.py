@@ -42,13 +42,15 @@ def test_accelerated_multidimensional_global_extrema_use_flat_reductions() -> No
     assert value.max(keepdim=True).shape == (1, 1)
     tynx.synchronize(device)
 
-    def test_accelerated_boolean_construction_avoids_backend_bool_upload() -> None:
+
+def test_accelerated_boolean_construction_avoids_backend_bool_upload() -> None:
     device = _accelerated_device()
 
     value = tynx.Tensor([[True, False], [False, True]], dtype="bool")
 
     tynx.synchronize(device)
     assert value.tolist() == [[True, False], [False, True]]
+
 
 def test_accelerated_tape_survives_intermediate_drop_and_optimizer_step() -> None:
     device = _accelerated_device()
