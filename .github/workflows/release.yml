@@ -65,6 +65,8 @@ jobs:
           dist/*.whl
       - name: Smoke test wheel
         shell: bash
+        env:
+          BURN_DEVICE: flex
         run: |
           python -m pip install dist/*.whl
           python scripts/check_release.py smoke --expected "$EXPECTED_VERSION"
