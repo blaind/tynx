@@ -4,13 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       warmup:
-        description: Warmup iterations
-        default: "20"
-        required: true
+        description: Override warmup iterations (blank uses each case default)
+        default: ""
+        required: false
       iterations:
-        description: Timed iterations
-        default: "200"
-        required: true
+        description: Override timed iterations (blank uses each case default)
+        default: ""
+        required: false
 
 permissions:
   contents: read
@@ -61,6 +61,20 @@ jobs:
           cargo run --manifest-path benchmarks/Cargo.toml --locked --release -p ort-bench > benchmarks/results/ort-matmul-256-cpu.json
         env:
           TYNX_BENCH_CASE: matmul-256x256
+      - name: Benchmark 512x512 MatMul CPU
+        run: |
+          cargo run --manifest-path benchmarks/Cargo.toml --locked --release -p tynx-bench > benchmarks/results/tynx-matmul-512-cpu.json
+          cargo run --manifest-path benchmarks/Cargo.toml --locked --release -p burn-aot-bench > benchmarks/results/burn-aot-matmul-512-cpu.json
+          cargo run --manifest-path benchmarks/Cargo.toml --locked --release -p ort-bench > benchmarks/results/ort-matmul-512-cpu.json
+        env:
+          TYNX_BENCH_CASE: matmul-512x512
+      - name: Benchmark 1024x1024 MatMul CPU
+        run: |
+          cargo run --manifest-path benchmarks/Cargo.toml --locked --release -p tynx-bench > benchmarks/results/tynx-matmul-1024-cpu.json
+          cargo run --manifest-path benchmarks/Cargo.toml --locked --release -p burn-aot-bench > benchmarks/results/burn-aot-matmul-1024-cpu.json
+          cargo run --manifest-path benchmarks/Cargo.toml --locked --release -p ort-bench > benchmarks/results/ort-matmul-1024-cpu.json
+        env:
+          TYNX_BENCH_CASE: matmul-1024x1024
       - name: Benchmark MatMul-Add-ReLU CPU
         run: |
           cargo run --manifest-path benchmarks/Cargo.toml --locked --release -p tynx-bench > benchmarks/results/tynx-matmul-add-relu-cpu.json
@@ -68,6 +82,16 @@ jobs:
           cargo run --manifest-path benchmarks/Cargo.toml --locked --release -p ort-bench > benchmarks/results/ort-matmul-add-relu-cpu.json
         env:
           TYNX_BENCH_CASE: matmul-add-relu-256x256
+      - name: Add benchmark summary
+        if: always() && hashFiles('benchmarks/results/*.json') != ''
+        run: |
+          echo '## CPU benchmarks' >> "$GITHUB_STEP_SUMMARY"
+          echo '| Case | Engine | Median (ms) | p95 (ms) | Estimated GFLOP/s |' >> "$GITHUB_STEP_SUMMARY"
+          echo '| --- | --- | ---: | ---: | ---: |' >> "$GITHUB_STEP_SUMMARY"
+          jq -s -r '
+            sort_by(.case, .engine)[] |
+            "| \(.case) | \(.engine) | \(.median_ms * 1000000 | round / 1000000) | \(.p95_ms * 1000000 | round / 1000000) | \(if .estimated_gflops == null then "-" else (.estimated_gflops * 100 | round / 100) end) |"
+          ' benchmarks/results/*.json >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v7
         if: always()
         with:

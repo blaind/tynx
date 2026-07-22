@@ -24,6 +24,7 @@ pub struct Case {
     pub tolerance: f32,
     pub warmup: usize,
     pub iterations: usize,
+    pub estimated_flops: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -41,6 +42,7 @@ struct CaseSpec {
     tolerance: f32,
     warmup: usize,
     iterations: usize,
+    estimated_flops: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -98,6 +100,7 @@ pub struct Report {
     pub min_ms: f64,
     pub mean_ms: f64,
     pub throughput_per_second: f64,
+    pub estimated_gflops: Option<f64>,
     pub output_checksum: f64,
 }
 
@@ -145,6 +148,7 @@ pub fn load_case_named(requested: &str) -> BenchResult<Case> {
         tolerance: spec.tolerance,
         warmup: spec.warmup,
         iterations: spec.iterations,
+        estimated_flops: spec.estimated_flops,
     })
 }
 
@@ -226,6 +230,9 @@ where
         min_ms: samples[0],
         mean_ms,
         throughput_per_second: 1_000.0 / median_ms,
+        estimated_gflops: case
+            .estimated_flops
+            .map(|flops| flops as f64 / (median_ms * 1_000_000.0)),
         output_checksum: last_output.iter().map(|&value| f64::from(value)).sum(),
     })
 }
@@ -334,6 +341,7 @@ fn elapsed_ms(started: Instant) -> f64 {
 
 fn env_usize(name: &str, default: usize) -> BenchResult<usize> {
     match env::var(name) {
+        Ok(value) if value.is_empty() => Ok(default),
         Ok(value) => Ok(value
             .parse()
             .map_err(|error| format!("invalid {name} value '{value}': {error}"))?),
@@ -363,6 +371,8 @@ mod tests {
         let sign = load_case_named("sign-11").unwrap();
         let matmul64 = load_case_named("matmul-64x64").unwrap();
         let matmul256 = load_case_named("matmul-256x256").unwrap();
+        let matmul512 = load_case_named("matmul-512x512").unwrap();
+        let matmul1024 = load_case_named("matmul-1024x1024").unwrap();
         let multi_op = load_case_named("matmul-add-relu-256x256").unwrap();
 
         assert_eq!(sign.inputs[0].values.len(), 11);
@@ -371,7 +381,13 @@ mod tests {
         assert_eq!(matmul64.inputs[0].values, matmul64.expected);
         assert_eq!(model_bytes(&matmul64).unwrap().len(), 122);
         assert_eq!(matmul256.output_shape, [256, 256]);
+        assert_eq!(matmul256.estimated_flops, Some(33_554_432));
         assert_eq!(model_bytes(&matmul256).unwrap().len(), 124);
+        assert_eq!(matmul512.output_shape, [512, 512]);
+        assert_eq!(matmul512.iterations, 50);
+        assert_eq!(matmul1024.output_shape, [1024, 1024]);
+        assert_eq!(matmul1024.iterations, 20);
+        assert_eq!(matmul1024.estimated_flops, Some(2_147_483_648));
         assert_eq!(multi_op.inputs.len(), 3);
         assert!(multi_op.inputs[2].values.iter().all(|value| *value == 0.25));
         assert_eq!(multi_op.expected[0], 0.0);

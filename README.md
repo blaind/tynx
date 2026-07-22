@@ -50,6 +50,13 @@ backend, is enabled by default and also works on `wasm32-unknown-unknown`. GPU e
 available behind feature flags: `wgpu` (Vulkan / Metal / DX12) and `vulkan` (wgpu with the
 SPIR-V fast path).
 
+## Benchmarks
+
+Tynx includes a reproducible benchmark suite comparing its runtime with burn-onnx AOT and ONNX
+Runtime. See the [benchmark suite](benchmarks/README.md) for the workloads, methodology, and local
+commands. [CI benchmark runs](https://github.com/blaind/tynx/actions/workflows/benchmarks.yml)
+publish job summaries and downloadable JSON results.
+
 ## Relationship to Burn
 
 Tynx is built on Burn and complements [burn-onnx](https://github.com/tracel-ai/burn-onnx):
