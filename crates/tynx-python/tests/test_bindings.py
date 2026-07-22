@@ -28,6 +28,17 @@ def test_tensor_metadata_and_host_conversion() -> None:
     assert tynx.Tensor([3.5]).item() == pytest.approx(3.5)
 
 
+def test_tensor_shape_mismatches_raise_value_error_before_dispatch() -> None:
+    with pytest.raises(
+        ValueError,
+        match=r"cannot broadcast shapes \[2, 3\] and \[4, 5\]",
+    ):
+        tynx.Tensor([[1.0] * 3] * 2) + tynx.Tensor([[1.0] * 5] * 4)
+
+    with pytest.raises(ValueError, match="matmul inner dimensions must match"):
+        tynx.Tensor([[1.0, 2.0]]) @ tynx.Tensor([[1.0, 2.0]])
+
+
 def test_tensor_integer_and_boolean_storage() -> None:
     integers = tynx.Tensor([[1, -2], [3, 4]], dtype="int64")
     booleans = tynx.Tensor([[True, False], [False, True]], dtype="bool")
