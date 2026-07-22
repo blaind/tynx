@@ -39,6 +39,7 @@ mod trilu;
 mod unary;
 mod variadic;
 mod where_op;
+mod window;
 
 use std::collections::HashMap;
 
@@ -82,6 +83,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::AveragePool2d(node) => pooling::average_pool2d(node, env, device),
         Node::AveragePool3d(node) => pooling::average_pool3d(node, env, device),
         Node::BatchNormalization(node) => normalization::batch_normalization(node, env, device),
+        Node::BlackmanWindow(node) => window::blackman_window(node, env, device),
         Node::BitShift(node) => integer::bitshift(node, env, device),
         Node::BitwiseAnd(node) => integer::bitwise_and(node, env, device),
         Node::BitwiseNot(node) => integer::bitwise_not(node, env, device),
@@ -125,6 +127,8 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::HardSigmoid(node) => unary::hard_sigmoid(node, env, device),
         Node::Hardmax(node) => hardmax::hardmax(node, env, device),
         Node::HardSwish(node) => unary::hard_swish(node, env, device),
+        Node::HammingWindow(node) => window::hamming_window(node, env, device),
+        Node::HannWindow(node) => window::hann_window(node, env, device),
         Node::Identity(node) => Ok(vec![resolve::first(env, &node.name, &node.inputs, device)?]),
         Node::InstanceNormalization(node) => {
             normalization::instance_normalization(node, env, device)
