@@ -64,6 +64,11 @@ impl TensorValue {
         dtype: Option<&str>,
         device: &Device,
     ) -> PyResult<Option<Self>> {
+        if !data.hasattr("__array_interface__")? {
+            return Ok(None);
+        }
+        data.py().import("numpy")?;
+
         macro_rules! extract {
             ($element:ty, $dtype:literal, $kind:ident, $constructor:ident) => {
                 if let Ok(array) = data.extract::<PyReadonlyArrayDyn<'_, $element>>() {
@@ -101,17 +106,14 @@ impl TensorValue {
         extract!(f32, "float32", Float, DynTensor);
         extract!(i64, "int64", Int, DynInt);
         extract!(bool, "bool", Bool, DynBool);
-        if data.hasattr("__array_interface__")? {
-            return match dtype {
-                Some(dtype) => Err(PyTypeError::new_err(format!(
-                    "NumPy array dtype must match requested Tensor dtype {dtype}"
-                ))),
-                None => Err(PyTypeError::new_err(
-                    "unsupported NumPy dtype; expected float32, int64, or bool",
-                )),
-            };
+        match dtype {
+            Some(dtype) => Err(PyTypeError::new_err(format!(
+                "NumPy array dtype must match requested Tensor dtype {dtype}"
+            ))),
+            None => Err(PyTypeError::new_err(
+                "unsupported NumPy dtype; expected float32, int64, or bool",
+            )),
         }
-        Ok(None)
     }
 
     pub(super) fn float_from_python(
@@ -264,6 +266,7 @@ impl TensorValue {
     }
 
     pub(super) fn numpy(self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        py.import("numpy")?;
         let shape = self.dims();
         macro_rules! convert {
             ($value:expr, $element:ty) => {{

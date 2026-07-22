@@ -19,7 +19,7 @@ test("runs an ONNX model through the npm API", async () => {
 
   const session = await Session.create(SIGN_MODEL);
   assert.deepEqual(session.inputs, ["x"]);
-  assert.deepEqual(session.outputs, ["sign1_out1"]);
+  assert.deepEqual(session.outputs, ["y"]);
   assert.deepEqual(
     Array.from(await session.run([-2, 0, 3], [3])),
     [-1, 0, 1],
