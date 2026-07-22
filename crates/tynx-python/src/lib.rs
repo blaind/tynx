@@ -12,7 +12,7 @@ use tynx_core::Session;
 
 use grad_mode::{PyNoGrad, is_grad_enabled_py, no_grad};
 use parameter::PyParameter;
-use tensor::PyTensor;
+use tensor::{PyTensor, where_py};
 
 /// A parsed ONNX model.
 #[pyclass(name = "Session", frozen)]
@@ -79,5 +79,6 @@ fn _tynx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyNoGrad>()?;
     module.add_function(wrap_pyfunction!(no_grad, module)?)?;
     module.add_function(wrap_pyfunction!(is_grad_enabled_py, module)?)?;
+    module.add_function(wrap_pyfunction!(where_py, module)?)?;
     Ok(())
 }

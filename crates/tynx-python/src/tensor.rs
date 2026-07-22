@@ -3,6 +3,7 @@
 mod comparison;
 mod data;
 mod reduction;
+mod selection;
 mod shape;
 
 use std::{
@@ -226,6 +227,72 @@ impl PyTensor {
             .detach()
             .mask_binary(other.source.value().detach(), operation)
             .map(Self::from_value)
+    }
+
+    fn where_operands(
+        condition: &Self,
+        then_tensor: Option<&Self>,
+        then_scalar: Option<&Bound<'_, PyAny>>,
+        otherwise_tensor: Option<&Self>,
+        otherwise_scalar: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Self> {
+        let template = then_tensor.or(otherwise_tensor).ok_or_else(|| {
+            PyTypeError::new_err("where requires at least one Tensor branch to infer dtype/device")
+        })?;
+        let template = template.source.value().detach();
+        let tracking = is_grad_enabled();
+
+        let branch_value =
+            |tensor: Option<&Self>, scalar: Option<&Bound<'_, PyAny>>| -> PyResult<TensorValue> {
+                if let Some(tensor) = tensor {
+                    return match tensor.source.value() {
+                        TensorValue::Float(_) => tensor
+                            .source
+                            .operation_input(tracking, "where")
+                            .map(TensorValue::Float),
+                        value => Ok(value.detach()),
+                    };
+                }
+                selection::scalar_like(
+                    template.clone(),
+                    scalar.expect("a where branch is either a Tensor or a scalar"),
+                )
+            };
+
+        let then = branch_value(then_tensor, then_scalar)?;
+        let otherwise = branch_value(otherwise_tensor, otherwise_scalar)?;
+        let condition = selection::condition(condition.source.value().detach())?;
+        let result = selection::select(condition, then, otherwise)?;
+
+        match result {
+            TensorValue::Float(inner) if tracking => {
+                let mut sources = Vec::with_capacity(2);
+                if let Some(source) = then_tensor {
+                    sources.push(source);
+                }
+                if let Some(source) = otherwise_tensor {
+                    sources.push(source);
+                }
+                Ok(Self::from_operation(inner, &sources))
+            }
+            value => Ok(Self::from_value(value.detach())),
+        }
+    }
+
+    fn where_from_python(
+        condition: &Self,
+        then: &Bound<'_, PyAny>,
+        otherwise: &Bound<'_, PyAny>,
+    ) -> PyResult<Self> {
+        let then_tensor = then.extract::<PyRef<'_, Self>>().ok();
+        let otherwise_tensor = otherwise.extract::<PyRef<'_, Self>>().ok();
+        Self::where_operands(
+            condition,
+            then_tensor.as_deref(),
+            then_tensor.is_none().then_some(then),
+            otherwise_tensor.as_deref(),
+            otherwise_tensor.is_none().then_some(otherwise),
+        )
     }
 
     pub(crate) fn tensor_from_python(data: &Bound<'_, PyAny>) -> PyResult<DynTensor> {
@@ -505,6 +572,19 @@ impl PyTensor {
         self.unary(move |input| input.reshape(output))
     }
 
+    /// Select values from this tensor and another branch using a boolean condition.
+    #[pyo3(name = "where")]
+    fn where_(&self, condition: PyRef<'_, Self>, other: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let other_tensor = other.extract::<PyRef<'_, Self>>().ok();
+        Self::where_operands(
+            &condition,
+            Some(self),
+            None,
+            other_tensor.as_deref(),
+            other_tensor.is_none().then_some(other),
+        )
+    }
+
     fn __add__(&self, other: &Bound<'_, PyAny>) -> PyResult<Self> {
         self.arithmetic(other, DynTensor::add_broadcast, DynTensor::add_scalar)
     }
@@ -627,4 +707,14 @@ fn extract_scalar_operand(value: &Bound<'_, PyAny>) -> PyResult<f64> {
     value.extract::<f64>().map_err(|_| {
         PyTypeError::new_err("Tensor arithmetic expects another Tensor or a real number")
     })
+}
+
+/// Select values from two tensor/scalar branches using a boolean tensor condition.
+#[pyfunction(name = "where")]
+pub(crate) fn where_py(
+    condition: PyRef<'_, PyTensor>,
+    input: &Bound<'_, PyAny>,
+    other: &Bound<'_, PyAny>,
+) -> PyResult<PyTensor> {
+    PyTensor::where_from_python(&condition, input, other)
 }

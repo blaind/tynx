@@ -117,6 +117,53 @@ def test_tensor_comparisons_and_masks_reject_invalid_types() -> None:
         _ = ~floats
 
 
+def test_tensor_where_selects_broadcast_tensor_and_scalar_branches() -> None:
+    condition = tynx.Tensor([[True], [False]], dtype="bool")
+    values = tynx.Tensor([[1.0, 2.0]])
+    other = tynx.Tensor([[10.0], [20.0]])
+
+    expected = [[1.0, 2.0], [20.0, 20.0]]
+    assert tynx.where(condition, values, other).tolist() == expected
+    assert values.where(condition, other).tolist() == expected
+    assert tynx.where(condition, values, -1).tolist() == [[1.0, 2.0], [-1.0, -1.0]]
+    assert tynx.where(condition, -1, other).tolist() == [[-1.0], [20.0]]
+
+    integers = tynx.Tensor([[1, 2]], dtype="int64")
+    assert integers.where(condition, 0).tolist() == [[1, 2], [0, 0]]
+    booleans = tynx.Tensor([[True, False]], dtype="bool")
+    assert booleans.where(condition, False).tolist() == [
+        [True, False],
+        [False, False],
+    ]
+
+
+def test_tensor_where_routes_gradients_to_selected_float_branches() -> None:
+    condition = tynx.Tensor([[True], [False]], dtype="bool")
+    selected = tynx.Tensor([[1.0, 2.0]], requires_grad=True)
+    otherwise = tynx.Tensor([[10.0], [20.0]], requires_grad=True)
+
+    tynx.where(condition, selected, otherwise).sum().backward()
+
+    assert selected.grad is not None
+    assert selected.grad.tolist() == [[1.0, 1.0]]
+    assert otherwise.grad is not None
+    assert otherwise.grad.tolist() == [[0.0], [2.0]]
+
+
+def test_tensor_where_rejects_invalid_conditions_and_branches() -> None:
+    condition = tynx.Tensor([True], dtype="bool")
+    values = tynx.Tensor([1.0])
+
+    with pytest.raises(TypeError, match="condition must be a bool Tensor"):
+        tynx.where(values, values, 0)
+    with pytest.raises(TypeError, match="matching dtypes"):
+        tynx.where(condition, values, tynx.Tensor([1], dtype="int64"))
+    with pytest.raises(TypeError, match="real scalar"):
+        tynx.where(condition, values, "invalid")  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="at least one Tensor branch"):
+        tynx.where(condition, 1, 0)
+
+
 def test_tensor_eager_operators() -> None:
     left = tynx.Tensor([[1.0, 2.0], [3.0, 4.0]])
     right = tynx.Tensor([[2.0, 0.5], [1.0, 2.0]])
