@@ -1,5 +1,6 @@
 //! Eager CPython tensor projection over the binding-neutral Rust tensor facade.
 
+mod combine;
 mod comparison;
 mod data;
 mod extrema;
@@ -32,6 +33,7 @@ use crate::{
     grad_mode::is_grad_enabled,
     to_python_error,
 };
+pub(crate) use combine::{cat_py, stack_py};
 use comparison::{Comparison, MaskOperation};
 use data::TensorValue;
 use extrema::Extremum;

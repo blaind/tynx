@@ -559,6 +559,32 @@ macro_rules! impl_concat {
                         "concatenation requires tensors with equal ranks".to_string(),
                     ));
                 }
+                let first_dims = first.dims();
+                let first_dtype = first.dtype();
+                let first_device = first.device();
+                for tensor in tensors.iter().skip(1) {
+                    if tensor.dtype() != first_dtype {
+                        return Err(TynxError::Shape(
+                            "concatenation requires tensors with equal dtypes".to_string(),
+                        ));
+                    }
+                    if tensor.device() != first_device {
+                        return Err(TynxError::Shape(
+                            "concatenation requires tensors on the same device".to_string(),
+                        ));
+                    }
+                    let dims = tensor.dims();
+                    if dims
+                        .iter()
+                        .zip(&first_dims)
+                        .enumerate()
+                        .any(|(axis, (left, right))| axis != dim && left != right)
+                    {
+                        return Err(TynxError::Shape(format!(
+                            "concatenation shapes differ outside axis {dim}: {first_dims:?} and {dims:?}"
+                        )));
+                    }
+                }
 
                 Ok(match rank {
                     1 => Self::R1(Tensor::cat(
@@ -623,6 +649,39 @@ macro_rules! impl_concat {
                     )),
                     _ => return Err(rank_overflow(rank)),
                 })
+            }
+
+            /// Stack equal-shaped tensors along a new dimension.
+            pub fn stack(tensors: Vec<Self>, dim: usize) -> Result<Self> {
+                let Some(first) = tensors.first() else {
+                    return Err(TynxError::Shape(
+                        "stack requires at least one tensor".to_string(),
+                    ));
+                };
+                let rank = first.rank();
+                if rank == MAX_RANK {
+                    return Err(rank_overflow(rank + 1));
+                }
+                if dim > rank {
+                    return Err(TynxError::Shape(format!(
+                        "stack axis {dim} is out of range for rank {rank}"
+                    )));
+                }
+                let shape = first.dims();
+                if tensors.iter().any(|tensor| tensor.dims() != shape) {
+                    return Err(TynxError::Shape(
+                        "stack requires tensors with equal shapes".to_string(),
+                    ));
+                }
+                let expanded = tensors
+                    .into_iter()
+                    .map(|tensor| {
+                        let mut dims = shape.clone();
+                        dims.insert(dim, 1);
+                        tensor.reshape(dims)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Self::concat(expanded, dim)
             }
         }
     };
