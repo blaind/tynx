@@ -57,6 +57,19 @@ def test_accelerated_multidimensional_extrema_avoid_i64_mask_reductions() -> Non
     tynx.synchronize(device)
 
 
+def test_accelerated_int64_extrema_avoid_backend_reduction_kernel() -> None:
+    device = _accelerated_device()
+    minimum = -(2**63)
+    maximum = 2**63 - 1
+    value = tynx.Tensor([[minimum, 0, 7], [maximum, -5, 3]], dtype="int64")
+
+    assert value.max(dim=0).tolist() == [maximum, 0, 7]
+    assert value.max().item() == maximum
+    assert value.min(dim=1).tolist() == [minimum, -5]
+    assert value.min().item() == minimum
+    tynx.synchronize(device)
+
+
 def test_accelerated_boolean_construction_and_factories_avoid_bool_scalars() -> None:
     device = _accelerated_device()
 
