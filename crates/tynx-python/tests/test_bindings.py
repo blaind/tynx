@@ -901,6 +901,78 @@ def test_stable_state_copy_and_state_dict_types_are_validated() -> None:
         )
 
 
+def test_target_network_soft_and_hard_updates_are_off_tape_and_identity_preserving() -> None:
+    class Stateful(tynx.nn.Module):
+        def __init__(self, weight: float, running: float) -> None:
+            super().__init__()
+            self.weight = tynx.Parameter([weight])
+            self.running = tynx.Buffer([running])
+
+        def forward(self, input: tynx.Tensor) -> tynx.Tensor:
+            return input * self.weight + self.running
+
+    target = Stateful(1.0, 10.0)
+    source = Stateful(5.0, 30.0)
+    weight_identity = id(target.weight)
+    buffer_identity = id(target.running)
+    target.weight.backward()
+    optimizer = tynx.optim.SGD(target.parameters(), lr=0.1)
+
+    tynx.nn.utils.soft_update_(target, source, 0.25)
+
+    assert id(target.weight) == weight_identity
+    assert id(target.running) == buffer_identity
+    assert target.weight.tolist() == pytest.approx([2.0])
+    assert target.running.tolist() == pytest.approx([30.0])
+    assert target.weight.requires_grad
+    assert target.weight.grad is not None
+    assert target.weight.grad.tolist() == pytest.approx([1.0])
+    assert source.weight.tolist() == pytest.approx([5.0])
+    optimizer.step()
+    assert target.weight.tolist() == pytest.approx([1.9])
+
+    target.running.copy_(tynx.Tensor([10.0]))
+    tynx.nn.utils.soft_update_(target, source, 0.25, buffer_policy="average")
+    assert target.weight.tolist() == pytest.approx([2.675])
+    assert target.running.tolist() == pytest.approx([15.0])
+
+    tynx.nn.utils.hard_update_(target, source)
+    assert target.weight.tolist() == pytest.approx([5.0])
+    assert target.running.tolist() == pytest.approx([30.0])
+
+
+def test_target_network_updates_validate_all_state_before_mutation() -> None:
+    class Stateful(tynx.nn.Module):
+        def __init__(self, data: tuple[float, ...], *, with_buffer: bool = True) -> None:
+            super().__init__()
+            self.weight = tynx.Parameter(data)
+            if with_buffer:
+                self.running = tynx.Buffer([2.0])
+
+        def forward(self, input: tynx.Tensor) -> tynx.Tensor:
+            return input * self.weight
+
+    target = Stateful((1.0,))
+
+    with pytest.raises(ValueError, match="source shape"):
+        tynx.nn.utils.soft_update_(target, Stateful((3.0, 4.0)), 0.5)
+    assert target.weight.tolist() == pytest.approx([1.0])
+    assert target.running.tolist() == pytest.approx([2.0])
+
+    with pytest.raises(ValueError, match="buffer names differ"):
+        tynx.nn.utils.hard_update_(target, Stateful((3.0,), with_buffer=False))
+    assert target.weight.tolist() == pytest.approx([1.0])
+    with pytest.raises(ValueError, match=r"\[0, 1\]"):
+        tynx.nn.utils.soft_update_(target, target, -0.1)
+    with pytest.raises(ValueError, match="buffer_policy"):
+        tynx.nn.utils.soft_update_(
+            target,
+            target,
+            0.5,
+            buffer_policy="invalid",  # type: ignore[arg-type]
+        )
+
+
 def test_tensor_eager_operators() -> None:
     left = tynx.Tensor([[1.0, 2.0], [3.0, 4.0]])
     right = tynx.Tensor([[2.0, 0.5], [1.0, 2.0]])
