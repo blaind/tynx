@@ -2938,18 +2938,20 @@ impl DynBool {
 
     /// Take the maximum along dimensions while retaining singleton dimensions.
     pub fn reduce_max_dims(self, dims: &[usize]) -> Self {
+        // Boolean values are exact in f32, avoiding WGPU's non-portable i64 reduction shader.
         map_bool!(self, |tensor| tensor
-            .int()
-            .cast(DType::I64)
+            .float()
+            .cast(DType::F32)
             .max_dims(dims)
             .bool())
     }
 
     /// Take the minimum along dimensions while retaining singleton dimensions.
     pub fn reduce_min_dims(self, dims: &[usize]) -> Self {
+        // Boolean values are exact in f32, avoiding WGPU's non-portable i64 reduction shader.
         map_bool!(self, |tensor| tensor
-            .int()
-            .cast(DType::I64)
+            .float()
+            .cast(DType::F32)
             .min_dims(dims)
             .bool())
     }
