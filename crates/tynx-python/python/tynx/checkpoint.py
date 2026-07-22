@@ -36,10 +36,13 @@ class _Optimizer(Protocol):
 
 def save_checkpoint(path: _Path, model: object, optimizer: _Optimizer) -> None:
     """Atomically save detached model and optimizer state under stable names."""
+    model_state = get_state_dict(model)
+    if not model_state:
+        raise ValueError("cannot save checkpoint: model has no parameters or buffers")
     payload: dict[str, _Encoded] = {
         "format": _CHECKPOINT_FORMAT,
         "version": _CHECKPOINT_VERSION,
-        "model": _encode(dict(get_state_dict(model))),
+        "model": _encode(dict(model_state)),
         "optimizer": _encode(optimizer.state_dict()),
     }
     target = Path(path)
@@ -71,6 +74,8 @@ def load_checkpoint(
     """Restore a combined checkpoint without publishing partially validated state."""
     payload = _read_payload(path)
     model_state = _decode_state_dictionary(_required(payload, "model"), "model")
+    if not model_state:
+        raise ValueError("cannot load checkpoint: model state is empty")
     optimizer_state = _decode_optimizer_dictionary(_required(payload, "optimizer"))
 
     current, prepared, result = _prepare_state_dict_load(model, model_state, strict)

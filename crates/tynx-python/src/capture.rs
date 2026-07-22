@@ -7,7 +7,9 @@ use std::{
 };
 
 use pyo3::{exceptions::PyRuntimeError, prelude::*, types::PyTuple};
-use tynx_capture::{BinaryOp, CapturedOptimizer, Graph, GraphBuilder, UnaryOp, ValueId};
+use tynx_capture::{
+    BinaryOp, CapturedOperation, CapturedOptimizer, Graph, GraphBuilder, UnaryOp, ValueId,
+};
 use tynx_train::{ParamId, ParameterSlot};
 
 use crate::{grad_mode::is_grad_enabled, tensor::PyTensor, to_python_error};
@@ -68,6 +70,18 @@ impl CaptureState {
 
     fn gather(&self, input: ValueId, dim: usize, indices: ValueId) -> PyResult<ValueId> {
         self.with_builder(|builder| builder.gather(input, dim, indices).map_err(to_python_error))
+    }
+
+    fn operation(
+        &self,
+        operation: Rc<dyn CapturedOperation>,
+        inputs: Vec<ValueId>,
+    ) -> PyResult<Vec<ValueId>> {
+        self.with_builder(|builder| {
+            builder
+                .operation(operation, inputs)
+                .map_err(to_python_error)
+        })
     }
 
     fn zero_grad(&self, parameters: Vec<ParameterSlot>) -> PyResult<()> {
@@ -299,6 +313,51 @@ pub(crate) fn record_gather(
     state
         .gather(input, dim, indices)
         .map(|value| Some(TraceValue { state, value }))
+}
+
+pub(crate) fn record_operation(
+    inputs: &[&PyTensor],
+    operation: Rc<dyn CapturedOperation>,
+) -> PyResult<Option<Vec<TraceValue>>> {
+    let traces = inputs
+        .iter()
+        .map(|input| trace_for(input))
+        .collect::<PyResult<Vec<_>>>()?;
+    let Some(state) = traces
+        .iter()
+        .flatten()
+        .next()
+        .map(|trace| trace.state.clone())
+    else {
+        return Ok(None);
+    };
+    if traces.iter().any(Option::is_none) {
+        state
+            .unsupported("a closed-over Tensor value; pass changing tensors as function inputs")?;
+        return Ok(None);
+    }
+    if traces
+        .iter()
+        .flatten()
+        .any(|trace| !Rc::ptr_eq(&state, &trace.state))
+    {
+        state.unsupported("tensors from different capture sessions")?;
+        return Ok(None);
+    }
+    let inputs = traces
+        .into_iter()
+        .map(|trace| trace.expect("all operation inputs were traced").value)
+        .collect();
+    let outputs = state.operation(operation, inputs)?;
+    Ok(Some(
+        outputs
+            .into_iter()
+            .map(|value| TraceValue {
+                state: state.clone(),
+                value,
+            })
+            .collect(),
+    ))
 }
 
 /// Native first-call trace session used by the public Python decorator.

@@ -41,25 +41,24 @@ pub(crate) fn categorical_sample_py(
     logits: PyRef<'_, PyTensor>,
     seed: Option<u64>,
 ) -> PyResult<PyTensor> {
-    logits.capture_unsupported("random Categorical sampling")?;
-    let logits = logits.detached_float_value("Categorical.sample")?;
-    let rank = logits.rank();
+    let logits_value = logits.detached_float_value("Categorical.sample")?;
+    let rank = logits_value.rank();
     if rank == 0 {
         return Err(PyValueError::new_err(
             "Categorical logits must have at least one dimension",
         ));
     }
-    let categories = logits.dims()[rank - 1];
+    let categories = logits_value.dims()[rank - 1];
     if categories == 0 {
         return Err(PyValueError::new_err(
             "Categorical logits must contain at least one category",
         ));
     }
-    let device = logits.device();
+    let device = logits_value.device();
     if let Some(seed) = seed {
         device.seed(seed);
     }
-    let dims = logits.dims();
+    let dims = logits_value.dims();
     let uniform = DynTensor::random(
         &dims,
         Distribution::Uniform(1.0e-7, 1.0 - 1.0e-7),
@@ -68,15 +67,16 @@ pub(crate) fn categorical_sample_py(
     )
     .map_err(to_python_error)?;
     let gumbel = uniform.log().mul_scalar(-1.0).log().mul_scalar(-1.0);
-    let perturbed = logits.add_broadcast(gumbel).map_err(to_python_error)?;
+    let perturbed = logits_value
+        .add_broadcast(gumbel)
+        .map_err(to_python_error)?;
     let indices = perturbed.arg_extreme(rank - 1, true, false);
     let mut output_shape = dims[..rank - 1].to_vec();
     if output_shape.is_empty() {
         output_shape.push(1);
     }
-    Ok(PyTensor::from_int_inner(
-        indices.reshape(output_shape).map_err(to_python_error)?,
-    ))
+    PyTensor::from_int_inner(indices.reshape(output_shape).map_err(to_python_error)?)
+        .with_recorded_unary(&logits, UnaryOp::CategoricalSample { seed })
 }
 
 #[pyfunction(name = "_dropout")]

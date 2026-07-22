@@ -20,6 +20,23 @@ pub trait CapturedOptimizer: Debug {
     fn step(&self) -> Result<()>;
 }
 
+/// Native multi-input/multi-output operation retained by a captured graph.
+///
+/// Implementations own only Rust state and may wrap an imported model executor. Replay never
+/// invokes a language callback.
+pub trait CapturedOperation: Debug {
+    /// Execute the operation using values in declared input order.
+    fn run(&self, inputs: &[Value], tracking: bool) -> Result<Vec<Value>>;
+
+    /// Return the fixed number of outputs produced by [`Self::run`].
+    fn output_count(&self) -> usize;
+
+    /// Return stable parameter and buffer slots read by this operation.
+    fn state_slots(&self) -> Vec<ParameterSlot> {
+        Vec::new()
+    }
+}
+
 /// Identifier of a value produced by one graph node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ValueId(usize);
@@ -167,6 +184,11 @@ pub enum UnaryOp {
     },
     /// Training-mode Dropout driven by the device's advancing native RNG stream.
     Dropout(f64),
+    /// Detached categorical sampling using Gumbel-max over the final dimension.
+    CategoricalSample {
+        /// Optional explicit seed applied before every execution.
+        seed: Option<u64>,
+    },
 }
 
 /// Binary operations supported by the initial runtime IR.
@@ -208,6 +230,21 @@ enum Node {
         dim: usize,
         indices: ValueId,
     },
+    Operation {
+        operation: Rc<dyn CapturedOperation>,
+        inputs: Vec<ValueId>,
+        guards: Vec<ParameterGuard>,
+    },
+    OperationOutput {
+        operation: ValueId,
+        output: usize,
+    },
+}
+
+#[derive(Debug, Clone)]
+enum NodeValue {
+    Tensor(Box<Value>),
+    Outputs(Vec<Value>),
 }
 
 #[derive(Debug, Clone)]
@@ -313,6 +350,40 @@ impl GraphBuilder {
         }))
     }
 
+    /// Record one native multi-input/multi-output operation.
+    pub fn operation(
+        &mut self,
+        operation: Rc<dyn CapturedOperation>,
+        inputs: Vec<ValueId>,
+    ) -> Result<Vec<ValueId>> {
+        for input in &inputs {
+            self.require_value(*input)?;
+        }
+        let output_count = operation.output_count();
+        if output_count == 0 {
+            return Err(TynxError::TypeMismatch(
+                "a captured operation must have at least one output".to_string(),
+            ));
+        }
+        let guards = operation
+            .state_slots()
+            .into_iter()
+            .map(|slot| ParameterGuard {
+                contract: slot.contract(),
+                structure_generation: slot.structure_generation(),
+                slot,
+            })
+            .collect();
+        let operation = self.push(Node::Operation {
+            operation,
+            inputs,
+            guards,
+        });
+        Ok((0..output_count)
+            .map(|output| self.push(Node::OperationOutput { operation, output }))
+            .collect())
+    }
+
     /// Record gradient clearing at the current execution position.
     pub fn zero_grad(&mut self, parameters: Vec<ParameterSlot>) {
         self.push_effect(Effect::ZeroGrad(parameters));
@@ -397,10 +468,14 @@ impl Graph {
         let mut seen = HashSet::<ParamId>::new();
         self.nodes
             .iter()
-            .filter_map(|node| match node {
-                Node::Parameter(guard) if seen.insert(guard.slot.id()) => Some(guard.slot.clone()),
-                _ => None,
+            .flat_map(|node| match node {
+                Node::Parameter(guard) => vec![guard.slot.clone()],
+                Node::Operation { guards, .. } => {
+                    guards.iter().map(|guard| guard.slot.clone()).collect()
+                }
+                _ => Vec::new(),
             })
+            .filter(|slot| slot.contract().trainable() && seen.insert(slot.id()))
             .collect()
     }
 
@@ -433,26 +508,65 @@ impl Graph {
             {
                 execute_effect(&effects.next().expect("peeked effect").effect, &values)?;
             }
-            let value = match node {
-                Node::Input(input) => inputs[*input].clone(),
-                Node::Parameter(guard) => {
-                    guard.validate()?;
-                    if tracking {
-                        Value::Tensor(guard.slot.read())
-                    } else {
-                        Value::Tensor(guard.slot.value())
+            let value =
+                match node {
+                    Node::Input(input) => NodeValue::Tensor(Box::new(inputs[*input].clone())),
+                    Node::Parameter(guard) => {
+                        guard.validate()?;
+                        if tracking {
+                            NodeValue::Tensor(Box::new(Value::Tensor(guard.slot.read())))
+                        } else {
+                            NodeValue::Tensor(Box::new(Value::Tensor(guard.slot.value())))
+                        }
                     }
-                }
-                Node::Unary { op, input } => execute_unary(op, value(&values, *input)?)?,
-                Node::Binary { op, left, right } => {
-                    execute_binary(*op, value(&values, *left)?, value(&values, *right)?)?
-                }
-                Node::Gather {
-                    input,
-                    dim,
-                    indices,
-                } => execute_gather(value(&values, *input)?, *dim, value(&values, *indices)?)?,
-            };
+                    Node::Unary { op, input } => {
+                        NodeValue::Tensor(Box::new(execute_unary(op, value(&values, *input)?)?))
+                    }
+                    Node::Binary { op, left, right } => NodeValue::Tensor(Box::new(
+                        execute_binary(*op, value(&values, *left)?, value(&values, *right)?)?,
+                    )),
+                    Node::Gather {
+                        input,
+                        dim,
+                        indices,
+                    } => NodeValue::Tensor(Box::new(execute_gather(
+                        value(&values, *input)?,
+                        *dim,
+                        value(&values, *indices)?,
+                    )?)),
+                    Node::Operation {
+                        operation,
+                        inputs,
+                        guards,
+                    } => {
+                        for guard in guards {
+                            guard.validate()?;
+                        }
+                        let inputs = inputs
+                            .iter()
+                            .map(|input| value(&values, *input))
+                            .collect::<Result<Vec<_>>>()?;
+                        let outputs = operation.run(&inputs, tracking)?;
+                        if outputs.len() != operation.output_count() {
+                            return Err(TynxError::TypeMismatch(format!(
+                                "captured operation declared {} outputs but returned {}",
+                                operation.output_count(),
+                                outputs.len()
+                            )));
+                        }
+                        NodeValue::Outputs(outputs)
+                    }
+                    Node::OperationOutput { operation, output } => {
+                        let outputs = operation_outputs(&values, *operation)?;
+                        let output = outputs.get(*output).cloned().ok_or_else(|| {
+                            TynxError::MissingValue(format!(
+                                "captured operation output {output} from node {}",
+                                operation.index()
+                            ))
+                        })?;
+                        NodeValue::Tensor(Box::new(output))
+                    }
+                };
             debug_assert_eq!(values.len(), index);
             values.push(value);
         }
@@ -492,15 +606,21 @@ impl Graph {
             signature.validate_value(input, &format!("input {index}"))?;
         }
         for node in &self.nodes {
-            if let Node::Parameter(guard) = node {
-                guard.validate()?;
+            match node {
+                Node::Parameter(guard) => guard.validate()?,
+                Node::Operation { guards, .. } => {
+                    for guard in guards {
+                        guard.validate()?;
+                    }
+                }
+                _ => {}
             }
         }
         Ok(())
     }
 }
 
-fn execute_effect(effect: &Effect, values: &[Value]) -> Result<()> {
+fn execute_effect(effect: &Effect, values: &[NodeValue]) -> Result<()> {
     match effect {
         Effect::ZeroGrad(parameters) => {
             for parameter in parameters {
@@ -516,11 +636,32 @@ fn execute_effect(effect: &Effect, values: &[Value]) -> Result<()> {
     }
 }
 
-fn value(values: &[Value], id: ValueId) -> Result<Value> {
-    values
-        .get(id.index())
-        .cloned()
-        .ok_or_else(|| TynxError::MissingValue(format!("captured node {}", id.index())))
+fn value(values: &[NodeValue], id: ValueId) -> Result<Value> {
+    match values.get(id.index()) {
+        Some(NodeValue::Tensor(value)) => Ok(value.as_ref().clone()),
+        Some(NodeValue::Outputs(_)) => Err(TynxError::TypeMismatch(format!(
+            "captured node {} is a multi-output operation",
+            id.index()
+        ))),
+        None => Err(TynxError::MissingValue(format!(
+            "captured node {}",
+            id.index()
+        ))),
+    }
+}
+
+fn operation_outputs(values: &[NodeValue], id: ValueId) -> Result<&[Value]> {
+    match values.get(id.index()) {
+        Some(NodeValue::Outputs(outputs)) => Ok(outputs),
+        Some(NodeValue::Tensor(_)) => Err(TynxError::TypeMismatch(format!(
+            "captured node {} is not a multi-output operation",
+            id.index()
+        ))),
+        None => Err(TynxError::MissingValue(format!(
+            "captured node {}",
+            id.index()
+        ))),
+    }
 }
 
 fn execute_unary(op: &UnaryOp, input: Value) -> Result<Value> {
@@ -533,6 +674,39 @@ fn execute_unary(op: &UnaryOp, input: Value) -> Result<Value> {
                 "captured reshape requires a device tensor".to_string(),
             )),
         };
+    }
+    if let UnaryOp::CategoricalSample { seed } = op {
+        let logits = input.into_tensor()?.detach();
+        let rank = logits.rank();
+        if rank == 0 {
+            return Err(TynxError::Shape(
+                "categorical logits must have at least one dimension".to_string(),
+            ));
+        }
+        let dims = logits.dims();
+        if dims[rank - 1] == 0 {
+            return Err(TynxError::Shape(
+                "categorical logits must contain at least one category".to_string(),
+            ));
+        }
+        let device = logits.device();
+        if let Some(seed) = seed {
+            device.seed(*seed);
+        }
+        let uniform = DynTensor::random(
+            &dims,
+            Distribution::Uniform(1.0e-7, 1.0 - 1.0e-7),
+            &device,
+            DType::F32,
+        )?;
+        let gumbel = uniform.log().mul_scalar(-1.0).log().mul_scalar(-1.0);
+        let perturbed = logits.add_broadcast(gumbel)?;
+        let indices = perturbed.arg_extreme(rank - 1, true, false);
+        let mut output_shape = dims[..rank - 1].to_vec();
+        if output_shape.is_empty() {
+            output_shape.push(1);
+        }
+        return indices.reshape(output_shape).map(Value::Int);
     }
     let input = input.into_tensor()?;
     let output = match op {
@@ -575,6 +749,7 @@ fn execute_unary(op: &UnaryOp, input: Value) -> Result<Value> {
                     .mul_scalar(1.0 / (1.0 - probability)))
             }
         }
+        UnaryOp::CategoricalSample { .. } => unreachable!("handled before float unary dispatch"),
     }?;
     Ok(Value::Tensor(output))
 }

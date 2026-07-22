@@ -289,6 +289,28 @@ def test_captured_dropout_advances_and_replays_the_eager_rng_stream() -> None:
     assert forward.replay_count == 5
 
 
+def test_captured_categorical_sampling_advances_and_matches_eager_rng() -> None:
+    logits = tynx.Tensor([[0.1, 0.2, 0.7]] * 24)
+    tynx.manual_seed(271828)
+    eager = [tynx.distributions.Categorical(logits=logits).sample().tolist() for _ in range(6)]
+    calls = 0
+
+    @tynx.compile(fullgraph=True)
+    def sample(value: tynx.Tensor) -> tynx.Tensor:
+        nonlocal calls
+        calls += 1
+        return tynx.distributions.Categorical(logits=value).sample()
+
+    tynx.manual_seed(271828)
+    captured = [sample(logits).tolist() for _ in range(6)]
+
+    assert captured == eager
+    assert len({tuple(result) for result in captured}) > 1
+    assert calls == 1
+    assert sample.compile_count == 1
+    assert sample.replay_count == 5
+
+
 def test_declared_static_arguments_guard_separate_graphs() -> None:
     calls = 0
 

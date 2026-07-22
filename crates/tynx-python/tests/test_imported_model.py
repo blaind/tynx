@@ -73,6 +73,36 @@ def test_imported_optimizer_update_is_visible_to_the_next_call(tmp_path: Path) -
     assert model(input).flatten().tolist() == pytest.approx([4.6, -1.1])
 
 
+def test_imported_model_checkpoint_restores_weights_and_optimizer_state(tmp_path: Path) -> None:
+    model = _load_model(tmp_path)
+    optimizer = tynx.optim.Adam(model.named_parameters(), lr=0.03)
+    input = tynx.Tensor([[2.0], [-1.0]])
+
+    model(input).sum().backward()
+    optimizer.step()
+    saved = {name: value.tolist() for name, value in model.state_dict().items()}
+    checkpoint = tmp_path / "imported.tynx"
+    tynx.save_checkpoint(checkpoint, model, optimizer)
+
+    resumed = _load_model(tmp_path)
+    resumed_optimizer = tynx.optim.Adam(resumed.named_parameters(), lr=0.9)
+    result = tynx.load_checkpoint(checkpoint, resumed, resumed_optimizer)
+
+    assert result.missing_keys == ()
+    assert result.unexpected_keys == ()
+    assert resumed_optimizer.lr == pytest.approx(0.03)
+    assert {name: value.tolist() for name, value in resumed.state_dict().items()} == saved
+
+
+def test_imported_model_state_dict_strictly_validates_keys(tmp_path: Path) -> None:
+    model = _load_model(tmp_path)
+    state = model.state_dict()
+    assert sorted(state) == ["head.bias", "head.weight"]
+
+    with pytest.raises(ValueError, match="state_dict key mismatch"):
+        model.load_state_dict({"head.weight": state["head.weight"]})
+
+
 def test_no_grad_imported_call_is_detached_and_plain_load_remains_inference(tmp_path: Path) -> None:
     path = _model_path(tmp_path)
     model = tynx.load(

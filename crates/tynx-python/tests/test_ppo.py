@@ -89,3 +89,105 @@ def test_imported_actor_critic_trains_with_user_composed_ppo_loss(tmp_path: Path
     assert final_loss.item() < initial_loss_value
     assert final_value_loss.item() < initial_value_loss_value * 0.01
     assert chosen_probabilities > 0.55
+
+
+def test_captured_imported_ppo_step_matches_eager_updates(tmp_path: Path) -> None:
+    path = tmp_path / "actor_critic.onnx"
+    path.write_bytes(_ACTOR_CRITIC_MODEL)
+
+    def load_model() -> tynx.ImportedModel:
+        model = tynx.load(
+            path,
+            trainable="auto",
+            simplify=False,
+            initializer_names={
+                "constant1_out1": "policy.weight",
+                "constant2_out1": "policy.bias",
+                "constant3_out1": "value.weight",
+                "constant4_out1": "value.bias",
+            },
+        )
+        assert isinstance(model, tynx.ImportedModel)
+        return model
+
+    eager_model = load_model()
+    captured_model = load_model()
+    eager_optimizer = tynx.optim.Adam(eager_model.named_parameters(), lr=0.03)
+    captured_optimizer = tynx.optim.Adam(captured_model.named_parameters(), lr=0.03)
+    logits_name, values_name = eager_model.outputs
+    calls = 0
+
+    def update(
+        model: tynx.ImportedModel,
+        optimizer: tynx.optim.Adam,
+        observations: tynx.Tensor,
+        actions: tynx.Tensor,
+        returns: tynx.Tensor,
+        advantages: tynx.Tensor,
+        old_log_prob: tynx.Tensor,
+    ) -> tynx.Tensor:
+        optimizer.zero_grad()
+        outputs = model(observations)
+        assert isinstance(outputs, dict)
+        policy = tynx.distributions.Categorical(logits=outputs[logits_name])
+        log_prob = policy.log_prob(actions)
+        ratio = (log_prob - old_log_prob).exp()
+        policy_loss = -tynx.minimum(
+            ratio * advantages,
+            ratio.clamp(0.8, 1.2) * advantages,
+        ).mean()
+        values = outputs[values_name].squeeze(1)
+        value_loss = tynx.nn.functional.mse_loss(values, returns)
+        loss = policy_loss + value_loss * 0.5 - policy.entropy().mean() * 0.01
+        loss.backward()
+        optimizer.step()
+        return loss
+
+    @tynx.compile(fullgraph=True)
+    def captured_update(
+        observations: tynx.Tensor,
+        actions: tynx.Tensor,
+        returns: tynx.Tensor,
+        advantages: tynx.Tensor,
+        old_log_prob: tynx.Tensor,
+    ) -> tynx.Tensor:
+        nonlocal calls
+        calls += 1
+        return update(
+            captured_model,
+            captured_optimizer,
+            observations,
+            actions,
+            returns,
+            advantages,
+            old_log_prob,
+        )
+
+    observations = tynx.Tensor([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0], [-1.0, 1.0]])
+    actions = tynx.Tensor([0, 1, 0, 1], dtype="int64")
+    returns = tynx.Tensor([1.0, -1.0, 0.0, -2.0])
+    advantages = tynx.Tensor([1.0, 1.0, 1.0, 1.0])
+    old_log_prob = tynx.Tensor([-math.log(2.0)] * 4)
+
+    for _ in range(40):
+        update(
+            eager_model,
+            eager_optimizer,
+            observations,
+            actions,
+            returns,
+            advantages,
+            old_log_prob,
+        )
+        captured_update(observations, actions, returns, advantages, old_log_prob)
+
+    eager_state = dict(eager_model.named_parameters())
+    captured_state = dict(captured_model.named_parameters())
+    assert eager_state.keys() == captured_state.keys()
+    for name, eager_parameter in eager_state.items():
+        assert captured_state[name].flatten().tolist() == pytest.approx(
+            eager_parameter.flatten().tolist(), abs=1e-6
+        )
+    assert calls == 1
+    assert captured_update.compile_count == 1
+    assert captured_update.replay_count == 39
