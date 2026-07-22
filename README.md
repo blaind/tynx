@@ -2,6 +2,22 @@
 
 **The ONNX runtime that trains.**
 
+Load, run, and fine-tune ONNX models with an eager, PyTorch-shaped Python API: one ~15 MB wheel,
+any GPU vendor, zero system dependencies.
+
+```python
+import tynx as tx
+
+model = tx.load("policy.onnx", trainable="auto")
+optimizer = tx.optim.Adam(model.parameters(), lr=3e-4)
+
+for x, target in loader:
+    optimizer.zero_grad()
+    loss = model(x).cross_entropy(target)
+    loss.backward()
+    optimizer.step()
+```
+
 Tynx runs and fine-tunes ONNX models, and trains models you author in Python, on one small,
 self-contained runtime built on [Burn](https://github.com/tracel-ai/burn). The same engine runs in
 Rust, Python, and the browser.
@@ -18,19 +34,6 @@ Rust, Python, and the browser.
 - **For models that keep learning after deployment.** RL policies, on-device personalization,
   and fine-tuning behind the firewall, with training and inference on the same weights in the
   same process.
-
-```python
-import tynx as tx
-
-model = tx.load("policy.onnx", trainable="auto")
-optimizer = tx.optim.Adam(model.parameters(), lr=3e-4)
-
-for x, target in loader:
-    optimizer.zero_grad()
-    loss = model(x).cross_entropy(target)
-    loss.backward()
-    optimizer.step()
-```
 
 ## Install
 
