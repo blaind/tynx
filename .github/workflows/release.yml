@@ -53,7 +53,14 @@ jobs:
         shell: bash
         run: |
           python -m pip install dist/*.whl
-          python -c "import tynx; print(tynx.Session)"
+          python - <<'EOF'
+          import tynx
+          t = tynx.Tensor([1.0, 2.0], requires_grad=True)
+          (t * t).sum().backward()
+          assert t.grad is not None and t.grad.tolist() == [2.0, 4.0], t.grad
+          print("tensor + autograd ok (CPU fallback on GPU-less runners):", t.grad.tolist())
+          print(tynx.Session)
+          EOF
       - uses: actions/upload-artifact@v7
         with:
           name: wheels-${{ matrix.os }}

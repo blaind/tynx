@@ -1,11 +1,13 @@
 #![forbid(unsafe_code)]
 
+mod device;
 mod error;
 mod interpreter;
 mod session;
 mod tensor;
 mod value;
 
+pub use device::default_device;
 pub use error::{Result, TynxError};
 pub use interpreter::{Env, execute};
 pub use session::Session;
