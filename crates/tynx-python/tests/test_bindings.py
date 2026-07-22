@@ -87,6 +87,7 @@ def test_tensor_unary_activations_and_math() -> None:
         (lambda value: value.exp(), 0.5),
         (lambda value: value.log(), 2.0),
         (lambda value: value.sqrt(), 4.0),
+        (lambda value: value.gelu(), 0.5),
     ],
 )
 def test_tensor_unary_gradients_match_finite_differences(
@@ -102,6 +103,55 @@ def test_tensor_unary_gradients_match_finite_differences(
 
     assert value.grad is not None
     assert value.grad.item() == pytest.approx(numerical, rel=2e-3, abs=2e-3)
+
+
+def test_tensor_softmax_log_softmax_gelu_and_clamp() -> None:
+    logits = tynx.Tensor([[1.0, 2.0, 3.0], [1.0, 1.0, 1.0]])
+    probabilities = logits.softmax(-1).tolist()
+    log_probabilities = logits.log_softmax(-1).exp().tolist()
+
+    denominator = math.exp(1.0) + math.exp(2.0) + math.exp(3.0)
+    expected = [math.exp(value) / denominator for value in (1.0, 2.0, 3.0)]
+    assert probabilities[0] == pytest.approx(expected)
+    assert probabilities[1] == pytest.approx([1.0 / 3.0] * 3)
+    assert log_probabilities[0] == pytest.approx(expected)
+    assert log_probabilities[1] == pytest.approx([1.0 / 3.0] * 3)
+
+    assert tynx.Tensor([-1.0, 0.0, 1.0]).gelu().tolist() == pytest.approx(
+        [-0.15865526, 0.0, 0.8413447], abs=1e-6
+    )
+    values = tynx.Tensor([-2.0, -0.5, 0.5, 2.0])
+    assert values.clamp(-1.0, 1.0).tolist() == pytest.approx([-1.0, -0.5, 0.5, 1.0])
+    assert values.clamp(min=0.0).tolist() == pytest.approx([0.0, 0.0, 0.5, 2.0])
+    assert values.clip(max=0.0).tolist() == pytest.approx([-2.0, -0.5, 0.0, 0.0])
+
+
+def test_tensor_softmax_and_clamp_gradients() -> None:
+    logits = tynx.Tensor([0.0, 0.0], requires_grad=True)
+    logits.softmax(0).backward(tynx.Tensor([1.0, 0.0]))
+    assert logits.grad is not None
+    assert logits.grad.tolist() == pytest.approx([0.25, -0.25])
+
+    logits.zero_grad()
+    logits.log_softmax(0).backward(tynx.Tensor([1.0, 0.0]))
+    assert logits.grad is not None
+    assert logits.grad.tolist() == pytest.approx([0.5, -0.5])
+
+    values = tynx.Tensor([-2.0, 0.0, 2.0], requires_grad=True)
+    values.clamp(-1.0, 1.0).sum().backward()
+    assert values.grad is not None
+    assert values.grad.tolist() == pytest.approx([0.0, 1.0, 0.0])
+
+
+def test_tensor_softmax_and_clamp_validate_arguments() -> None:
+    value = tynx.Tensor([1.0, 2.0])
+
+    with pytest.raises(ValueError, match="out of range"):
+        value.softmax(1)
+    with pytest.raises(TypeError, match="integers"):
+        value.log_softmax(True)
+    with pytest.raises(ValueError, match="at least one"):
+        value.clamp()
 
 
 def test_tensor_shape_operations() -> None:

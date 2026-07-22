@@ -408,6 +408,35 @@ impl PyTensor {
         self.unary(|input| Ok(input.sqrt()))
     }
 
+    /// Apply Gaussian error linear unit activation element-wise.
+    fn gelu(&self) -> PyResult<Self> {
+        self.unary(|input| Ok(input.gelu()))
+    }
+
+    /// Normalize values into probabilities along one dimension.
+    fn softmax(&self, dim: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let dim = shape::axis(dim, self.ndim(), false, "softmax")?;
+        self.unary(|input| Ok(input.softmax(dim)))
+    }
+
+    /// Apply numerically stable log-softmax along one dimension.
+    fn log_softmax(&self, dim: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let dim = shape::axis(dim, self.ndim(), false, "log_softmax")?;
+        self.unary(|input| Ok(input.log_softmax(dim)))
+    }
+
+    /// Clamp values to optional scalar bounds.
+    #[pyo3(signature = (min=None, max=None))]
+    fn clamp(&self, min: Option<f64>, max: Option<f64>) -> PyResult<Self> {
+        self.clip_bounds(min, max)
+    }
+
+    /// Alias for `clamp`.
+    #[pyo3(signature = (min=None, max=None))]
+    fn clip(&self, min: Option<f64>, max: Option<f64>) -> PyResult<Self> {
+        self.clip_bounds(min, max)
+    }
+
     /// Return a tensor with the same values and a new shape.
     #[pyo3(signature = (*shape))]
     fn reshape(&self, shape: &Bound<'_, PyTuple>) -> PyResult<Self> {
@@ -513,6 +542,15 @@ impl PyTensor {
 }
 
 impl PyTensor {
+    fn clip_bounds(&self, min: Option<f64>, max: Option<f64>) -> PyResult<Self> {
+        if min.is_none() && max.is_none() {
+            return Err(PyValueError::new_err(
+                "clamp requires at least one of min or max",
+            ));
+        }
+        self.unary(|input| Ok(input.clip(min, max)))
+    }
+
     fn reduce(
         &self,
         dim: Option<&Bound<'_, PyAny>>,
