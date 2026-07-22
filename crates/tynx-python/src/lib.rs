@@ -15,7 +15,7 @@ use tynx_core::Session;
 
 use grad_mode::{PyNoGrad, is_grad_enabled_py, no_grad};
 use gradient::{clip_grad_norm_py, clip_grad_value_py};
-use imported_model::PyImportedModel;
+use imported_model::{PyImportedModel, PyTrainabilityReport};
 use optimizer::{PyAdam, PyAdamW, PySgd};
 use parameter::{PyBuffer, PyParameter};
 use tensor::{PyTensor, maximum_py, minimum_py, where_py};
@@ -81,6 +81,7 @@ fn _tynx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
     module.add_class::<PySession>()?;
     module.add_class::<PyImportedModel>()?;
+    module.add_class::<PyTrainabilityReport>()?;
     module.add_class::<PyTensor>()?;
     module.add_class::<PyParameter>()?;
     module.add_class::<PyBuffer>()?;

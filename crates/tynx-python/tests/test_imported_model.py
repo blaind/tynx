@@ -70,3 +70,24 @@ def test_no_grad_imported_call_is_detached_and_plain_load_remains_inference(tmp_
 
     assert output.requires_grad is False
     assert isinstance(tynx.load(path, simplify=False), tynx.Session)
+
+
+def test_imported_trainability_report_is_structured_and_output_specific(tmp_path: Path) -> None:
+    model = _load_model(tmp_path)
+
+    report = model.trainability_report()
+    output_name = model.outputs[0]
+    assert isinstance(report, tynx.TrainabilityReport)
+    assert report.is_trainable is True
+    assert report.selected_outputs == [output_name]
+    assert sorted(report.trainable_parameters) == ["constant1_out1", "constant2_out1"]
+    assert sorted(report.output_parameters[output_name]) == ["constant1_out1", "constant2_out1"]
+    assert report.backward_issues == []
+    assert {entry["role"] for entry in report.initializers}.issuperset({"parameter"})
+    assert "Trainable parameters" in str(report)
+    report.require_trainable()
+
+    selected = model.require_trainable(outputs=[output_name])
+    assert selected.selected_outputs == [output_name]
+    with pytest.raises(ValueError, match=r"requested output.*not a declared"):
+        model.require_trainable(outputs=["missing"])

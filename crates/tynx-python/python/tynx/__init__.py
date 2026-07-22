@@ -11,6 +11,7 @@ from ._tynx import (
     Parameter,
     Session,
     Tensor,
+    TrainabilityReport,
     __version__,
     is_grad_enabled,
     maximum,
@@ -28,6 +29,7 @@ def load(
     trainable: Literal[True, "auto"],
     simplify: bool = True,
     initializer_names: Optional[Mapping[str, str]] = None,
+    outputs: Optional[list[str]] = None,
 ) -> ImportedModel: ...
 
 
@@ -38,6 +40,7 @@ def load(
     trainable: Literal[False] = False,
     simplify: bool = True,
     initializer_names: None = None,
+    outputs: None = None,
 ) -> Session: ...
 
 
@@ -47,11 +50,12 @@ def load(
     trainable: Union[bool, Literal["auto"]] = False,
     simplify: bool = True,
     initializer_names: Optional[Mapping[str, str]] = None,
+    outputs: Optional[list[str]] = None,
 ) -> Union[Session, ImportedModel]:
     """Load an inference Session or a callable slot-backed training model."""
     if trainable is False:
-        if initializer_names is not None:
-            raise ValueError("initializer_names is only valid for a trainable model")
+        if initializer_names is not None or outputs is not None:
+            raise ValueError("initializer_names and outputs are only valid for a trainable model")
         return Session(path, simplify=simplify)
     if trainable is not True and trainable != "auto":
         raise ValueError("trainable must be False, True, or 'auto'")
@@ -59,6 +63,7 @@ def load(
         path,
         simplify=simplify,
         initializer_names=None if initializer_names is None else dict(initializer_names),
+        outputs=outputs,
     )
 
 
@@ -68,6 +73,7 @@ __all__ = [
     "Parameter",
     "Session",
     "Tensor",
+    "TrainabilityReport",
     "__version__",
     "is_grad_enabled",
     "load",

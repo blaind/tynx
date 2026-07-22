@@ -40,8 +40,23 @@ impl ImportedModel {
         role_overrides: &TrainabilityOverrides,
         name_overrides: &InitializerNameOverrides,
     ) -> Result<Self> {
-        let trainability =
-            TrainabilityReport::analyze_all_outputs_with(session.graph(), role_overrides);
+        Self::from_session_for_outputs_with(session, device, None, role_overrides, name_overrides)
+    }
+
+    /// Build a model after validating either every output or an explicit output subset.
+    pub fn from_session_for_outputs_with(
+        session: Session,
+        device: Device,
+        outputs: Option<&[&str]>,
+        role_overrides: &TrainabilityOverrides,
+        name_overrides: &InitializerNameOverrides,
+    ) -> Result<Self> {
+        let trainability = match outputs {
+            Some(outputs) => {
+                TrainabilityReport::analyze_outputs_with(session.graph(), outputs, role_overrides)
+            }
+            None => TrainabilityReport::analyze_all_outputs_with(session.graph(), role_overrides),
+        };
         trainability.require_trainable()?;
         let state = ImportedState::materialize_with(
             session.graph(),
