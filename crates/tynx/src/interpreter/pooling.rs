@@ -17,8 +17,8 @@ use onnx_ir::{
     node::{
         avg_pool1d::AveragePool1dNode, avg_pool2d::AveragePool2dNode,
         avg_pool3d::AveragePool3dNode, global_avg_pool::GlobalAveragePoolNode,
-        max_pool1d::MaxPool1dNode, max_pool2d::MaxPool2dNode, max_pool3d::MaxPool3dNode,
-        unsupported::GlobalMaxPoolNode,
+        lp_pool1d::LpPool1dNode, lp_pool2d::LpPool2dNode, max_pool1d::MaxPool1dNode,
+        max_pool2d::MaxPool2dNode, max_pool3d::MaxPool3dNode, unsupported::GlobalMaxPoolNode,
     },
 };
 use protobuf::Message;
@@ -411,6 +411,88 @@ pub(super) fn global_max_pool(
     Ok(vec![output])
 }
 
+pub(super) fn lp_pool1d(node: &LpPool1dNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
+    let input = rank3(resolve::first(env, &node.name, &node.inputs, device)?.into_tensor()?)?;
+    let dims = input.dims();
+    let padding = padding1d(
+        dims[2],
+        node.config.kernel_size,
+        node.config.stride,
+        node.config.dilation,
+        &node.config.padding,
+        &node.config.auto_pad,
+        node.config.ceil_mode,
+    );
+    let p = node.config.p as f64;
+    let sum = grouped_sum_pool1d(
+        input.abs().powf_scalar(p),
+        node.config.kernel_size,
+        node.config.stride,
+        node.config.dilation,
+        padding,
+    );
+    Ok(vec![Value::Tensor(DynTensor::R3(sum.powf_scalar(1.0 / p)))])
+}
+
+pub(super) fn lp_pool2d(node: &LpPool2dNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
+    let input = rank4(resolve::first(env, &node.name, &node.inputs, device)?.into_tensor()?)?;
+    let dims = input.dims();
+    let padding = padding2d(
+        [dims[2], dims[3]],
+        node.config.kernel_size,
+        node.config.strides,
+        node.config.dilation,
+        &node.config.padding,
+        &node.config.auto_pad,
+        node.config.ceil_mode,
+    );
+    let p = node.config.p as f64;
+    let sum = grouped_sum_pool2d(
+        input.abs().powf_scalar(p),
+        node.config.kernel_size,
+        node.config.strides,
+        node.config.dilation,
+        padding,
+    );
+    Ok(vec![Value::Tensor(DynTensor::R4(sum.powf_scalar(1.0 / p)))])
+}
+
+fn grouped_sum_pool1d(
+    input: Tensor<3>,
+    kernel: usize,
+    stride: usize,
+    dilation: usize,
+    padding: [(usize, usize); 1],
+) -> Tensor<3> {
+    let [_, channels, _] = input.dims();
+    let device = input.device();
+    let dtype = input.dtype();
+    burn_conv1d(
+        input.pad(padding, PadMode::Constant(0.0)),
+        Tensor::<3>::ones([channels, 1, kernel], (&device, dtype)),
+        None,
+        ConvOptions::new([stride], [0], [dilation], channels),
+    )
+}
+
+fn grouped_sum_pool2d(
+    input: Tensor<4>,
+    kernel: [usize; 2],
+    stride: [usize; 2],
+    dilation: [usize; 2],
+    padding: [(usize, usize); 2],
+) -> Tensor<4> {
+    let [_, channels, _, _] = input.dims();
+    let device = input.device();
+    let dtype = input.dtype();
+    burn_conv2d(
+        input.pad(padding, PadMode::Constant(0.0)),
+        Tensor::<4>::ones([channels, 1, kernel[0], kernel[1]], (&device, dtype)),
+        None,
+        ConvOptions::new(stride, [0; 2], dilation, channels),
+    )
+}
+
 fn grouped_average_pool1d(
     input: Tensor<3>,
     kernel: usize,
@@ -577,8 +659,9 @@ mod tests {
     use onnx_ir::{
         DType,
         node::{
+            lp_pool1d::{LpPool1dConfig, LpPool1dNodeBuilder},
             max_pool3d::{MaxPool3dConfig, MaxPool3dNodeBuilder},
-            padding::{AutoPad, PaddingConfig3d},
+            padding::{AutoPad, PaddingConfig1d, PaddingConfig3d},
         },
     };
 
@@ -609,6 +692,47 @@ mod tests {
         .collect::<Vec<_>>();
 
         assert_eq!(output, [5.0]);
+    }
+
+    #[test]
+    fn lp_pool_sums_powered_windows() {
+        let node = LpPool1dNodeBuilder::new("lp_pool")
+            .input_tensor("x", 3, DType::F32)
+            .output_tensor("y", 3, DType::F32)
+            .config(LpPool1dConfig::new(
+                2,
+                2,
+                PaddingConfig1d::Valid,
+                1,
+                false,
+                AutoPad::NotSet,
+                2,
+            ))
+            .build();
+        let device = Device::default();
+        let mut env = Env::new();
+        env.insert(
+            "x".into(),
+            Value::from_tensor_data(
+                TensorData::new(vec![1.0_f32, 2.0, 3.0, 4.0], [1, 1, 4]),
+                3,
+                &device,
+            )
+            .unwrap(),
+        );
+
+        let output = lp_pool1d(&node, &env, &device)
+            .unwrap()
+            .pop()
+            .unwrap()
+            .into_tensor()
+            .unwrap()
+            .into_data()
+            .iter::<f32>()
+            .collect::<Vec<_>>();
+
+        assert!((output[0] - 5.0_f32.sqrt()).abs() < 1e-6);
+        assert_eq!(output[1], 5.0);
     }
 
     #[test]

@@ -136,6 +136,9 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::LessOrEqual(node) => comparison::less_or_equal(node, env, device),
         Node::Log(node) => unary::log(node, env, device),
         Node::LogSoftmax(node) => softmax::log_softmax(node, env, device),
+        Node::LpNormalization(node) => normalization::lp_normalization(node, env, device),
+        Node::LpPool1d(node) => pooling::lp_pool1d(node, env, device),
+        Node::LpPool2d(node) => pooling::lp_pool2d(node, env, device),
         Node::Lrn(node) => normalization::lrn(node, env, device),
         Node::Gemm(node) => matrix::gemm(node, env, device),
         Node::Max(node) => variadic::max(node, env, device),
@@ -145,6 +148,9 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::MaxPool2d(node) => pooling::max_pool2d(node, env, device),
         Node::MaxPool3d(node) => pooling::max_pool3d(node, env, device),
         Node::Mean(node) => variadic::mean(node, env, device),
+        Node::MeanVarianceNormalization(node) => {
+            normalization::mean_variance_normalization(node, env, device)
+        }
         Node::Min(node) => variadic::min(node, env, device),
         Node::Mish(node) => unary::mish(node, env, device),
         Node::Mod(node) => integer::modulo(node, env, device),

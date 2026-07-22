@@ -8,7 +8,9 @@ use onnx_ir::{
         group_norm::GroupNormalizationNode,
         instance_norm::InstanceNormalizationNode,
         layer_norm::LayerNormalizationNode,
+        lp_normalization::LpNormalizationNode,
         lrn::LrnNode,
+        mean_variance_normalization::MeanVarianceNormalizationNode,
     },
 };
 
@@ -226,6 +228,40 @@ pub(super) fn lrn(node: &LrnNode, env: &Env, device: &Device) -> Result<Vec<Valu
     Ok(vec![Value::Tensor(input.div_broadcast(scale)?)])
 }
 
+pub(super) fn lp_normalization(
+    node: &LpNormalizationNode,
+    env: &Env,
+    device: &Device,
+) -> Result<Vec<Value>> {
+    let input = resolve::first(env, &node.name, &node.inputs, device)?.into_tensor()?;
+    let norm = match node.config.p {
+        1 => input.clone().abs().sum_dims(&[node.config.axis]),
+        2 => input
+            .clone()
+            .powi_scalar(2)
+            .sum_dims(&[node.config.axis])
+            .sqrt(),
+        p => {
+            return Err(TynxError::UnsupportedOp(format!("LpNormalization p={p}")));
+        }
+    };
+    Ok(vec![Value::Tensor(input.div_broadcast(norm)?)])
+}
+
+pub(super) fn mean_variance_normalization(
+    node: &MeanVarianceNormalizationNode,
+    env: &Env,
+    device: &Device,
+) -> Result<Vec<Value>> {
+    let input = resolve::first(env, &node.name, &node.inputs, device)?.into_tensor()?;
+    let mean = input.clone().mean_dims(&node.config.axes);
+    let centered = input.sub_broadcast(mean)?;
+    let variance = centered.clone().powi_scalar(2).mean_dims(&node.config.axes);
+    Ok(vec![Value::Tensor(
+        centered.div_broadcast(variance.sqrt())?,
+    )])
+}
+
 struct ChannelParameters<'a> {
     node_name: &'a str,
     inputs: &'a [Argument],
@@ -273,6 +309,10 @@ mod tests {
             batch_norm::{BatchNormConfig, BatchNormRuntimeConfig, BatchNormalizationNodeBuilder},
             instance_norm::{InstanceNormConfig, InstanceNormalizationNodeBuilder},
             layer_norm::{LayerNormConfig, LayerNormalizationNodeBuilder},
+            lp_normalization::{LpNormalizationConfig, LpNormalizationNodeBuilder},
+            mean_variance_normalization::{
+                MeanVarianceNormalizationConfig, MeanVarianceNormalizationNodeBuilder,
+            },
         },
     };
 
@@ -310,6 +350,69 @@ mod tests {
         output.assert_eq(
             &TensorData::new(vec![1.0_f32, 3.0, -1.0, 1.0], [1, 2, 2]),
             false,
+        );
+    }
+
+    #[test]
+    fn lp_normalization_supports_l1() {
+        let node = LpNormalizationNodeBuilder::new("lp_normalization")
+            .input_tensor("x", 2, DType::F32)
+            .output_tensor("y", 2, DType::F32)
+            .config(LpNormalizationConfig { axis: 1, p: 1 })
+            .build();
+        let device = Device::default();
+        let mut env = Env::new();
+        env.insert(
+            "x".into(),
+            Value::from_tensor_data(
+                TensorData::new(vec![3.0_f32, 4.0, 1.0, -1.0], [2, 2]),
+                2,
+                &device,
+            )
+            .unwrap(),
+        );
+
+        let output = lp_normalization(&node, &env, &device)
+            .unwrap()
+            .pop()
+            .unwrap()
+            .into_tensor()
+            .unwrap()
+            .into_data();
+
+        output.assert_approx_eq::<f32>(
+            &TensorData::new(vec![3.0_f32 / 7.0, 4.0 / 7.0, 0.5, -0.5], [2, 2]),
+            Tolerance::default(),
+        );
+    }
+
+    #[test]
+    fn mean_variance_normalization_uses_selected_axes() {
+        let node = MeanVarianceNormalizationNodeBuilder::new("mvn")
+            .input_tensor("x", 2, DType::F32)
+            .output_tensor("y", 2, DType::F32)
+            .config(MeanVarianceNormalizationConfig { axes: vec![1] })
+            .build();
+        let device = Device::default();
+        let mut env = Env::new();
+        env.insert(
+            "x".into(),
+            Value::from_tensor_data(TensorData::new(vec![1.0_f32, 2.0, 3.0], [1, 3]), 2, &device)
+                .unwrap(),
+        );
+
+        let output = mean_variance_normalization(&node, &env, &device)
+            .unwrap()
+            .pop()
+            .unwrap()
+            .into_tensor()
+            .unwrap()
+            .into_data();
+
+        let scale = 1.5_f32.sqrt();
+        output.assert_approx_eq::<f32>(
+            &TensorData::new(vec![-scale, 0.0, scale], [1, 3]),
+            Tolerance::default(),
         );
     }
 
