@@ -142,7 +142,7 @@ pub(super) fn matmul_integer(
 
 enum MatMulZeroPoint {
     Scalar(i64),
-    Tensor(DynInt),
+    Tensor(Box<DynInt>),
 }
 
 fn optional_zero_point(
@@ -173,7 +173,9 @@ fn optional_zero_point(
                 .ok_or_else(|| TynxError::Shape("empty zero-point tensor".to_string()))?;
             Ok(Some(MatMulZeroPoint::Scalar(value)))
         }
-        Value::Int(tensor) => Ok(Some(MatMulZeroPoint::Tensor(tensor.cast(DType::I32)))),
+        Value::Int(tensor) => Ok(Some(MatMulZeroPoint::Tensor(Box::new(
+            tensor.cast(DType::I32),
+        )))),
         other => Err(TynxError::TypeMismatch(format!(
             "MatMulInteger zero point must be an integer scalar or tensor, got {other:?}"
         ))),
@@ -190,7 +192,7 @@ fn subtract_zero_point(
     };
     let mut zero_point = match zero_point {
         MatMulZeroPoint::Scalar(zero_point) => return Ok(input.sub_scalar(zero_point)),
-        MatMulZeroPoint::Tensor(zero_point) => zero_point,
+        MatMulZeroPoint::Tensor(zero_point) => *zero_point,
     };
 
     let input_dims = input.dims();
@@ -342,6 +344,7 @@ mod tests {
             det::DetNodeBuilder,
             linear::{LinearConfig, LinearNode},
             matmul::MatMulNodeBuilder,
+            matmulinteger::MatMulIntegerNodeBuilder,
         },
     };
 
@@ -437,6 +440,104 @@ mod tests {
     }
 
     #[test]
+    fn broadcasts_batched_matrix_dimensions() {
+        let node = MatMulNodeBuilder::new("matmul")
+            .input_tensor("a", 4, DType::F32)
+            .input_tensor("b", 4, DType::F32)
+            .output_tensor("y", 4, DType::F32)
+            .build();
+        let device = Device::default();
+        let mut env = Env::new();
+        env.insert(
+            "a".into(),
+            Value::from_tensor_data(TensorData::new(vec![1.0_f32; 12], [2, 1, 2, 3]), 4, &device)
+                .unwrap(),
+        );
+        env.insert(
+            "b".into(),
+            Value::from_tensor_data(TensorData::new(vec![1.0_f32; 24], [1, 4, 3, 2]), 4, &device)
+                .unwrap(),
+        );
+
+        let output = matmul(&node, &env, &device)
+            .unwrap()
+            .pop()
+            .unwrap()
+            .into_tensor()
+            .unwrap();
+
+        assert_eq!(output.dims(), [2, 4, 2, 2]);
+        assert_eq!(
+            output.into_data().iter::<f32>().collect::<Vec<_>>(),
+            [3.0; 32]
+        );
+    }
+
+    #[test]
+    fn vector_dot_product_returns_a_scalar() {
+        let node = MatMulNodeBuilder::new("matmul")
+            .input_tensor("a", 1, DType::F32)
+            .input_tensor("b", 1, DType::F32)
+            .output_scalar("y", DType::F32)
+            .build();
+        let device = Device::default();
+        let mut env = Env::new();
+        env.insert(
+            "a".into(),
+            Value::from_tensor_data(TensorData::new(vec![1.0_f32, 2.0, 3.0], [3]), 1, &device)
+                .unwrap(),
+        );
+        env.insert(
+            "b".into(),
+            Value::from_tensor_data(TensorData::new(vec![4.0_f32, 5.0, 6.0], [3]), 1, &device)
+                .unwrap(),
+        );
+
+        let output = matmul(&node, &env, &device).unwrap();
+
+        assert!(matches!(
+            output.as_slice(),
+            [Value::Scalar(Scalar::F64(value))] if (*value - 32.0).abs() < 1e-6
+        ));
+    }
+
+    #[test]
+    fn matmul_integer_broadcasts_row_and_column_zero_points() {
+        let node = MatMulIntegerNodeBuilder::new("matmul_integer")
+            .input_tensor("a", 2, DType::U8)
+            .input_tensor("b", 2, DType::U8)
+            .input_tensor("a_zero", 1, DType::U8)
+            .input_tensor("b_zero", 1, DType::U8)
+            .output_tensor("y", 2, DType::I32)
+            .build();
+        let device = Device::default();
+        let mut env = Env::new();
+        for (name, values, dims, rank) in [
+            ("a", vec![2_u8, 3, 4, 5], vec![2, 2], 2),
+            ("b", vec![6_u8, 7, 8, 9], vec![2, 2], 2),
+            ("a_zero", vec![1_u8, 2], vec![2], 1),
+            ("b_zero", vec![3_u8, 4], vec![2], 1),
+        ] {
+            env.insert(
+                name.into(),
+                Value::from_tensor_data(TensorData::new(values, dims), rank, &device).unwrap(),
+            );
+        }
+
+        let output = matmul_integer(&node, &env, &device)
+            .unwrap()
+            .pop()
+            .unwrap()
+            .into_int()
+            .unwrap()
+            .into_data()
+            .iter::<i32>()
+            .collect::<Vec<_>>();
+
+        assert_eq!(output, [13, 13, 21, 21]);
+    }
+
+    #[test]
     fn computes_a_matrix_determinant() {
         let node = DetNodeBuilder::new("det")
             .input_tensor("x", 2, DType::F32)
@@ -460,5 +561,33 @@ mod tests {
             output.as_slice(),
             [Value::Scalar(Scalar::F64(value))] if (*value + 2.0).abs() < 1e-6
         ));
+    }
+
+    #[test]
+    fn rejects_non_square_determinants_without_panicking() {
+        let node = DetNodeBuilder::new("det")
+            .input_tensor("x", 2, DType::F32)
+            .output_scalar("y", DType::F32)
+            .build();
+        let device = Device::default();
+        let mut env = Env::new();
+        env.insert(
+            "x".into(),
+            Value::from_tensor_data(
+                TensorData::new(vec![1.0_f32, 2.0, 3.0, 4.0, 5.0, 6.0], [2, 3]),
+                2,
+                &device,
+            )
+            .unwrap(),
+        );
+
+        let error = det(&node, &env, &device).unwrap_err();
+
+        assert_eq!(
+            error,
+            TynxError::Shape(
+                "Det requires square matrices, got trailing dimensions 2 and 3".to_string()
+            )
+        );
     }
 }
