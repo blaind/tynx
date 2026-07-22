@@ -5293,6 +5293,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "tynx-capture"
+version = "0.1.1"
+dependencies = [
+ "burn",
+ "tynx",
+ "tynx-train",
+]
+
+[[package]]
 name = "tynx-python"
 version = "0.1.1"
 dependencies = [

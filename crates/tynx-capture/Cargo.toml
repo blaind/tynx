@@ -1,0 +1,18 @@
+[package]
+name = "tynx-capture"
+description = "Binding-neutral graph capture and replay for Tynx"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+tynx-core = { package = "tynx", path = "../tynx", default-features = false, features = ["training"] }
+tynx-train = { path = "../tynx-train" }
+
+[dev-dependencies]
+burn = { git = "https://github.com/tracel-ai/burn", rev = "78f10aec1ca6c6ffb1edd17a0fa131ae59ad5403", default-features = false, features = ["flex"] }
+
+[lints]
+workspace = true
