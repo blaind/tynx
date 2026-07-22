@@ -1211,6 +1211,20 @@ impl DynTensor {
         map_float!(self, |tensor| tensor.min_dims(dims))
     }
 
+    /// Take the maximum while propagating NaN if any reduced element is NaN.
+    pub fn reduce_max_dims_nan(self, dims: &[usize]) -> Result<Self> {
+        let nan_mask = self.clone().is_nan().reduce_max_dims(dims);
+        let reduced = self.reduce_max_dims(dims);
+        Self::where_select(nan_mask, reduced.clone().full_like(f64::NAN), reduced)
+    }
+
+    /// Take the minimum while propagating NaN if any reduced element is NaN.
+    pub fn reduce_min_dims_nan(self, dims: &[usize]) -> Result<Self> {
+        let nan_mask = self.clone().is_nan().reduce_max_dims(dims);
+        let reduced = self.reduce_min_dims(dims);
+        Self::where_select(nan_mask, reduced.clone().full_like(f64::NAN), reduced)
+    }
+
     /// Compare two tensors for equality with multidirectional broadcasting.
     pub fn equal_broadcast(self, other: Self) -> Result<DynBool> {
         let (left, right) = Self::broadcast_pair(self, other)?;
@@ -2666,5 +2680,31 @@ mod tests {
             output.into_data().iter::<f32>().collect::<Vec<_>>(),
             [3.0, 1.0]
         );
+    }
+
+    #[test]
+    fn nan_propagating_extrema_do_not_hide_nan_values() {
+        let device = Device::default();
+        let data = TensorData::new(vec![1.0_f32, f32::NAN, 3.0], [3]);
+
+        let minimum = DynTensor::from_data(data.clone(), 1, &device)
+            .unwrap()
+            .reduce_min_dims_nan(&[0])
+            .unwrap()
+            .into_data()
+            .iter::<f32>()
+            .next()
+            .unwrap();
+        let maximum = DynTensor::from_data(data, 1, &device)
+            .unwrap()
+            .reduce_max_dims_nan(&[0])
+            .unwrap()
+            .into_data()
+            .iter::<f32>()
+            .next()
+            .unwrap();
+
+        assert!(minimum.is_nan());
+        assert!(maximum.is_nan());
     }
 }

@@ -834,7 +834,7 @@ impl PyTensor {
                 let input = self.source.operation_input(tracking, extremum.name())?;
                 let inner = extremum
                     .float_reduce(input, &spec.dims)
-                    .reshape(spec.output_shape)
+                    .and_then(|value| value.reshape(spec.output_shape))
                     .map_err(to_python_error)?;
                 Ok(if tracking {
                     Self::from_operation(inner, &[self])

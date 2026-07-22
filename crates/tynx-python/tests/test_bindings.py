@@ -230,6 +230,13 @@ def test_tensor_value_min_max_reductions_follow_shape_policy() -> None:
     assert booleans.min().tolist() == [False]
 
 
+def test_tensor_value_min_max_reductions_propagate_nan() -> None:
+    values = tynx.Tensor([1.0, float("nan"), 3.0])
+
+    assert math.isnan(values.min().item())
+    assert math.isnan(values.max().item())
+
+
 def test_tensor_value_min_max_reductions_are_differentiable() -> None:
     values = tynx.Tensor([[1.0, 5.0, 3.0], [4.0, 2.0, 6.0]], requires_grad=True)
 
