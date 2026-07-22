@@ -24,7 +24,11 @@ x = tynx.Tensor([[1.0, 2.0], [3.0, 4.0]], requires_grad=True)
 loss = (x @ x).sum()
 loss.backward()
 print(x.grad.tolist())
+```
 
+Loading a model needs an ONNX file on disk; any exported `.onnx` works:
+
+```python
 session = tynx.Session("model.onnx")
 print(session.inputs, session.outputs)
 ```
