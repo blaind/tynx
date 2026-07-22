@@ -55,3 +55,28 @@ python benchmarks/python-capture.py \
 
 This microbenchmark isolates removal of repeated Python/PyO3 operation dispatch. Both paths execute
 the same Burn tensor operations, so it is not a claim of faster kernels or backend fusion.
+
+## 2026-07-22 Python whole-step training capture
+
+- Revision: `6a8ff89`
+- CPU: AMD Ryzen 9 9950X3D 16-Core Processor (16 cores, 32 logical CPUs)
+- Python: CPython 3.13.7 with a release-mode abi3 extension
+- Backend: Burn Flex CPU autodiff device
+- Case: authored `32 -> 64 -> 8` MLP, batch 32, MSE, plain SGD
+- Boundary: `zero_grad -> forward -> loss -> backward -> optimizer step`, then final block sync
+- Warmup / measured iterations / repeats: 50 / 200 / 7
+- Captured IR nodes: 20
+- Eager median: 49.009 µs per step
+- Captured median: 50.500 µs per step
+- Captured/eager speed ratio: 0.970×
+
+Command:
+
+```sh
+maturin develop --release --locked -m crates/tynx-python/Cargo.toml
+BURN_DEVICE=flex python benchmarks/python-training-capture.py
+```
+
+This is deliberately non-gating. On this small workload, whole-step capture is effectively
+break-even but 3.0% slower than eager execution. It proves removal of Python re-entry and provides a
+stable optimization target; it is not evidence of a training throughput benefit yet.
