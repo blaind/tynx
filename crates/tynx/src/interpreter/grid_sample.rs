@@ -14,29 +14,31 @@ use crate::{DynTensor, Result, TynxError, Value};
 pub(super) fn grid_sample(node: &GridSampleNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
     let input = resolve::at(env, &node.name, &node.inputs, 0, device)?.into_tensor()?;
     let grid = resolve::at(env, &node.name, &node.inputs, 1, device)?.into_tensor()?;
+    let grid = grid.cast(input.dtype());
 
+    match (input, grid) {
+        (DynTensor::R4(input), DynTensor::R4(grid)) => grid_sample_2d(node, input, grid, device),
+        (DynTensor::R5(input), DynTensor::R5(grid)) => grid_sample_3d(node, input, grid, device),
+        (input, grid) if input.rank() != grid.rank() => Err(TynxError::Shape(format!(
+            "GridSample input and grid ranks differ: {} and {}",
+            input.rank(),
+            grid.rank()
+        ))),
+        (input, _) => Err(TynxError::UnsupportedOp(format!(
+            "GridSample rank {} (only 2D and 3D spatial sampling are supported)",
+            input.rank()
+        ))),
+    }
+}
+
+fn grid_sample_2d(
+    node: &GridSampleNode,
+    input: Tensor<4>,
+    grid: Tensor<4>,
+    device: &Device,
+) -> Result<Vec<Value>> {
     let input_dims = input.dims();
     let grid_dims = grid.dims();
-    let input_dtype = input.dtype();
-    let input = match input {
-        DynTensor::R4(tensor) => tensor,
-        tensor => {
-            return Err(TynxError::UnsupportedOp(format!(
-                "GridSample rank {} (only 2D spatial sampling is supported)",
-                tensor.rank()
-            )));
-        }
-    };
-    let grid = match grid.cast(input_dtype) {
-        DynTensor::R4(tensor) => tensor,
-        tensor => {
-            return Err(TynxError::Shape(format!(
-                "GridSample grid must have rank 4, got rank {}",
-                tensor.rank()
-            )));
-        }
-    };
-
     if grid_dims[3] != 2 {
         return Err(TynxError::Shape(format!(
             "GridSample 2D grid last dimension must be 2, got {}",
@@ -89,6 +91,204 @@ pub(super) fn grid_sample(node: &GridSampleNode, env: &Env, device: &Device) -> 
     Ok(vec![Value::Tensor(DynTensor::R4(
         input.grid_sample_2d(grid, options),
     ))])
+}
+
+fn grid_sample_3d(
+    node: &GridSampleNode,
+    input: Tensor<5>,
+    grid: Tensor<5>,
+    device: &Device,
+) -> Result<Vec<Value>> {
+    let input_dims = input.dims();
+    let grid_dims = grid.dims();
+    if grid_dims[4] != 3 {
+        return Err(TynxError::Shape(format!(
+            "GridSample 3D grid last dimension must be 3, got {}",
+            grid_dims[4]
+        )));
+    }
+    if input_dims[0] != grid_dims[0] {
+        return Err(TynxError::Shape(format!(
+            "GridSample batch dimensions differ: {} and {}",
+            input_dims[0], grid_dims[0]
+        )));
+    }
+    if matches!(node.config.mode, GridSampleMode::Bicubic) {
+        return Err(TynxError::UnsupportedOp(
+            "GridSample bicubic mode requires a rank-4 input".to_string(),
+        ));
+    }
+
+    Ok(vec![Value::Tensor(volumetric_grid_sample(
+        input,
+        grid,
+        &node.config.mode,
+        &node.config.padding_mode,
+        node.config.align_corners,
+        device,
+    )?)])
+}
+
+fn volumetric_grid_sample(
+    input: Tensor<5>,
+    grid: Tensor<5>,
+    mode: &GridSampleMode,
+    padding: &OnnxPaddingMode,
+    align_corners: bool,
+    device: &Device,
+) -> Result<DynTensor> {
+    let [batch, channels, input_depth, input_height, input_width] = input.dims();
+    let [_, output_depth, output_height, output_width, _] = grid.dims();
+    if input_depth == 0 || input_height == 0 || input_width == 0 {
+        return Err(TynxError::Shape(
+            "GridSample input spatial dimensions must be positive".into(),
+        ));
+    }
+    let dtype = input.dtype();
+    let input = input.into_data().iter::<f64>().collect::<Vec<_>>();
+    let grid = grid.into_data().iter::<f64>().collect::<Vec<_>>();
+    let mut output =
+        Vec::with_capacity(batch * channels * output_depth * output_height * output_width);
+
+    for n in 0..batch {
+        for c in 0..channels {
+            for output_z in 0..output_depth {
+                for output_y in 0..output_height {
+                    for output_x in 0..output_width {
+                        let grid_offset = (((n * output_depth + output_z) * output_height
+                            + output_y)
+                            * output_width
+                            + output_x)
+                            * 3;
+                        let source_x = denormalize(grid[grid_offset], input_width, align_corners);
+                        let source_y =
+                            denormalize(grid[grid_offset + 1], input_height, align_corners);
+                        let source_z =
+                            denormalize(grid[grid_offset + 2], input_depth, align_corners);
+                        let value = match mode {
+                            GridSampleMode::Bilinear => sample_trilinear(
+                                &input,
+                                n,
+                                c,
+                                [source_z, source_y, source_x],
+                                [channels, input_depth, input_height, input_width],
+                                padding,
+                                align_corners,
+                            ),
+                            GridSampleMode::Nearest => sample_value_3d(
+                                &input,
+                                n,
+                                c,
+                                source_z.round_ties_even() as i64,
+                                source_y.round_ties_even() as i64,
+                                source_x.round_ties_even() as i64,
+                                [channels, input_depth, input_height, input_width],
+                                padding,
+                                align_corners,
+                            ),
+                            GridSampleMode::Bicubic => {
+                                return Err(TynxError::UnsupportedOp(
+                                    "GridSample bicubic dispatch invariant".to_string(),
+                                ));
+                            }
+                        };
+                        output.push(value);
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(DynTensor::from_data(
+        TensorData::new(
+            output,
+            [batch, channels, output_depth, output_height, output_width],
+        ),
+        5,
+        device,
+    )?
+    .cast(dtype))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn sample_trilinear(
+    input: &[f64],
+    batch: usize,
+    channel: usize,
+    coordinates: [f64; 3],
+    dims: [usize; 4],
+    padding: &OnnxPaddingMode,
+    align_corners: bool,
+) -> f64 {
+    let [z, y, x] = coordinates;
+    let z0 = z.floor() as i64;
+    let y0 = y.floor() as i64;
+    let x0 = x.floor() as i64;
+    let z_weight = z - z0 as f64;
+    let y_weight = y - y0 as f64;
+    let x_weight = x - x0 as f64;
+    let mut value = 0.0;
+
+    for z_offset in 0..=1 {
+        let z_mix = if z_offset == 0 {
+            1.0 - z_weight
+        } else {
+            z_weight
+        };
+        for y_offset in 0..=1 {
+            let y_mix = if y_offset == 0 {
+                1.0 - y_weight
+            } else {
+                y_weight
+            };
+            for x_offset in 0..=1 {
+                let x_mix = if x_offset == 0 {
+                    1.0 - x_weight
+                } else {
+                    x_weight
+                };
+                value += sample_value_3d(
+                    input,
+                    batch,
+                    channel,
+                    z0 + z_offset,
+                    y0 + y_offset,
+                    x0 + x_offset,
+                    dims,
+                    padding,
+                    align_corners,
+                ) * z_mix
+                    * y_mix
+                    * x_mix;
+            }
+        }
+    }
+    value
+}
+
+#[allow(clippy::too_many_arguments)]
+fn sample_value_3d(
+    input: &[f64],
+    batch: usize,
+    channel: usize,
+    z: i64,
+    y: i64,
+    x: i64,
+    dims: [usize; 4],
+    padding: &OnnxPaddingMode,
+    align_corners: bool,
+) -> f64 {
+    let [channels, depth, height, width] = dims;
+    let Some(z) = padded_index(z, depth, padding, align_corners) else {
+        return 0.0;
+    };
+    let Some(y) = padded_index(y, height, padding, align_corners) else {
+        return 0.0;
+    };
+    let Some(x) = padded_index(x, width, padding, align_corners) else {
+        return 0.0;
+    };
+    input[(((batch * channels + channel) * depth + z) * height + y) * width + x]
 }
 
 fn bicubic_grid_sample(
@@ -403,6 +603,104 @@ mod tests {
             "grid".into(),
             Value::from_tensor_data(TensorData::new(vec![0.0_f32; 2], [1, 1, 1, 2]), 4, &device)
                 .unwrap(),
+        );
+
+        let output = grid_sample(&node, &env, &device)
+            .unwrap()
+            .pop()
+            .unwrap()
+            .into_tensor()
+            .unwrap()
+            .into_data()
+            .iter::<f32>()
+            .collect::<Vec<_>>();
+
+        assert_eq!(output, [1.0]);
+    }
+
+    #[test]
+    fn samples_a_trilinear_center_point() {
+        let node = GridSampleNodeBuilder::new("grid_sample")
+            .input_tensor("x", 5, DType::F32)
+            .input_tensor("grid", 5, DType::F32)
+            .output_tensor("y", 5, DType::F32)
+            .config(GridSampleConfig {
+                mode: GridSampleMode::Bilinear,
+                padding_mode: OnnxPaddingMode::Border,
+                align_corners: true,
+            })
+            .build();
+        let device = Device::default();
+        let mut env = Env::new();
+        env.insert(
+            "x".into(),
+            Value::from_tensor_data(
+                TensorData::new(
+                    vec![1.0_f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+                    [1, 1, 2, 2, 2],
+                ),
+                5,
+                &device,
+            )
+            .unwrap(),
+        );
+        env.insert(
+            "grid".into(),
+            Value::from_tensor_data(
+                TensorData::new(vec![0.0_f32; 3], [1, 1, 1, 1, 3]),
+                5,
+                &device,
+            )
+            .unwrap(),
+        );
+
+        let output = grid_sample(&node, &env, &device)
+            .unwrap()
+            .pop()
+            .unwrap()
+            .into_tensor()
+            .unwrap()
+            .into_data()
+            .iter::<f32>()
+            .collect::<Vec<_>>();
+
+        assert_eq!(output, [4.5]);
+    }
+
+    #[test]
+    fn volumetric_nearest_halfway_coordinates_round_to_even() {
+        let node = GridSampleNodeBuilder::new("grid_sample")
+            .input_tensor("x", 5, DType::F32)
+            .input_tensor("grid", 5, DType::F32)
+            .output_tensor("y", 5, DType::F32)
+            .config(GridSampleConfig {
+                mode: GridSampleMode::Nearest,
+                align_corners: true,
+                ..Default::default()
+            })
+            .build();
+        let device = Device::default();
+        let mut env = Env::new();
+        env.insert(
+            "x".into(),
+            Value::from_tensor_data(
+                TensorData::new(
+                    vec![1.0_f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+                    [1, 1, 2, 2, 2],
+                ),
+                5,
+                &device,
+            )
+            .unwrap(),
+        );
+        env.insert(
+            "grid".into(),
+            Value::from_tensor_data(
+                TensorData::new(vec![0.0_f32; 3], [1, 1, 1, 1, 3]),
+                5,
+                &device,
+            )
+            .unwrap(),
         );
 
         let output = grid_sample(&node, &env, &device)
