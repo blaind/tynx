@@ -167,6 +167,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: crates/tynx-wasm/npm/package-lock.json
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
@@ -180,5 +185,13 @@ jobs:
         run: wasm-pack test --headless --chrome --chromedriver "$(command -v chromedriver)" crates/tynx-wasm --locked --no-default-features --test cpu
       - name: Test WebGPU with SwiftShader
         run: wasm-pack test --headless --chrome --chromedriver "$(command -v chromedriver)" crates/tynx-wasm --locked --features webgpu --test webgpu
-      - name: Build npm package
-        run: wasm-pack build --release --target web crates/tynx-wasm --locked
+      - name: Build WASM for npm
+        run: wasm-pack build --dev --target web crates/tynx-wasm --out-dir npm/wasm --locked
+      - name: Build and test npm package
+        working-directory: crates/tynx-wasm/npm
+        run: |
+          npm ci
+          npm run build
+          npm run check
+          npm test
+          npm pack --dry-run

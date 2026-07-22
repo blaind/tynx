@@ -1,0 +1,6 @@
+/dist/
+/node_modules/
+/wasm/
+/*.tgz
+/LICENSE-APACHE
+/LICENSE-MIT

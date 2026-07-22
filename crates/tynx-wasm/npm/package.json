@@ -1,0 +1,39 @@
+{
+  "name": "tynxjs",
+  "version": "0.1.0",
+  "description": "Typed WebAssembly bindings for the Tynx ONNX runtime",
+  "type": "module",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/blaind/tynx.git",
+    "directory": "crates/tynx-wasm/npm"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "LICENSE-APACHE",
+    "LICENSE-MIT",
+    "README.md",
+    "dist",
+    "wasm/tynx_wasm.js",
+    "wasm/tynx_wasm.d.ts",
+    "wasm/tynx_wasm_bg.wasm",
+    "wasm/tynx_wasm_bg.wasm.d.ts"
+  ],
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "check": "tsc --project tsconfig.test.json",
+    "prepack": "node scripts/prepare-package.mjs",
+    "test": "node --test test/runtime.test.mjs"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}
