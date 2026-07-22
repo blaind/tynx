@@ -28,17 +28,17 @@ def test_imported_actor_critic_trains_with_user_composed_ppo_loss(tmp_path: Path
         trainable="auto",
         simplify=False,
         initializer_names={
-            "constant1_out1": "policy.weight",
-            "constant2_out1": "policy.bias",
-            "constant3_out1": "value.weight",
-            "constant4_out1": "value.bias",
+            "policy_weight": "policy.weight",
+            "policy_bias": "policy.bias",
+            "value_weight": "value.weight",
+            "value_bias": "value.bias",
         },
     )
     assert len(model.outputs) == 2
     logits_name, values_name = model.outputs
     report = model.trainability_report()
-    assert sorted(report.output_parameters[logits_name]) == ["constant1_out1", "constant2_out1"]
-    assert sorted(report.output_parameters[values_name]) == ["constant3_out1", "constant4_out1"]
+    assert sorted(report.output_parameters[logits_name]) == ["policy_bias", "policy_weight"]
+    assert sorted(report.output_parameters[values_name]) == ["value_bias", "value_weight"]
 
     observations = tynx.Tensor([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0], [-1.0, 1.0]])
     actions = tynx.Tensor([0, 1, 0, 1], dtype="int64")

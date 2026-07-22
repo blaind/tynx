@@ -22,6 +22,7 @@ use crate::{
 pub struct Session {
     graph: Arc<OnnxGraph>,
     outputs: Arc<Vec<Argument>>,
+    initializer_names: Arc<HashMap<InitializerId, String>>,
 }
 
 /// A parsed model whose embedded values have been materialized on one device.
@@ -73,6 +74,7 @@ impl Session {
         let declared_output_names = declared_output_names(data)?;
         let (prepared, changed) = crate::interpreter::prepare_model(data)?;
         let parse_data = if changed { prepared.as_slice() } else { data };
+        let initializer_names = declared_initializer_names(parse_data)?;
         let mut graph = OnnxGraphBuilder::new()
             .simplify(simplify)
             .parse_bytes(parse_data)?;
@@ -102,6 +104,7 @@ impl Session {
         Ok(Self {
             graph: Arc::new(graph),
             outputs: Arc::new(outputs),
+            initializer_names: Arc::new(initializer_names),
         })
     }
 
@@ -118,6 +121,11 @@ impl Session {
     /// Return the model's declared outputs.
     pub fn outputs(&self) -> &[Argument] {
         &self.outputs
+    }
+
+    /// Return stable ONNX names keyed by processed initializer identity.
+    pub fn initializer_names(&self) -> &HashMap<InitializerId, String> {
+        &self.initializer_names
     }
 
     /// Resolve one declared output name to its processed graph value name.
@@ -348,6 +356,27 @@ fn declared_output_names(data: &[u8]) -> Result<Vec<String>> {
         .collect())
 }
 
+fn declared_initializer_names(data: &[u8]) -> Result<HashMap<InitializerId, String>> {
+    let model =
+        ModelProto::parse_from_bytes(data).map_err(|error| TynxError::Parse(error.to_string()))?;
+    let graph = model
+        .graph
+        .as_ref()
+        .ok_or_else(|| TynxError::Parse("ONNX model has no graph".to_string()))?;
+    let mut names = HashMap::new();
+    for (data_id, initializer) in graph.initializer.iter().enumerate() {
+        if initializer.name.is_empty() {
+            continue;
+        }
+        names.insert(InitializerId::Static(data_id), initializer.name.clone());
+        names.insert(
+            InitializerId::Named(format!("constant{}_out1", data_id + 1)),
+            initializer.name.clone(),
+        );
+    }
+    Ok(names)
+}
+
 fn run_graph_prepared(
     graph: &OnnxGraph,
     env: &mut Env,
@@ -424,6 +453,7 @@ mod tests {
         Session {
             outputs: Arc::new(graph.outputs.clone()),
             graph: Arc::new(graph),
+            initializer_names: Arc::new(HashMap::new()),
         }
     }
 

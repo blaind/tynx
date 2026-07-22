@@ -17,7 +17,11 @@ fn env_with_input(input: DynTensor) -> Env {
 }
 
 fn stable_names(session: &Session, prefix: &str) -> InitializerNameOverrides {
-    let report = TrainabilityReport::analyze_initializers(session.graph());
+    let report = TrainabilityReport::analyze_initializers_with_names(
+        session.graph(),
+        &TrainabilityOverrides::new(),
+        session.initializer_names(),
+    );
     let mut names = InitializerNameOverrides::new();
     for initializer in report.trainable_parameters() {
         let suffix = match initializer.uses()[0].input_index() {
@@ -33,7 +37,11 @@ fn stable_names(session: &Session, prefix: &str) -> InitializerNameOverrides {
 }
 
 fn batch_norm_names(session: &Session) -> InitializerNameOverrides {
-    let report = TrainabilityReport::analyze_initializers(session.graph());
+    let report = TrainabilityReport::analyze_initializers_with_names(
+        session.graph(),
+        &TrainabilityOverrides::new(),
+        session.initializer_names(),
+    );
     let mut names = InitializerNameOverrides::new();
     for initializer in report.initializers() {
         let suffix = match initializer.uses()[0].input_index() {

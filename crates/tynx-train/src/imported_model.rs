@@ -54,11 +54,12 @@ impl ImportedModel {
     ) -> Result<Self> {
         let trainability = analyze_session_outputs(&session, outputs, role_overrides);
         trainability.require_trainable()?;
-        let state = ImportedState::materialize_with(
+        let state = ImportedState::materialize_with_names(
             session.graph(),
             &device,
             role_overrides,
             name_overrides,
+            session.initializer_names(),
         )?;
         executor::validate(session.graph(), &state)?;
         Ok(Self {
@@ -230,9 +231,18 @@ fn analyze_session_outputs(
     let mut report = match &internal_outputs {
         Some(outputs) => {
             let outputs = outputs.iter().map(String::as_str).collect::<Vec<_>>();
-            TrainabilityReport::analyze_outputs_with(session.graph(), &outputs, role_overrides)
+            TrainabilityReport::analyze_outputs_with_names(
+                session.graph(),
+                &outputs,
+                role_overrides,
+                session.initializer_names(),
+            )
         }
-        None => TrainabilityReport::analyze_all_outputs_with(session.graph(), role_overrides),
+        None => TrainabilityReport::analyze_all_outputs_with_names(
+            session.graph(),
+            role_overrides,
+            session.initializer_names(),
+        ),
     };
     let internal_to_public = session
         .output_name_mapping()

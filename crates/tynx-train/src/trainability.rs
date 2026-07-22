@@ -219,7 +219,16 @@ impl TrainabilityReport {
 
     /// Classify every initializer and apply exact-name role overrides.
     pub fn analyze_initializers_with(graph: &OnnxGraph, overrides: &TrainabilityOverrides) -> Self {
-        analyze(graph, overrides)
+        Self::analyze_initializers_with_names(graph, overrides, &HashMap::new())
+    }
+
+    /// Classify initializers using stable ONNX provenance captured before graph processing.
+    pub fn analyze_initializers_with_names(
+        graph: &OnnxGraph,
+        overrides: &TrainabilityOverrides,
+        stable_names: &HashMap<InitializerId, String>,
+    ) -> Self {
+        analyze(graph, overrides, stable_names)
     }
 
     /// Analyze every declared graph output using automatic initializer roles.
@@ -229,12 +238,21 @@ impl TrainabilityReport {
 
     /// Analyze every declared graph output using explicit initializer-role overrides.
     pub fn analyze_all_outputs_with(graph: &OnnxGraph, overrides: &TrainabilityOverrides) -> Self {
+        Self::analyze_all_outputs_with_names(graph, overrides, &HashMap::new())
+    }
+
+    /// Analyze every output using stable ONNX initializer provenance.
+    pub fn analyze_all_outputs_with_names(
+        graph: &OnnxGraph,
+        overrides: &TrainabilityOverrides,
+        stable_names: &HashMap<InitializerId, String>,
+    ) -> Self {
         let outputs = graph
             .outputs
             .iter()
             .map(|output| output.name.as_str())
             .collect::<Vec<_>>();
-        Self::analyze_outputs_with(graph, &outputs, overrides)
+        Self::analyze_outputs_with_names(graph, &outputs, overrides, stable_names)
     }
 
     /// Analyze only the named declared graph outputs using automatic initializer roles.
@@ -248,7 +266,17 @@ impl TrainabilityReport {
         outputs: &[&str],
         overrides: &TrainabilityOverrides,
     ) -> Self {
-        let mut report = analyze(graph, overrides);
+        Self::analyze_outputs_with_names(graph, outputs, overrides, &HashMap::new())
+    }
+
+    /// Analyze selected outputs using stable ONNX initializer provenance.
+    pub fn analyze_outputs_with_names(
+        graph: &OnnxGraph,
+        outputs: &[&str],
+        overrides: &TrainabilityOverrides,
+        stable_names: &HashMap<InitializerId, String>,
+    ) -> Self {
+        let mut report = analyze(graph, overrides, stable_names);
         analyze_backward_paths(graph, outputs, &mut report);
         report
     }
@@ -464,7 +492,11 @@ struct RoleProposal {
     recognized: bool,
 }
 
-fn analyze(graph: &OnnxGraph, overrides: &TrainabilityOverrides) -> TrainabilityReport {
+fn analyze(
+    graph: &OnnxGraph,
+    overrides: &TrainabilityOverrides,
+    stable_names: &HashMap<InitializerId, String>,
+) -> TrainabilityReport {
     let mut entries = Vec::<WorkEntry>::new();
     let mut by_id = HashMap::<InitializerId, usize>::new();
 
@@ -477,7 +509,7 @@ fn analyze(graph: &OnnxGraph, overrides: &TrainabilityOverrides) -> Trainability
                 continue;
             }
             let id = initializer_id(input, node_index, input_index);
-            let (candidate_name, synthetic_name) = initializer_name(input, &id);
+            let (candidate_name, synthetic_name) = initializer_name(input, &id, stable_names);
             let entry_index = match by_id.get(&id).copied() {
                 Some(index) => index,
                 None => {
@@ -771,7 +803,14 @@ fn initializer_id(input: &Argument, node_index: usize, input_index: usize) -> In
         .unwrap_or_else(|| unreachable!("initializer_id is called only for embedded inputs"))
 }
 
-fn initializer_name(input: &Argument, id: &InitializerId) -> (String, bool) {
+fn initializer_name(
+    input: &Argument,
+    id: &InitializerId,
+    stable_names: &HashMap<InitializerId, String>,
+) -> (String, bool) {
+    if let Some(name) = stable_names.get(id) {
+        return (name.clone(), false);
+    }
     if !input.name.is_empty() {
         return (input.name.clone(), false);
     }
