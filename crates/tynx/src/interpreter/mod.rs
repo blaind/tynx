@@ -7,6 +7,7 @@ mod clip;
 mod comparison;
 mod concat;
 mod convolution;
+mod cumsum;
 mod dropout;
 mod extrema;
 mod gather;
@@ -79,6 +80,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Conv3d(node) => convolution::conv3d(node, env, device),
         Node::Cos(node) => unary::cos(node, env, device),
         Node::Cosh(node) => unary::cosh(node, env, device),
+        Node::CumSum(node) => cumsum::cumsum(node, env, device),
         Node::Div(node) => binary::div(node, env, device),
         Node::Dropout(node) => dropout::dropout(node, env, device),
         Node::Elu(node) => unary::elu(node, env, device),

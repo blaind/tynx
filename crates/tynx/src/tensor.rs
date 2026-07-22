@@ -704,6 +704,24 @@ impl DynTensor {
         Ok(scatter_nd_dyn!(self, indices, values, update, DynTensor))
     }
 
+    /// Compute a cumulative sum with ONNX exclusive and reverse semantics.
+    pub fn cumsum(self, dim: usize, exclusive: bool, reverse: bool) -> Self {
+        map_float!(self, |tensor| {
+            let input = if reverse {
+                tensor.flip([dim as isize])
+            } else {
+                tensor
+            };
+            let output = input.clone().cumsum(dim);
+            let output = if exclusive { output.sub(input) } else { output };
+            if reverse {
+                output.flip([dim as isize])
+            } else {
+                output
+            }
+        })
+    }
+
     /// Permute the tensor dimensions.
     pub fn permute(self, axes: Vec<usize>) -> Result<Self> {
         if axes.len() != self.rank() {
@@ -1362,6 +1380,24 @@ impl DynInt {
         update: IndexingUpdateOp,
     ) -> Result<Self> {
         Ok(scatter_nd_dyn!(self, indices, values, update, DynInt))
+    }
+
+    /// Compute a cumulative sum with ONNX exclusive and reverse semantics.
+    pub fn cumsum(self, dim: usize, exclusive: bool, reverse: bool) -> Self {
+        map_int!(self, |tensor| {
+            let input = if reverse {
+                tensor.flip([dim as isize])
+            } else {
+                tensor
+            };
+            let output = input.clone().cumsum(dim);
+            let output = if exclusive { output.sub(input) } else { output };
+            if reverse {
+                output.flip([dim as isize])
+            } else {
+                output
+            }
+        })
     }
 
     /// Permute the tensor dimensions.
