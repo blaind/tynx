@@ -30,6 +30,7 @@ mod shape;
 mod slice;
 mod softmax;
 mod spatial;
+mod split;
 mod trilu;
 mod unary;
 mod variadic;
@@ -179,6 +180,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Softplus(node) => unary::softplus(node, env, device),
         Node::Softmax(node) => softmax::softmax(node, env, device),
         Node::Softsign(node) => unary::softsign(node, env, device),
+        Node::Split(node) => split::split(node, env, device),
         Node::Sqrt(node) => unary::sqrt(node, env, device),
         Node::Squeeze(node) => shape::squeeze(node, env, device),
         Node::Sub(node) => binary::sub(node, env, device),
