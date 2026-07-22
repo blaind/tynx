@@ -5,6 +5,7 @@ use std::{
     fmt,
 };
 
+pub use tynx_core::InitializerId;
 use tynx_core::onnx_ir::{
     DType, Node,
     ir::{ArgType, Argument, OnnxGraph, ValueSource},
@@ -12,41 +13,6 @@ use tynx_core::onnx_ir::{
 use tynx_core::{Result, TynxError};
 
 use crate::backward_support::{BackwardCapability, BackwardSupportRegistry};
-
-/// Stable-enough identity available for an initializer in the processed ONNX graph.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum InitializerId {
-    /// A named Constant-node output.
-    Named(String),
-    /// A lifted static tensor identified by the processed graph's data ID.
-    Static(usize),
-    /// A malformed unnamed constant, scoped to its first consumer position.
-    Unnamed {
-        node_index: usize,
-        input_index: usize,
-    },
-}
-
-impl InitializerId {
-    /// Identify an embedded graph input, or return `None` for runtime/optional inputs.
-    ///
-    /// `node_index` and `input_index` provide a deterministic fallback identity for malformed
-    /// unnamed constants. Normal named constants and lifted static tensors do not depend on their
-    /// consumer position.
-    pub fn from_argument(input: &Argument, node_index: usize, input_index: usize) -> Option<Self> {
-        match input.value_source {
-            ValueSource::Static(data_id) => Some(Self::Static(data_id)),
-            ValueSource::Constant if !input.name.is_empty() => {
-                Some(Self::Named(input.name.clone()))
-            }
-            ValueSource::Constant => Some(Self::Unnamed {
-                node_index,
-                input_index,
-            }),
-            ValueSource::Dynamic | ValueSource::Optional => None,
-        }
-    }
-}
 
 /// Semantic state role assigned to an ONNX initializer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]

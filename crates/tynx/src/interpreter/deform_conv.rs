@@ -118,7 +118,7 @@ fn optional_rank4(
     let Some(input) = inputs.get(index).filter(|input| !input.is_optional()) else {
         return Ok(None);
     };
-    rank4(resolve::input(env, input, device)?, index).map(Some)
+    rank4(resolve::input_at(env, input, index, device)?, index).map(Some)
 }
 
 fn optional_rank1(
@@ -130,7 +130,7 @@ fn optional_rank1(
     let Some(input) = inputs.get(index).filter(|input| !input.is_optional()) else {
         return Ok(None);
     };
-    match resolve::input(env, input, device)?.into_tensor()? {
+    match resolve::input_at(env, input, index, device)?.into_tensor()? {
         DynTensor::R1(value) => Ok(Some(value)),
         value => Err(TynxError::Shape(format!(
             "DeformConv input {index} must have rank 1, got rank {}",

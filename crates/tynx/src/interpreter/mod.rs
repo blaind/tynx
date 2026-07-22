@@ -35,7 +35,7 @@ mod range_op;
 mod recurrent;
 mod reduction;
 mod resize;
-mod resolve;
+pub(crate) mod resolve;
 mod scaler;
 mod scatter;
 mod selection;

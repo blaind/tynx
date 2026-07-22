@@ -4,7 +4,7 @@ use burn::tensor::Device;
 use onnx_ir::ir::{ArgType, Argument};
 
 use super::Env;
-use crate::{Result, TynxError, Value};
+use crate::{InitializerId, Result, TynxError, Value, initializer::env_key};
 
 pub(super) fn first(
     env: &Env,
@@ -26,18 +26,33 @@ pub(super) fn at(
         TynxError::Shape(format!("node '{node_name}' has no input at index {index}"))
     })?;
 
-    input(env, argument, device)
+    input_at(env, argument, index, device)
 }
 
-pub(super) fn input(env: &Env, argument: &Argument, device: &Device) -> Result<Value> {
+pub(super) fn input_at(
+    env: &Env,
+    argument: &Argument,
+    input_index: usize,
+    device: &Device,
+) -> Result<Value> {
+    input_impl(env, argument, input_index, device)
+}
+
+fn input_impl(
+    env: &Env,
+    argument: &Argument,
+    input_index: usize,
+    device: &Device,
+) -> Result<Value> {
     if let Some(value) = env.get(&argument.name) {
         return Ok(value.clone());
     }
+    let initializer = InitializerId::from_argument(argument, 0, input_index);
+    if let Some(value) = initializer.and_then(|id| env.get(&env_key(&id))) {
+        return Ok(value.clone());
+    }
     if let Some(data) = argument.value() {
-        if matches!(argument.ty, ArgType::Shape(_)) {
-            return Ok(Value::Shape(data.iter::<i64>().collect()));
-        }
-        return Value::from_tensor_data(data.clone(), data.shape.len(), device);
+        return materialize(argument, data, device);
     }
 
     let name = if argument.name.is_empty() {
@@ -46,6 +61,18 @@ pub(super) fn input(env: &Env, argument: &Argument, device: &Device) -> Result<V
         &argument.name
     };
     Err(TynxError::MissingValue(name.to_string()))
+}
+
+pub(crate) fn materialize(
+    argument: &Argument,
+    data: burn::tensor::TensorData,
+    device: &Device,
+) -> Result<Value> {
+    if matches!(argument.ty, ArgType::Shape(_)) {
+        return Ok(Value::Shape(data.iter::<i64>().collect()));
+    }
+    let rank = data.shape.len();
+    Value::from_tensor_data(data, rank, device)
 }
 
 #[cfg(test)]
@@ -59,7 +86,7 @@ mod tests {
     fn reports_a_missing_runtime_input() {
         let argument = Argument::new("missing", ArgType::ScalarNative(DType::I64));
 
-        let error = input(&Env::new(), &argument, &Device::default()).unwrap_err();
+        let error = input_at(&Env::new(), &argument, 0, &Device::default()).unwrap_err();
 
         assert_eq!(error, TynxError::MissingValue("missing".to_string()));
     }
@@ -68,7 +95,7 @@ mod tests {
     fn materializes_a_static_input() {
         let argument = Argument::from_const_i64("constant", 42);
 
-        let value = input(&Env::new(), &argument, &Device::default()).unwrap();
+        let value = input_at(&Env::new(), &argument, 0, &Device::default()).unwrap();
 
         assert!(matches!(value, Value::Scalar(Scalar::I64(42))));
     }

@@ -108,6 +108,8 @@ pub struct Report {
     pub warmup: usize,
     pub iterations: usize,
     pub load_ms: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prepare_ms: Option<f64>,
     pub cold_ms: f64,
     pub median_ms: f64,
     pub p95_ms: f64,
@@ -242,6 +244,21 @@ pub fn measure<F>(
     device: Option<String>,
     load_ms: f64,
     case: &Case,
+    run: F,
+) -> BenchResult<Report>
+where
+    F: FnMut() -> BenchResult<Vec<f32>>,
+{
+    measure_prepared(engine, backend, device, load_ms, None, case, run)
+}
+
+pub fn measure_prepared<F>(
+    engine: &str,
+    backend: &str,
+    device: Option<String>,
+    load_ms: f64,
+    prepare_ms: Option<f64>,
+    case: &Case,
     mut run: F,
 ) -> BenchResult<Report>
 where
@@ -287,6 +304,7 @@ where
         warmup: case.warmup,
         iterations: case.iterations,
         load_ms,
+        prepare_ms,
         cold_ms,
         median_ms,
         p95_ms: percentile(&samples, 0.95),

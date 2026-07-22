@@ -43,9 +43,9 @@ pub(super) fn loop_node(node: &LoopNode, env: &Env, device: &Device) -> Result<V
         ));
     }
     let scan_count = body.outputs.len() - carried_count - 1;
-    let max_trip = optional_i64(env, node.inputs.first(), device)?;
+    let max_trip = optional_i64(env, node.inputs.first(), 0, device)?;
     let mut keep_going = match node.inputs.get(1).filter(|input| !input.is_optional()) {
-        Some(input) => condition(resolve::input(env, input, device)?)?,
+        Some(input) => condition(resolve::input_at(env, input, 1, device)?)?,
         None => true,
     };
     let mut carried = (0..carried_count)
@@ -267,7 +267,7 @@ fn bind_scope(
 ) -> Result<()> {
     for (index, name) in names.iter().enumerate() {
         if let Some(input) = inputs.get(offset + index)
-            && let Ok(value) = resolve::input(outer, input, device)
+            && let Ok(value) = resolve::input_at(outer, input, offset + index, device)
         {
             inner.insert(name.clone(), value);
         }
@@ -275,11 +275,16 @@ fn bind_scope(
     Ok(())
 }
 
-fn optional_i64(env: &Env, input: Option<&Argument>, device: &Device) -> Result<Option<i64>> {
+fn optional_i64(
+    env: &Env,
+    input: Option<&Argument>,
+    input_index: usize,
+    device: &Device,
+) -> Result<Option<i64>> {
     let Some(input) = input.filter(|input| !input.is_optional()) else {
         return Ok(None);
     };
-    let value = resolve::input(env, input, device)?;
+    let value = resolve::input_at(env, input, input_index, device)?;
     let value = match value {
         Value::Scalar(Scalar::I64(value)) => value,
         Value::Scalar(Scalar::U64(value)) => i64::try_from(value)

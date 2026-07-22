@@ -264,6 +264,10 @@ fn run_case(directory: &Path, device: &Device) -> Observation {
             ),
         );
     }
+    let session = match session.prepare(device) {
+        Ok(session) => session,
+        Err(error) => return observed(CaseStatus::RuntimeUnsupported, error),
+    };
 
     let mut env = Env::new();
     for (argument, reference) in session.inputs().iter().zip(&inputs) {
@@ -273,7 +277,7 @@ fn run_case(directory: &Path, device: &Device) -> Observation {
         };
         env.insert(argument.name.clone(), value);
     }
-    let actual = match session.run(device, env) {
+    let actual = match session.run(env) {
         Ok(actual) => actual,
         Err(error) => return observed(CaseStatus::RuntimeUnsupported, error),
     };

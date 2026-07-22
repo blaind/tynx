@@ -46,6 +46,16 @@ pub enum Value {
 }
 
 impl Value {
+    /// Return the device that owns this value, if it is a tensor.
+    pub fn device(&self) -> Option<Device> {
+        match self {
+            Self::Tensor(tensor) => Some(tensor.device()),
+            Self::Int(tensor) => Some(tensor.device()),
+            Self::Bool(tensor) => Some(tensor.device()),
+            Self::Scalar(_) | Self::Shape(_) => None,
+        }
+    }
+
     /// Materialize tensor data as the corresponding runtime value.
     pub fn from_tensor_data(data: TensorData, rank: usize, device: &Device) -> Result<Self> {
         let dtype = data.dtype;
