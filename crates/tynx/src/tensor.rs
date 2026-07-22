@@ -1714,6 +1714,15 @@ impl DynTensor {
         macro_rules! apply {
             ($tensor:expr) => {{
                 let tensor = $tensor;
+                let nan_mask = tensor.clone().is_nan();
+                let nan_value = if maximum {
+                    f64::INFINITY
+                } else {
+                    f64::NEG_INFINITY
+                };
+                let tensor = tensor
+                    .clone()
+                    .mask_where(nan_mask, tensor.full_like(nan_value));
                 let axis_size = tensor.dims()[dim] as i64;
                 let indices = if maximum {
                     if select_last {
