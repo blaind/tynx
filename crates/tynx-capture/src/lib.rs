@@ -729,9 +729,9 @@ fn execute_unary(op: &UnaryOp, input: Value) -> Result<Value> {
     }
     if let UnaryOp::Expand(shape) = op {
         return match input {
-            Value::Tensor(value) => value.expand(shape).map(Value::Tensor),
-            Value::Int(value) => value.expand(shape).map(Value::Int),
-            Value::Bool(value) => value.expand(shape).map(Value::Bool),
+            Value::Tensor(value) => value.to_rank(shape.len())?.expand(shape).map(Value::Tensor),
+            Value::Int(value) => value.to_rank(shape.len())?.expand(shape).map(Value::Int),
+            Value::Bool(value) => value.to_rank(shape.len())?.expand(shape).map(Value::Bool),
             Value::Scalar(_) | Value::Shape(_) => Err(TynxError::TypeMismatch(
                 "captured expand requires a device tensor".to_string(),
             )),

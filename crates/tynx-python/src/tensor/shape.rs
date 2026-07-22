@@ -58,31 +58,79 @@ pub(super) fn reshape(args: &Bound<'_, PyTuple>, numel: usize) -> PyResult<Vec<u
 
 pub(super) fn expand(args: &Bound<'_, PyTuple>, input: &[usize]) -> PyResult<Vec<usize>> {
     let requested = variadic_dims(args, "expand shape")?;
-    if requested.len() != input.len() {
+    if requested.len() < input.len() {
         return Err(PyValueError::new_err(format!(
-            "expand shape has rank {}, expected {}",
+            "expand shape has rank {}, but input rank is {}",
             requested.len(),
             input.len()
         )));
     }
+    if requested.len() > MAX_RANK {
+        return Err(PyValueError::new_err(format!(
+            "expand rank {} exceeds the maximum rank {MAX_RANK}",
+            requested.len()
+        )));
+    }
 
+    let output_rank = requested.len();
+    let leading_dims = output_rank - input.len();
     requested
         .into_iter()
-        .zip(input.iter().copied())
-        .map(|(requested, actual)| {
-            if requested <= 0 {
+        .enumerate()
+        .map(|(axis, requested)| {
+            let leading = axis < leading_dims;
+            let actual = if leading {
+                1
+            } else {
+                input[axis - leading_dims]
+            };
+            if requested == -1 {
+                if leading {
+                    return Err(PyValueError::new_err(
+                        "expand cannot use -1 for a new leading dimension",
+                    ));
+                }
+                return Ok(actual);
+            }
+            if requested < 0 {
                 return Err(PyValueError::new_err(format!(
-                    "expand dimensions must be positive, got {requested}"
+                    "expand dimensions must be non-negative or -1, got {requested}"
                 )));
             }
             let requested =
-                usize::try_from(requested).expect("positive expand dimension fits usize");
+                usize::try_from(requested).expect("non-negative expand dimension fits usize");
             if actual != 1 && actual != requested {
                 return Err(PyValueError::new_err(format!(
                     "cannot expand dimension of size {actual} to {requested}"
                 )));
             }
             Ok(requested)
+        })
+        .collect()
+}
+
+pub(super) fn repeat(args: &Bound<'_, PyTuple>, rank: usize) -> PyResult<Vec<usize>> {
+    let repeats = variadic_dims(args, "repeat counts")?;
+    if repeats.len() < rank {
+        return Err(PyValueError::new_err(format!(
+            "repeat has {} counts for tensor rank {rank}",
+            repeats.len()
+        )));
+    }
+    if repeats.len() > MAX_RANK {
+        return Err(PyValueError::new_err(format!(
+            "repeat rank {} exceeds the maximum rank {MAX_RANK}",
+            repeats.len()
+        )));
+    }
+    repeats
+        .into_iter()
+        .map(|repeat| {
+            usize::try_from(repeat).map_err(|_| {
+                PyValueError::new_err(format!(
+                    "repeat counts must be non-negative integers, got {repeat}"
+                ))
+            })
         })
         .collect()
 }

@@ -1159,22 +1159,62 @@ impl PyTensor {
         match self.source.value() {
             TensorValue::Float(_) => self
                 .unary_captured(UnaryOp::Expand(output.clone()), move |input| {
-                    input.expand(&output)
+                    input.to_rank(output.len())?.expand(&output)
                 }),
             value => {
                 let expanded = match value.detach() {
-                    TensorValue::Int(input) => {
-                        TensorValue::Int(input.expand(&output).map_err(to_python_error)?)
-                    }
-                    TensorValue::Bool(input) => {
-                        TensorValue::Bool(input.expand(&output).map_err(to_python_error)?)
-                    }
+                    TensorValue::Int(input) => TensorValue::Int(
+                        input
+                            .to_rank(output.len())
+                            .and_then(|input| input.expand(&output))
+                            .map_err(to_python_error)?,
+                    ),
+                    TensorValue::Bool(input) => TensorValue::Bool(
+                        input
+                            .to_rank(output.len())
+                            .and_then(|input| input.expand(&output))
+                            .map_err(to_python_error)?,
+                    ),
                     TensorValue::Float(_) => unreachable!("float expansion handled above"),
                 };
                 let mut result = Self::from_value(expanded);
                 result.trace = record_unary(self, UnaryOp::Expand(output))?;
                 Ok(result)
             }
+        }
+    }
+
+    /// Materialize repetitions along each dimension.
+    #[pyo3(signature = (*repeats))]
+    fn repeat(&self, repeats: &Bound<'_, PyTuple>) -> PyResult<Self> {
+        self.capture_unsupported("Tensor.repeat")?;
+        let repeats = shape::repeat(repeats, self.ndim())?;
+        let tracking = is_grad_enabled();
+        match self.source.value() {
+            TensorValue::Float(_) => {
+                let output = self
+                    .operation_input(tracking, "Tensor.repeat")?
+                    .to_rank(repeats.len())
+                    .map_err(to_python_error)?
+                    .repeat(&repeats);
+                Ok(if tracking {
+                    Self::from_operation(output, &[self])
+                } else {
+                    Self::from_inner(output)
+                })
+            }
+            TensorValue::Int(input) => Ok(Self::from_int_inner(
+                input
+                    .to_rank(repeats.len())
+                    .map_err(to_python_error)?
+                    .repeat(&repeats),
+            )),
+            TensorValue::Bool(input) => Ok(Self::from_value(TensorValue::Bool(
+                input
+                    .to_rank(repeats.len())
+                    .map_err(to_python_error)?
+                    .repeat(&repeats),
+            ))),
         }
     }
 
