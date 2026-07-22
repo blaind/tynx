@@ -789,6 +789,45 @@ impl DynTensor {
         map_float!(self, |tensor| activation::log_softmax(tensor, dim))
     }
 
+    /// Return indices of extrema along one dimension using ONNX tie semantics.
+    pub fn arg_extreme(self, dim: usize, maximum: bool, select_last: bool) -> DynInt {
+        macro_rules! apply {
+            ($tensor:expr) => {{
+                let tensor = $tensor;
+                let axis_size = tensor.dims()[dim] as i64;
+                let indices = if maximum {
+                    if select_last {
+                        tensor
+                            .flip([dim as isize])
+                            .argmax(dim)
+                            .mul_scalar(-1_i64)
+                            .add_scalar(axis_size - 1)
+                    } else {
+                        tensor.argmax(dim)
+                    }
+                } else if select_last {
+                    tensor
+                        .flip([dim as isize])
+                        .argmin(dim)
+                        .mul_scalar(-1_i64)
+                        .add_scalar(axis_size - 1)
+                } else {
+                    tensor.argmin(dim)
+                };
+                indices.cast(DType::I64)
+            }};
+        }
+
+        match self {
+            Self::R1(tensor) => DynInt::R1(apply!(tensor)),
+            Self::R2(tensor) => DynInt::R2(apply!(tensor)),
+            Self::R3(tensor) => DynInt::R3(apply!(tensor)),
+            Self::R4(tensor) => DynInt::R4(apply!(tensor)),
+            Self::R5(tensor) => DynInt::R5(apply!(tensor)),
+            Self::R6(tensor) => DynInt::R6(apply!(tensor)),
+        }
+    }
+
     /// Clamp every element to the optional lower and upper bounds.
     pub fn clip(self, min: Option<f64>, max: Option<f64>) -> Self {
         match (min, max) {
@@ -908,6 +947,45 @@ impl DynInt {
             Self::R4(tensor) => DynTensor::R4(tensor.float().cast(dtype)),
             Self::R5(tensor) => DynTensor::R5(tensor.float().cast(dtype)),
             Self::R6(tensor) => DynTensor::R6(tensor.float().cast(dtype)),
+        }
+    }
+
+    /// Return indices of extrema along one dimension using ONNX tie semantics.
+    pub fn arg_extreme(self, dim: usize, maximum: bool, select_last: bool) -> Self {
+        macro_rules! apply {
+            ($tensor:expr) => {{
+                let tensor = $tensor;
+                let axis_size = tensor.dims()[dim] as i64;
+                let indices = if maximum {
+                    if select_last {
+                        tensor
+                            .flip([dim as isize])
+                            .argmax(dim)
+                            .mul_scalar(-1_i64)
+                            .add_scalar(axis_size - 1)
+                    } else {
+                        tensor.argmax(dim)
+                    }
+                } else if select_last {
+                    tensor
+                        .flip([dim as isize])
+                        .argmin(dim)
+                        .mul_scalar(-1_i64)
+                        .add_scalar(axis_size - 1)
+                } else {
+                    tensor.argmin(dim)
+                };
+                indices.cast(DType::I64)
+            }};
+        }
+
+        match self {
+            Self::R1(tensor) => Self::R1(apply!(tensor)),
+            Self::R2(tensor) => Self::R2(apply!(tensor)),
+            Self::R3(tensor) => Self::R3(apply!(tensor)),
+            Self::R4(tensor) => Self::R4(apply!(tensor)),
+            Self::R5(tensor) => Self::R5(apply!(tensor)),
+            Self::R6(tensor) => Self::R6(apply!(tensor)),
         }
     }
 

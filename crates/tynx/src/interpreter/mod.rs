@@ -4,6 +4,7 @@ mod binary;
 mod clip;
 mod comparison;
 mod convolution;
+mod extrema;
 mod logical;
 mod matrix;
 mod pooling;
@@ -48,6 +49,8 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Acosh(node) => unary::acosh(node, env, device),
         Node::Add(node) => binary::add(node, env, device),
         Node::And(node) => logical::and(node, env, device),
+        Node::ArgMax(node) => extrema::argmax(node, env, device),
+        Node::ArgMin(node) => extrema::argmin(node, env, device),
         Node::Asin(node) => unary::asin(node, env, device),
         Node::Asinh(node) => unary::asinh(node, env, device),
         Node::Atan(node) => unary::atan(node, env, device),
