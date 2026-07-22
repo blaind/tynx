@@ -722,6 +722,36 @@ impl DynTensor {
         })
     }
 
+    /// Return the largest values and their indices along one dimension.
+    pub fn topk(self, k: usize, dim: usize) -> (Self, DynInt) {
+        match self {
+            Self::R1(tensor) => {
+                let (values, indices) = tensor.topk_with_indices(k, dim);
+                (Self::R1(values), DynInt::R1(indices.cast(DType::I64)))
+            }
+            Self::R2(tensor) => {
+                let (values, indices) = tensor.topk_with_indices(k, dim);
+                (Self::R2(values), DynInt::R2(indices.cast(DType::I64)))
+            }
+            Self::R3(tensor) => {
+                let (values, indices) = tensor.topk_with_indices(k, dim);
+                (Self::R3(values), DynInt::R3(indices.cast(DType::I64)))
+            }
+            Self::R4(tensor) => {
+                let (values, indices) = tensor.topk_with_indices(k, dim);
+                (Self::R4(values), DynInt::R4(indices.cast(DType::I64)))
+            }
+            Self::R5(tensor) => {
+                let (values, indices) = tensor.topk_with_indices(k, dim);
+                (Self::R5(values), DynInt::R5(indices.cast(DType::I64)))
+            }
+            Self::R6(tensor) => {
+                let (values, indices) = tensor.topk_with_indices(k, dim);
+                (Self::R6(values), DynInt::R6(indices.cast(DType::I64)))
+            }
+        }
+    }
+
     /// Permute the tensor dimensions.
     pub fn permute(self, axes: Vec<usize>) -> Result<Self> {
         if axes.len() != self.rank() {
@@ -1400,6 +1430,36 @@ impl DynInt {
         })
     }
 
+    /// Return the largest values and their indices along one dimension.
+    pub fn topk(self, k: usize, dim: usize) -> (Self, DynInt) {
+        match self {
+            Self::R1(tensor) => {
+                let (values, indices) = tensor.topk_with_indices(k, dim);
+                (Self::R1(values), Self::R1(indices.cast(DType::I64)))
+            }
+            Self::R2(tensor) => {
+                let (values, indices) = tensor.topk_with_indices(k, dim);
+                (Self::R2(values), Self::R2(indices.cast(DType::I64)))
+            }
+            Self::R3(tensor) => {
+                let (values, indices) = tensor.topk_with_indices(k, dim);
+                (Self::R3(values), Self::R3(indices.cast(DType::I64)))
+            }
+            Self::R4(tensor) => {
+                let (values, indices) = tensor.topk_with_indices(k, dim);
+                (Self::R4(values), Self::R4(indices.cast(DType::I64)))
+            }
+            Self::R5(tensor) => {
+                let (values, indices) = tensor.topk_with_indices(k, dim);
+                (Self::R5(values), Self::R5(indices.cast(DType::I64)))
+            }
+            Self::R6(tensor) => {
+                let (values, indices) = tensor.topk_with_indices(k, dim);
+                (Self::R6(values), Self::R6(indices.cast(DType::I64)))
+            }
+        }
+    }
+
     /// Permute the tensor dimensions.
     pub fn permute(self, axes: Vec<usize>) -> Result<Self> {
         if axes.len() != self.rank() {
@@ -1737,6 +1797,19 @@ impl DynBool {
             )),
             _ => return Err(rank_overflow(dims.len())),
         })
+    }
+
+    /// Return coordinates of all true elements in row-major order.
+    pub fn nonzero(self) -> DynInt {
+        let coordinates = match self {
+            Self::R1(tensor) => tensor.nonzero(),
+            Self::R2(tensor) => tensor.nonzero(),
+            Self::R3(tensor) => tensor.nonzero(),
+            Self::R4(tensor) => tensor.nonzero(),
+            Self::R5(tensor) => tensor.nonzero(),
+            Self::R6(tensor) => tensor.nonzero(),
+        };
+        DynInt::R2(Tensor::stack(coordinates, 0).cast(DType::I64))
     }
 
     /// Reshape the tensor while preserving its elements and dtype.

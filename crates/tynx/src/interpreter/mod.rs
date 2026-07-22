@@ -19,6 +19,7 @@ mod pow;
 mod reduction;
 mod resolve;
 mod scatter;
+mod selection;
 mod shape;
 mod slice;
 mod softmax;
@@ -122,6 +123,8 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Mul(node) => binary::mul(node, env, device),
         Node::Neg(node) => unary::neg(node, env, device),
         Node::Not(node) => logical::not(node, env, device),
+        Node::NonZero(node) => selection::nonzero(node, env, device),
+        Node::OneHot(node) => selection::one_hot(node, env, device),
         Node::Or(node) => logical::or(node, env, device),
         Node::PRelu(node) => binary::prelu(node, env, device),
         Node::Pow(node) => pow::pow(node, env, device),
@@ -159,6 +162,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Tanh(node) => unary::tanh(node, env, device),
         Node::ThresholdedRelu(node) => unary::thresholded_relu(node, env, device),
         Node::Tile(node) => broadcasting::tile(node, env, device),
+        Node::TopK(node) => selection::topk(node, env, device),
         Node::Transpose(node) => shape::transpose(node, env, device),
         Node::Unsqueeze(node) => shape::unsqueeze(node, env, device),
         Node::Where(node) => where_op::where_op(node, env, device),
