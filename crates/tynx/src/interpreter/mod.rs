@@ -11,6 +11,7 @@ mod concat;
 mod control_flow;
 mod convolution;
 mod cumsum;
+mod deform_conv;
 mod dft;
 mod dropout;
 mod einsum;
@@ -109,6 +110,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Cosh(node) => unary::cosh(node, env, device),
         Node::CumSum(node) => cumsum::cumsum(node, env, device),
         Node::DequantizeLinear(node) => quantization::dequantize_linear(node, env, device),
+        Node::DeformConv(node) => deform_conv::deform_conv(node, env, device),
         Node::DepthToSpace(node) => spatial_layout::depth_to_space(node, env, device),
         Node::Det(node) => matrix::det(node, env, device),
         Node::Dft(node) => dft::dft(node, env, device),
