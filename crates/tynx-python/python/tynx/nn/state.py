@@ -26,6 +26,23 @@ def get_parameter_aliases(obj: object) -> dict[str, tuple[str, ...]]:
     return {name: aliases.get(id(parameter), ()) for name, parameter, _ in canonical}
 
 
+def train(obj: object, mode: bool = True) -> object:
+    """Set every reachable Tynx module to training or evaluation mode."""
+    if type(mode) is not bool:
+        raise TypeError(f"training mode must be a bool, got {type(mode).__qualname__}")
+    from .modules.module import Module
+
+    for value in _walk_objects(obj):
+        if isinstance(value, Module):
+            object.__setattr__(value, "training", mode)
+    return obj
+
+
+def eval(obj: object) -> object:
+    """Set every reachable Tynx module to evaluation mode."""
+    return train(obj, False)
+
+
 def _parameter_names(
     obj: object,
 ) -> tuple[list[tuple[str, Parameter, int]], dict[int, tuple[str, ...]]]:
@@ -163,4 +180,54 @@ def _format_path(path: _Path, parameter: Parameter) -> str:
     return "<root>"
 
 
-__all__ = ["get_parameter_aliases", "get_parameters", "named_parameters"]
+def _walk_objects(root: object) -> list[object]:
+    discovered: list[object] = []
+    pending = [root]
+    visited: set[int] = set()
+    while pending:
+        value = pending.pop()
+        identity = id(value)
+        if identity in visited:
+            continue
+        visited.add(identity)
+        discovered.append(value)
+        if isinstance(value, Parameter) or _is_terminal(value):
+            continue
+        if type(value) is list:
+            pending.extend(reversed(cast(list[object], value)))
+            continue
+        if type(value) is tuple:
+            pending.extend(reversed(cast(tuple[object, ...], value)))
+            continue
+        if type(value) is dict:
+            mapping = cast(dict[object, object], value)
+            keys = [_validate_dictionary_key(key) for key in mapping]
+            pending.extend(mapping[key] for key in reversed(sorted(keys)))
+            continue
+        if _declares_slots(value):
+            raise TypeError(
+                f"cannot propagate mode through {type(value).__qualname__}: __slots__ objects are "
+                "unsupported; store Tynx layers in __dict__ or a supported container"
+            )
+        try:
+            namespace = object.__getattribute__(value, "__dict__")
+        except AttributeError:
+            continue
+        if type(namespace) is not dict:
+            raise TypeError(
+                f"cannot propagate mode through {type(value).__qualname__}: "
+                "__dict__ is not a plain dict"
+            )
+        attributes = cast(dict[object, object], namespace)
+        names = [_validate_attribute_name(name) for name in attributes]
+        pending.extend(attributes[name] for name in reversed(sorted(names)))
+    return discovered
+
+
+__all__ = [
+    "eval",
+    "get_parameter_aliases",
+    "get_parameters",
+    "named_parameters",
+    "train",
+]

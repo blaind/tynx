@@ -1,6 +1,7 @@
 """Tests for the native Python bindings."""
 
 import math
+import random
 from collections.abc import Callable
 from pathlib import Path
 
@@ -562,6 +563,82 @@ def test_functional_losses_validate_shapes_dtypes_and_reductions() -> None:
             tynx.Tensor([1.0]),
             "invalid",  # type: ignore[arg-type]
         )
+
+
+def test_linear_supports_vector_batched_forward_and_gradients() -> None:
+    layer = tynx.nn.Linear(2, 2)
+    layer.weight = tynx.Parameter([[2.0, 0.0], [0.0, 3.0]], name="weight")
+    layer.bias = tynx.Parameter([1.0, -1.0], name="bias")
+    vector = tynx.Tensor([2.0, 4.0], requires_grad=True)
+    batch = tynx.Tensor([[[1.0, 2.0]], [[3.0, 4.0]]])
+
+    output = layer(vector)
+
+    assert output.shape == (2,)
+    assert output.tolist() == pytest.approx([5.0, 11.0])
+    assert layer(batch).tolist() == [[[3.0, 5.0]], [[7.0, 11.0]]]
+    output.sum().backward()
+    assert vector.grad is not None
+    assert vector.grad.tolist() == pytest.approx([2.0, 3.0])
+    assert layer.weight.grad is not None
+    assert layer.weight.grad.tolist()[0] == pytest.approx([2.0, 4.0])
+    assert layer.weight.grad.tolist()[1] == pytest.approx([2.0, 4.0])
+
+
+def test_module_sequential_discovery_and_recursive_modes() -> None:
+    model = tynx.nn.Sequential(tynx.nn.Linear(2, 3), tynx.nn.ReLU(), tynx.nn.Linear(3, 1))
+
+    class Wrapper:
+        def __init__(self) -> None:
+            self.model = model
+            self.alias = model[0]
+            self.cycle = self
+
+    wrapper = Wrapper()
+
+    assert [name for name, _ in model.named_parameters()] == [
+        "layers.0.bias",
+        "layers.0.weight",
+        "layers.2.bias",
+        "layers.2.weight",
+    ]
+    assert len(model.parameters()) == 4
+    assert "in_features=2" in repr(model[0])
+    assert all(module.training for module in (model, model[0], model[1], model[2]))
+
+    assert tynx.nn.state.eval(wrapper) is wrapper
+    assert not any(module.training for module in (model, model[0], model[1], model[2]))
+    assert model.train() is model
+    assert all(module.training for module in (model, model[0], model[1], model[2]))
+
+
+def test_linear_and_sequential_validate_construction_and_inputs() -> None:
+    with pytest.raises(ValueError, match="positive integer"):
+        tynx.nn.Linear(0, 2)
+    with pytest.raises(TypeError, match="bias must be a bool"):
+        tynx.nn.Linear(2, 2, bias=1)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="must be a Module"):
+        tynx.nn.Sequential(tynx.nn.ReLU(), object())  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="final dimension"):
+        tynx.nn.Linear(3, 2)(tynx.Tensor([[1.0, 2.0]]))
+    with pytest.raises(TypeError, match="float32"):
+        tynx.nn.Linear(2, 2)(tynx.Tensor([[1, 2]], dtype="int64"))
+
+
+def test_authored_sequential_mlp_converges_without_a_trainer() -> None:
+    random.seed(0)
+    model = tynx.nn.Sequential(tynx.nn.Linear(1, 4), tynx.nn.ReLU(), tynx.nn.Linear(4, 1))
+    optimizer = tynx.optim.Adam(model.parameters(), lr=0.05)
+    inputs = tynx.Tensor([[-1.0], [-0.5], [0.0], [0.5], [1.0]])
+    targets = tynx.Tensor([[-1.0], [0.0], [1.0], [2.0], [3.0]])
+
+    for _ in range(400):
+        optimizer.zero_grad()
+        loss = tynx.nn.functional.mse_loss(model(inputs), targets)
+        loss.backward()
+        optimizer.step()
+
+    assert tynx.nn.functional.mse_loss(model(inputs), targets).item() < 1e-4
 
 
 def test_tensor_eager_operators() -> None:
