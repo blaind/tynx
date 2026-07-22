@@ -1,0 +1,9 @@
+{
+  "goog:chromeOptions": {
+    "args": [
+      "--enable-unsafe-webgpu",
+      "--use-webgpu-adapter=swiftshader",
+      "--use-gpu-in-tests"
+    ]
+  }
+}

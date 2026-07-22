@@ -170,7 +170,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
+      - uses: taiki-e/install-action@wasm-pack
+      - uses: nanasess/setup-chromedriver@v2
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: wasm
       - run: cargo check --locked -p tynx --target wasm32-unknown-unknown
+      - name: Test CPU WASM in Chromium
+        run: wasm-pack test --headless --chrome --chromedriver "$(command -v chromedriver)" crates/tynx-wasm --locked --no-default-features --test cpu
+      - name: Test WebGPU with SwiftShader
+        run: wasm-pack test --headless --chrome --chromedriver "$(command -v chromedriver)" crates/tynx-wasm --locked --features webgpu --test webgpu
+      - name: Build npm package
+        run: wasm-pack build --release --target web crates/tynx-wasm --locked

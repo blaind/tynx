@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/tynx", "crates/tynx-python", "xtask"]
+members = ["crates/tynx", "crates/tynx-python", "crates/tynx-wasm", "xtask"]
 resolver = "3"
 
 [workspace.package]
