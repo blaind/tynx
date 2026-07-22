@@ -24,7 +24,7 @@ use tynx_core::{Device, DynInt, DynTensor, Gradients};
 use tynx_train::ParameterSlot;
 
 use crate::{
-    capture::{TraceValue, record_binary},
+    capture::{TraceValue, record_binary, record_unary, record_unsupported},
     device::{PyDevice, raise_pending_device_error},
     grad_mode::is_grad_enabled,
     to_python_error,
@@ -308,9 +308,7 @@ impl PyTensor {
         } else {
             Self::from_inner(inner)
         };
-        if let Some(trace) = &self.trace {
-            trace.unsupported("this tensor operation")?;
-        }
+        record_unsupported(self, "this tensor operation")?;
         result.trace = None;
         Ok(result)
     }
@@ -328,12 +326,7 @@ impl PyTensor {
         } else {
             Self::from_inner(inner)
         };
-        result.trace = self
-            .trace
-            .as_ref()
-            .map(|trace| trace.unary(capture_op))
-            .transpose()?
-            .flatten();
+        result.trace = record_unary(self, capture_op)?;
         Ok(result)
     }
 
@@ -530,10 +523,7 @@ impl PyTensor {
     }
 
     pub(crate) fn capture_unsupported(&self, reason: &str) -> PyResult<()> {
-        if let Some(trace) = &self.trace {
-            trace.unsupported(reason)?;
-        }
-        Ok(())
+        record_unsupported(self, reason)
     }
 }
 

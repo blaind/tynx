@@ -211,3 +211,27 @@ def test_undeclared_closure_values_are_frozen_at_capture_time() -> None:
     use_relu = False
     assert forward(tynx.Tensor([-2.0])).item() == 0.0
     assert calls == 1
+
+
+def test_authored_sequential_model_captures_parameter_first_operations() -> None:
+    model = tynx.nn.Sequential(
+        tynx.nn.Linear(2, 3),
+        tynx.nn.ReLU(),
+        tynx.nn.Linear(3, 1),
+    )
+    calls = 0
+
+    @tynx.compile(fullgraph=True)
+    def forward(input: tynx.Tensor) -> tynx.Tensor:
+        nonlocal calls
+        calls += 1
+        return model(input)
+
+    first = forward(tynx.Tensor([[1.0, -2.0], [3.0, 4.0]]))
+    second = forward(tynx.Tensor([[1.0, -2.0], [3.0, 4.0]]))
+    assert second.flatten().tolist() == pytest.approx(first.flatten().tolist())
+    assert calls == 1
+    assert forward.compile_count == 1
+
+    second.sum().backward()
+    assert all(parameter.grad is not None for parameter in model.parameters())

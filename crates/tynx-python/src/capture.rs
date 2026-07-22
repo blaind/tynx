@@ -1,12 +1,20 @@
 //! CPython tracing projection over the binding-neutral capture runtime.
 
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    rc::{Rc, Weak},
+};
 
 use pyo3::{exceptions::PyRuntimeError, prelude::*, types::PyTuple};
 use tynx_capture::{BinaryOp, Graph, GraphBuilder, UnaryOp, ValueId};
 use tynx_train::{ParamId, ParameterSlot};
 
 use crate::{grad_mode::is_grad_enabled, tensor::PyTensor, to_python_error};
+
+thread_local! {
+    static ACTIVE_CAPTURE: RefCell<Option<Weak<CaptureState>>> = const { RefCell::new(None) };
+}
 
 #[derive(Debug)]
 struct CaptureInner {
@@ -120,33 +128,66 @@ impl TraceValue {
         })
     }
 
-    pub(crate) fn binary(&self, other: &PyTensor, op: BinaryOp) -> PyResult<Option<Self>> {
-        let right = if let Some(other_trace) = other.trace() {
-            if !Rc::ptr_eq(&self.state, &other_trace.state) {
-                self.state
-                    .unsupported("tensors from different capture sessions")?;
-                return Ok(None);
-            }
-            other_trace.value
-        } else if let Some(slot) = other.parameter_slot() {
-            self.state.parameter(slot)?
-        } else {
-            self.state.unsupported(
-                "a closed-over Tensor value; pass changing tensors as function inputs",
-            )?;
-            return Ok(None);
-        };
-        self.state.binary(op, self.value, right).map(|value| {
-            Some(Self {
-                state: self.state.clone(),
-                value,
-            })
-        })
-    }
-
     pub(crate) fn unsupported(&self, reason: &str) -> PyResult<()> {
         self.state.unsupported(reason)
     }
+}
+
+fn activate(state: &Rc<CaptureState>) -> PyResult<()> {
+    ACTIVE_CAPTURE.with(|active| {
+        let mut active = active.borrow_mut();
+        if let Some(existing) = active.as_ref().and_then(Weak::upgrade)
+            && !Rc::ptr_eq(&existing, state)
+        {
+            return Err(PyRuntimeError::new_err(
+                "nested tynx.compile tracing sessions are not supported",
+            ));
+        }
+        *active = Some(Rc::downgrade(state));
+        Ok(())
+    })
+}
+
+fn deactivate(state: &Rc<CaptureState>) {
+    ACTIVE_CAPTURE.with(|active| {
+        let mut active = active.borrow_mut();
+        if active
+            .as_ref()
+            .and_then(Weak::upgrade)
+            .is_some_and(|current| Rc::ptr_eq(&current, state))
+        {
+            *active = None;
+        }
+    });
+}
+
+fn active() -> Option<Rc<CaptureState>> {
+    ACTIVE_CAPTURE.with(|active| active.borrow().as_ref().and_then(Weak::upgrade))
+}
+
+fn trace_for(tensor: &PyTensor) -> PyResult<Option<TraceValue>> {
+    if let Some(trace) = tensor.trace() {
+        return Ok(Some(trace.clone()));
+    }
+    let (Some(state), Some(slot)) = (active(), tensor.parameter_slot()) else {
+        return Ok(None);
+    };
+    let value = state.parameter(slot)?;
+    Ok(Some(TraceValue { state, value }))
+}
+
+pub(crate) fn record_unary(tensor: &PyTensor, op: UnaryOp) -> PyResult<Option<TraceValue>> {
+    trace_for(tensor)?
+        .map(|trace| trace.unary(op))
+        .transpose()
+        .map(Option::flatten)
+}
+
+pub(crate) fn record_unsupported(tensor: &PyTensor, reason: &str) -> PyResult<()> {
+    if let Some(trace) = trace_for(tensor)? {
+        trace.unsupported(reason)?;
+    }
+    Ok(())
 }
 
 pub(crate) fn record_binary(
@@ -154,28 +195,34 @@ pub(crate) fn record_binary(
     right: &PyTensor,
     op: BinaryOp,
 ) -> PyResult<Option<TraceValue>> {
-    if let Some(left_trace) = left.trace() {
-        return left_trace.binary(right, op);
-    }
-    let Some(right_trace) = right.trace() else {
-        return Ok(None);
+    let left_trace = trace_for(left)?;
+    let right_trace = trace_for(right)?;
+    let state = match (&left_trace, &right_trace) {
+        (None, None) => return Ok(None),
+        (Some(trace), None) => {
+            trace.state.unsupported(
+                "a closed-over Tensor value; pass changing tensors as function inputs",
+            )?;
+            return Ok(None);
+        }
+        (None, Some(trace)) => {
+            trace.state.unsupported(
+                "a closed-over Tensor value; pass changing tensors as function inputs",
+            )?;
+            return Ok(None);
+        }
+        (Some(left), Some(right)) if Rc::ptr_eq(&left.state, &right.state) => left.state.clone(),
+        (Some(left), Some(_)) => {
+            left.state
+                .unsupported("tensors from different capture sessions")?;
+            return Ok(None);
+        }
     };
-    let Some(slot) = left.parameter_slot() else {
-        right_trace
-            .state
-            .unsupported("a closed-over Tensor value; pass changing tensors as function inputs")?;
-        return Ok(None);
-    };
-    let left = right_trace.state.parameter(slot)?;
-    right_trace
-        .state
-        .binary(op, left, right_trace.value)
-        .map(|value| {
-            Some(TraceValue {
-                state: right_trace.state.clone(),
-                value,
-            })
-        })
+    let left = left_trace.expect("matched as a traced value").value;
+    let right = right_trace.expect("matched as a traced value").value;
+    state
+        .binary(op, left, right)
+        .map(|value| Some(TraceValue { state, value }))
 }
 
 /// Native first-call trace session used by the public Python decorator.
@@ -200,6 +247,7 @@ impl PyCaptureSession {
                 "Parameter objects cannot be compile inputs; close over stable model parameters",
             ));
         }
+        activate(&self.state)?;
         let value = self.state.input(&tensor)?;
         Ok(tensor.with_trace(TraceValue {
             state: self.state.clone(),
@@ -208,6 +256,7 @@ impl PyCaptureSession {
     }
 
     fn finish(&self, output: PyRef<'_, PyTensor>) -> PyResult<Option<PyCapturedGraph>> {
+        deactivate(&self.state);
         let Some(trace) = output.trace() else {
             self.state
                 .unsupported("a function whose output is not connected to its Tensor inputs")?;
@@ -225,6 +274,12 @@ impl PyCaptureSession {
 
     fn release(&self, output: PyRef<'_, PyTensor>) -> PyTensor {
         output.without_trace()
+    }
+}
+
+impl Drop for PyCaptureSession {
+    fn drop(&mut self) {
+        deactivate(&self.state);
     }
 }
 
