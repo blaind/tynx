@@ -6,13 +6,15 @@ This standalone Rust workspace compares the same ONNX model and input across:
 - ONNX Runtime
 - burn-onnx ahead-of-time generated Rust
 
-The registry starts with four workloads:
+The registry starts with six workloads:
 
 | Case | Purpose |
 | --- | --- |
 | `sign-11` | Protocol and dispatch baseline |
 | `matmul-64x64` | Small two-input matrix operation |
 | `matmul-256x256` | Compute-heavy dynamic-shape matrix operation |
+| `matmul-512x512` | Medium dynamic-shape scaling point |
+| `matmul-1024x1024` | Large dynamic-shape scaling point |
 | `matmul-add-relu-256x256` | Small multi-op graph with broadcast input |
 
 These cases cover harness correctness and basic scaling. Larger representative models are still
@@ -29,7 +31,8 @@ cargo run --manifest-path benchmarks/Cargo.toml --locked --release -p burn-aot-b
 ORT downloads its official CPU binary for the default configuration.
 
 Select a case by setting `TYNX_BENCH_CASE` for any runner. The manual GitHub workflow runs every
-registered case and uploads its JSON reports.
+registered case, adds a comparison table to the job summary, and uploads its JSON reports. Leave
+the workflow iteration inputs blank to use the per-case defaults.
 
 ## GPU
 
@@ -62,6 +65,10 @@ Every runner:
 4. Includes host input creation and host output materialization in each timed inference.
 5. Validates the first and final output against the registry.
 6. Writes the same JSON result schema to standard output.
+
+MatMul cases also report estimated GFLOP/s using the conventional `2 * M * N * K` operation count.
+The timing includes host input construction and host output materialization, so the value measures
+end-to-end inference rather than kernel-only throughput.
 
 Override the selected case and sample counts with:
 

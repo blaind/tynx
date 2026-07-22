@@ -60,6 +60,13 @@ Beyond conformance, CI enforces clippy with warnings denied, a line-coverage flo
 cargo-llvm-cov, and license and dependency-source checks via cargo-deny. WebAssembly builds are
 tested headless in Chrome on both CPU and WebGPU. The workspace forbids `unsafe` code entirely.
 
+## Benchmarks
+
+Tynx includes a reproducible benchmark suite comparing its runtime with burn-onnx AOT and ONNX
+Runtime. See the [benchmark suite](benchmarks/README.md) for the workloads, methodology, and local
+commands. [CI benchmark runs](https://github.com/blaind/tynx/actions/workflows/benchmarks.yml)
+publish job summaries and downloadable JSON results.
+
 ## Relationship to Burn
 
 Tynx is built on Burn and complements [burn-onnx](https://github.com/tracel-ai/burn-onnx):

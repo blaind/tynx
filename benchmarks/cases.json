@@ -56,7 +56,8 @@
       },
       "tolerance": 0.00001,
       "warmup": 20,
-      "iterations": 200
+      "iterations": 200,
+      "estimated_flops": 524288
     },
     {
       "id": "matmul-256x256",
@@ -89,7 +90,76 @@
       },
       "tolerance": 0.00001,
       "warmup": 10,
-      "iterations": 100
+      "iterations": 100,
+      "estimated_flops": 33554432
+    },
+    {
+      "id": "matmul-512x512",
+      "model": "models/matmul_dynamic.onnx.hex",
+      "inputs": [
+        {
+          "name": "a",
+          "shape": [512, 512],
+          "data": {
+            "kind": "linear",
+            "start": -1.0,
+            "step": 0.000005
+          }
+        },
+        {
+          "name": "b",
+          "shape": [512, 512],
+          "data": {
+            "kind": "identity"
+          }
+        }
+      ],
+      "expected": {
+        "shape": [512, 512],
+        "data": {
+          "kind": "linear",
+          "start": -1.0,
+          "step": 0.000005
+        }
+      },
+      "tolerance": 0.00001,
+      "warmup": 10,
+      "iterations": 50,
+      "estimated_flops": 268435456
+    },
+    {
+      "id": "matmul-1024x1024",
+      "model": "models/matmul_dynamic.onnx.hex",
+      "inputs": [
+        {
+          "name": "a",
+          "shape": [1024, 1024],
+          "data": {
+            "kind": "linear",
+            "start": -1.0,
+            "step": 0.000001
+          }
+        },
+        {
+          "name": "b",
+          "shape": [1024, 1024],
+          "data": {
+            "kind": "identity"
+          }
+        }
+      ],
+      "expected": {
+        "shape": [1024, 1024],
+        "data": {
+          "kind": "linear",
+          "start": -1.0,
+          "step": 0.000001
+        }
+      },
+      "tolerance": 0.00001,
+      "warmup": 5,
+      "iterations": 20,
+      "estimated_flops": 2147483648
     },
     {
       "id": "matmul-add-relu-256x256",
@@ -132,7 +202,8 @@
       },
       "tolerance": 0.00001,
       "warmup": 10,
-      "iterations": 100
+      "iterations": 100,
+      "estimated_flops": 33554432
     }
   ]
 }
