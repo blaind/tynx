@@ -1,6 +1,6 @@
 from collections.abc import Iterable, Sequence
 from os import PathLike
-from typing import Literal, overload
+from typing import Any, Literal, overload
 
 __version__: str
 
@@ -11,6 +11,8 @@ _TensorData3 = Sequence[_TensorData2]
 _TensorData4 = Sequence[_TensorData3]
 _TensorData5 = Sequence[_TensorData4]
 _TensorData6 = Sequence[_TensorData5]
+# Keep NumPy's version-sensitive stubs out of Tynx's Python 3.9 type surface.
+NumPyArray = Any
 TensorData = (
     TensorScalar
     | _TensorData1
@@ -19,6 +21,7 @@ TensorData = (
     | _TensorData4
     | _TensorData5
     | _TensorData6
+    | NumPyArray
 )
 TensorDType = Literal["float32", "int64", "bool"]
 ReductionDim = int | tuple[int, ...]
@@ -85,6 +88,7 @@ class Tensor:
     @property
     def grad(self) -> Tensor | None: ...
     def tolist(self) -> list[object]: ...
+    def numpy(self) -> NumPyArray: ...
     def item(self) -> float | int | bool: ...
     def detach(self) -> Tensor: ...
     def copy_(self, source: Tensor) -> None: ...

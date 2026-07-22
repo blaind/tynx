@@ -4,7 +4,9 @@ import math
 import random
 from collections.abc import Callable
 from pathlib import Path
+from typing import Literal
 
+import numpy as np
 import pytest
 import tynx
 
@@ -68,6 +70,35 @@ def test_tensor_shape_mismatches_raise_value_error_before_dispatch() -> None:
 
     with pytest.raises(ValueError, match="matmul inner dimensions must match"):
         tynx.Tensor([[1.0, 2.0]]) @ tynx.Tensor([[1.0, 2.0]])
+
+
+@pytest.mark.parametrize(
+    ("dtype", "values"),
+    [
+        ("float32", [[1.0, 2.0], [3.0, 4.0]]),
+        ("int64", [[1, 2], [3, 4]]),
+        ("bool", [[True, False], [False, True]]),
+    ],
+)
+def test_tensor_numpy_round_trip(
+    dtype: Literal["float32", "int64", "bool"], values: list[list[object]]
+) -> None:
+    array = np.asarray(values, dtype=dtype).T
+
+    tensor = tynx.Tensor(array)
+    output = tensor.numpy()
+
+    assert tensor.shape == array.shape
+    assert tensor.dtype == dtype
+    assert output.dtype == array.dtype
+    np.testing.assert_array_equal(output, array)
+
+
+def test_tensor_numpy_rejects_unsupported_or_mismatched_dtype() -> None:
+    with pytest.raises(TypeError, match="unsupported NumPy dtype"):
+        tynx.Tensor(np.asarray([1.0], dtype=np.float64))
+    with pytest.raises(TypeError, match="must match requested Tensor dtype float32"):
+        tynx.Tensor(np.asarray([1], dtype=np.int64), dtype="float32")
 
 
 def test_tensor_integer_and_boolean_storage() -> None:
