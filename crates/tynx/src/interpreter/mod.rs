@@ -35,6 +35,7 @@ mod recurrent;
 mod reduction;
 mod resize;
 mod resolve;
+mod scaler;
 mod scatter;
 mod selection;
 mod shape;
@@ -240,6 +241,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Selu(node) => unary::selu(node, env, device),
         Node::ScatterElements(node) => scatter::scatter_elements(node, env, device),
         Node::ScatterND(node) => scatter::scatter_nd(node, env, device),
+        Node::Scaler(node) => scaler::scaler(node, env, device),
         Node::Scan(node) => control_flow::scan(node, env, device),
         Node::Shape(node) => shape::shape_of(node, env, device),
         Node::Shrink(node) => unary::shrink(node, env, device),
