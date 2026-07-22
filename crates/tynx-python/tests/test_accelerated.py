@@ -94,6 +94,59 @@ def test_accelerated_tape_survives_intermediate_drop_and_optimizer_step() -> Non
     assert updated.item() == pytest.approx(0.0, abs=1e-5)
 
 
+def test_accelerated_embedding_accumulates_repeated_index_gradients() -> None:
+    device = _accelerated_device()
+    layer = tynx.nn.Embedding(4, 2, padding_idx=0)
+    layer.weight.copy_(tynx.Tensor([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [7.0, 8.0]]))
+    indices = tynx.Tensor([0, 2, 2, 1], dtype="int64")
+
+    output = layer(indices)
+    output.sum().backward()
+
+    tynx.synchronize(device)
+    assert output.flatten().tolist() == pytest.approx([1.0, 2.0, 5.0, 6.0, 5.0, 6.0, 3.0, 4.0])
+    assert layer.weight.grad is not None
+    assert layer.weight.grad.flatten().tolist() == pytest.approx(
+        [0.0, 0.0, 1.0, 1.0, 2.0, 2.0, 0.0, 0.0]
+    )
+
+
+def test_accelerated_pooling_layers_share_one_backward_tape() -> None:
+    device = _accelerated_device()
+    input = tynx.Parameter([[[[1.0, 2.0], [3.0, 4.0]]]])
+
+    maximum = tynx.nn.MaxPool2d(2)(input)
+    average = tynx.nn.AvgPool2d(2)(input)
+    adaptive = tynx.nn.AdaptiveAvgPool2d((1, 1))(input)
+    (maximum + average + adaptive).sum().backward()
+
+    tynx.synchronize(device)
+    assert maximum.item() == pytest.approx(4.0)
+    assert average.item() == pytest.approx(2.5)
+    assert adaptive.item() == pytest.approx(2.5)
+    assert input.grad is not None
+    assert input.grad.flatten().tolist() == pytest.approx([0.5, 0.5, 0.5, 1.5])
+
+
+def test_accelerated_tensor_composition_preserves_gradients() -> None:
+    device = _accelerated_device()
+    value = tynx.Parameter([[1.0, 2.0], [3.0, 4.0]])
+
+    joined = tynx.cat([value, value * 2.0], dim=0)
+    left, right = joined.split(2, dim=0)
+    first, second = tynx.stack([left, right], dim=0).chunk(2, dim=0)
+    expanded = value.unsqueeze(0).expand(3, 2, 2)
+    repeated = value.repeat(2, 3)
+    (first.sum() + second.sum() + expanded.sum() + repeated.sum()).backward()
+
+    tynx.synchronize(device)
+    assert joined.shape == (4, 2)
+    assert expanded.shape == (3, 2, 2)
+    assert repeated.shape == (4, 6)
+    assert value.grad is not None
+    assert value.grad.flatten().tolist() == pytest.approx([12.0, 12.0, 12.0, 12.0])
+
+
 def test_accelerated_captured_imported_ppo_step_reuses_updated_weights(tmp_path: Path) -> None:
     device = _accelerated_device()
     path = tmp_path / "actor_critic.onnx"
