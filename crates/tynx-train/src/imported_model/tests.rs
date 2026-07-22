@@ -32,6 +32,24 @@ fn stable_names(session: &Session, prefix: &str) -> InitializerNameOverrides {
     names
 }
 
+fn batch_norm_names(session: &Session) -> InitializerNameOverrides {
+    let report = TrainabilityReport::analyze_initializers(session.graph());
+    let mut names = InitializerNameOverrides::new();
+    for initializer in report.initializers() {
+        let suffix = match initializer.uses()[0].input_index() {
+            1 => "weight",
+            2 => "bias",
+            3 => "running_mean",
+            4 => "running_var",
+            index => panic!("unexpected BatchNormalization state input {index}"),
+        };
+        names
+            .set_name(initializer.name(), format!("norm.{suffix}"))
+            .unwrap();
+    }
+    names
+}
+
 #[test]
 fn imported_gemm_learns_and_next_forward_reads_updated_slots() {
     let session = Session::from_bytes_with(&gemm_model_bytes(), false).unwrap();
@@ -280,6 +298,85 @@ fn imported_model_rejects_drift_in_fixed_batch_dimensions() {
     assert!(error.to_string().contains("dimension 0 must be 4"));
 }
 
+#[test]
+fn imported_batch_norm_trains_affine_state_with_frozen_statistics() {
+    let session = Session::from_bytes_with(&batch_norm_model_bytes(), false).unwrap();
+    let names = batch_norm_names(&session);
+    let device = Device::autodiff(Device::default());
+    let model = ImportedModel::from_session_with(
+        session,
+        device.clone(),
+        &TrainabilityOverrides::new(),
+        &names,
+    )
+    .unwrap();
+    let input = tensor(vec![3.0, 8.0, 5.0, 11.0], &[2, 2], &device);
+    let mut output = model.run(env_with_input(input.clone())).unwrap();
+    let output = output.remove("y").unwrap().into_tensor().unwrap();
+    assert_eq!(values(output.clone()), [2.5, 5.0, 4.5, 8.0]);
+
+    let running_mean = model.parameters().get_by_name("norm.running_mean").unwrap();
+    let running_var = model.parameters().get_by_name("norm.running_var").unwrap();
+    let mean_before = values(running_mean.value());
+    let variance_before = values(running_var.value());
+
+    backward(&output.sum_dims(&[0, 1]), model.parameters()).unwrap();
+    let weight = model.parameters().get_by_name("norm.weight").unwrap();
+    let bias = model.parameters().get_by_name("norm.bias").unwrap();
+    assert_eq!(values(weight.grad().unwrap()), [3.0, 5.0]);
+    assert_eq!(values(bias.grad().unwrap()), [2.0, 2.0]);
+    assert_eq!(values(running_mean.value()), mean_before);
+    assert_eq!(values(running_var.value()), variance_before);
+
+    let mut optimizer = Sgd::new(0.1).unwrap();
+    assert_eq!(optimizer.step(model.parameters()).unwrap(), 2);
+    assert_eq!(values(running_mean.value()), mean_before);
+    assert_eq!(values(running_var.value()), variance_before);
+}
+
+#[test]
+fn imported_dropout_is_inactive_or_rejected_before_training() {
+    let device = Device::autodiff(Device::default());
+    let inactive_session = Session::from_bytes(&dropout_model_bytes(false)).unwrap();
+    let inactive_names = stable_names(&inactive_session, "head");
+    let inactive = ImportedModel::from_session_with(
+        inactive_session,
+        device.clone(),
+        &TrainabilityOverrides::new(),
+        &inactive_names,
+    )
+    .unwrap();
+    let input = tensor(vec![2.0, 3.0], &[2, 1], &device);
+    let output = inactive
+        .run(env_with_input(input))
+        .unwrap()
+        .remove("y")
+        .unwrap()
+        .into_tensor()
+        .unwrap();
+    backward(&output.sum_dims(&[0, 1]), inactive.parameters()).unwrap();
+    assert!(
+        inactive
+            .parameters()
+            .get_by_name("head.weight")
+            .unwrap()
+            .grad()
+            .is_some()
+    );
+
+    let active_session = Session::from_bytes(&dropout_model_bytes(true)).unwrap();
+    let active_names = stable_names(&active_session, "head");
+    let error = ImportedModel::from_session_with(
+        active_session,
+        device,
+        &TrainabilityOverrides::new(),
+        &active_names,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("Dropout"));
+    assert!(error.to_string().contains("training_mode"));
+}
+
 fn gemm_model_bytes() -> Vec<u8> {
     model_bytes(
         "Gemm",
@@ -302,6 +399,75 @@ fn dynamic_batch_gemm_model_bytes() -> Vec<u8> {
             tensor_proto("bias", &[1], &[0.0]),
         ],
     )
+}
+
+fn batch_norm_model_bytes() -> Vec<u8> {
+    let mut graph = GraphProto::new();
+    graph.name = "imported_batch_norm_test".to_string();
+    graph
+        .input
+        .push(value_info_with_shape("x", &[Some(2), Some(2)]));
+    graph
+        .output
+        .push(value_info_with_shape("y", &[Some(2), Some(2)]));
+    graph.node.push(Default::default());
+    let node = graph.node.last_mut().unwrap();
+    node.name = "norm".to_string();
+    node.op_type = "BatchNormalization".to_string();
+    node.input = vec![
+        "x".to_string(),
+        "scale".to_string(),
+        "bias".to_string(),
+        "mean".to_string(),
+        "variance".to_string(),
+    ];
+    node.output = vec!["y".to_string()];
+    graph.initializer = vec![
+        tensor_proto("scale", &[2], &[2.0, 3.0]),
+        tensor_proto("bias", &[2], &[0.5, -1.0]),
+        tensor_proto("mean", &[2], &[1.0, 2.0]),
+        tensor_proto("variance", &[2], &[4.0, 9.0]),
+    ];
+
+    finish_model(graph, 13)
+}
+
+fn dropout_model_bytes(training: bool) -> Vec<u8> {
+    let mut graph = GraphProto::new();
+    graph.name = "imported_dropout_test".to_string();
+    graph
+        .input
+        .push(value_info_with_shape("x", &[None, Some(1)]));
+    graph
+        .output
+        .push(value_info_with_shape("y", &[None, Some(1)]));
+
+    graph.node.push(Default::default());
+    let gemm = graph.node.last_mut().unwrap();
+    gemm.name = "head".to_string();
+    gemm.op_type = "Gemm".to_string();
+    gemm.input = vec!["x".to_string(), "weight".to_string(), "bias".to_string()];
+    gemm.output = vec!["hidden".to_string()];
+
+    graph.node.push(Default::default());
+    let dropout = graph.node.last_mut().unwrap();
+    dropout.name = "dropout".to_string();
+    dropout.op_type = "Dropout".to_string();
+    dropout.input = vec![
+        "hidden".to_string(),
+        "ratio".to_string(),
+        "training".to_string(),
+    ];
+    dropout.output = vec!["y".to_string(), "mask".to_string()];
+
+    graph.initializer = vec![
+        tensor_proto("weight", &[1, 1], &[1.0]),
+        tensor_proto("bias", &[1], &[0.0]),
+        tensor_proto("ratio", &[], &[0.5]),
+        bool_tensor_proto("training", training),
+    ];
+
+    finish_model(graph, 13)
 }
 
 fn conv_model_bytes() -> Vec<u8> {
@@ -345,11 +511,15 @@ fn model_bytes_with_shapes(
     node.output = vec!["y".to_string()];
     graph.initializer = initializers;
 
+    finish_model(graph, 13)
+}
+
+fn finish_model(graph: GraphProto, opset: i64) -> Vec<u8> {
     let mut model = ModelProto::new();
     model.ir_version = 8;
     model.graph = MessageField::some(graph);
     model.opset_import.push(Default::default());
-    model.opset_import[0].version = 13;
+    model.opset_import[0].version = opset;
     model.write_to_bytes().unwrap()
 }
 
@@ -381,6 +551,14 @@ fn tensor_proto(name: &str, dimensions: &[usize], values: &[f32]) -> TensorProto
         .collect();
     tensor.data_type = 1;
     tensor.float_data = values.to_vec();
+    tensor
+}
+
+fn bool_tensor_proto(name: &str, value: bool) -> TensorProto {
+    let mut tensor = TensorProto::new();
+    tensor.name = name.to_string();
+    tensor.data_type = 9;
+    tensor.int32_data = vec![i32::from(value)];
     tensor
 }
 

@@ -4,7 +4,12 @@ use burn::tensor::Device;
 use tynx_core::onnx_ir::{
     Node,
     ir::{ArgType, Argument, OnnxGraph},
-    node::{gemm::GemmNode, linear::LinearNode, matmul::MatMulNode},
+    node::{
+        batch_norm::{BatchNormConfig, BatchNormalizationNode},
+        gemm::GemmNode,
+        linear::LinearNode,
+        matmul::MatMulNode,
+    },
 };
 use tynx_core::{DynTensor, Env, Result, Session, TynxError, Value, execute};
 
@@ -23,6 +28,7 @@ pub(super) fn validate(graph: &OnnxGraph, state: &ImportedState) -> Result<()> {
             let supported = match node {
                 Node::Linear(_) | Node::Gemm(_) => matches!(input_index, 1 | 2),
                 Node::MatMul(_) => matches!(input_index, 0 | 1),
+                Node::BatchNormalization(_) => matches!(input_index, 1..=4),
                 _ => false,
             };
             if !supported {
@@ -51,6 +57,9 @@ pub(super) fn run(
             Node::Linear(node) => execute_linear(node, node_index, &env, state, device, tracking),
             Node::Gemm(node) => execute_gemm(node, node_index, &env, state, device, tracking),
             Node::MatMul(node) => execute_matmul(node, node_index, &env, state, device, tracking),
+            Node::BatchNormalization(node) => {
+                execute_batch_normalization(node, node_index, &env, state, device, tracking)
+            }
             _ => execute(node, &env, device),
         }?;
         if values.len() != node.outputs().len() {
@@ -67,6 +76,109 @@ pub(super) fn run(
     }
 
     session.collect_outputs(&env)
+}
+
+fn execute_batch_normalization(
+    node: &BatchNormalizationNode,
+    node_index: usize,
+    env: &Env,
+    state: &ImportedState,
+    device: &Device,
+    tracking: bool,
+) -> Result<Vec<Value>> {
+    if node.outputs.len() != 1 {
+        return Err(TynxError::UnsupportedOp(
+            "BatchNormalization training outputs".to_string(),
+        ));
+    }
+    let input = resolve_tensor(node, node_index, 0, env, state, device, tracking)?;
+    let shape = input.dims();
+    let channels = shape.get(1).copied().ok_or_else(|| {
+        TynxError::Shape(format!(
+            "training BatchNormalization node '{}' requires rank at least 2, got shape {shape:?}",
+            node.name
+        ))
+    })?;
+    let scale = batch_norm_parameter(
+        node,
+        node_index,
+        1,
+        channels,
+        input.rank(),
+        env,
+        state,
+        device,
+        tracking,
+    )?;
+    let bias = batch_norm_parameter(
+        node,
+        node_index,
+        2,
+        channels,
+        input.rank(),
+        env,
+        state,
+        device,
+        tracking,
+    )?;
+    let mean = batch_norm_parameter(
+        node,
+        node_index,
+        3,
+        channels,
+        input.rank(),
+        env,
+        state,
+        device,
+        false,
+    )?;
+    let variance = batch_norm_parameter(
+        node,
+        node_index,
+        4,
+        channels,
+        input.rank(),
+        env,
+        state,
+        device,
+        false,
+    )?;
+    let epsilon = match &node.config {
+        BatchNormConfig::Static(config) => config.epsilon,
+        BatchNormConfig::Runtime(config) => config.epsilon,
+    };
+
+    let output = input
+        .sub_broadcast(mean)?
+        .div_broadcast(variance.add_scalar(epsilon).sqrt())?
+        .mul_broadcast(scale)?
+        .add_broadcast(bias)?;
+    Ok(vec![Value::Tensor(output)])
+}
+
+#[allow(clippy::too_many_arguments)]
+fn batch_norm_parameter(
+    node: &BatchNormalizationNode,
+    node_index: usize,
+    input_index: usize,
+    channels: usize,
+    input_rank: usize,
+    env: &Env,
+    state: &ImportedState,
+    device: &Device,
+    tracking: bool,
+) -> Result<DynTensor> {
+    let parameter = resolve_tensor(node, node_index, input_index, env, state, device, tracking)?;
+    if parameter.dims() != [channels] {
+        return Err(TynxError::Shape(format!(
+            "training BatchNormalization node '{}' input {input_index} expects [{channels}], got {:?}",
+            node.name,
+            parameter.dims()
+        )));
+    }
+    let mut shape = vec![1; input_rank];
+    shape[1] = channels;
+    parameter.reshape(shape)
 }
 
 fn execute_linear(
@@ -235,4 +347,4 @@ macro_rules! impl_node_inputs {
     };
 }
 
-impl_node_inputs!(LinearNode, GemmNode, MatMulNode);
+impl_node_inputs!(LinearNode, GemmNode, MatMulNode, BatchNormalizationNode);
