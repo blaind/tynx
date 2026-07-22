@@ -1,9 +1,9 @@
 """Authored pooling layers."""
 
-from typing import Optional
+from typing import Optional as _Optional
 
 from ..._tynx import Tensor
-from ..functional import IntOrPair, adaptive_avg_pool2d, avg_pool2d, max_pool2d
+from ..functional import _IntOrPair, adaptive_avg_pool2d, avg_pool2d, max_pool2d
 from .module import Module
 
 
@@ -12,10 +12,10 @@ class MaxPool2d(Module):
 
     def __init__(
         self,
-        kernel_size: IntOrPair,
-        stride: Optional[IntOrPair] = None,
-        padding: IntOrPair = 0,
-        dilation: IntOrPair = 1,
+        kernel_size: _IntOrPair,
+        stride: _Optional[_IntOrPair] = None,
+        padding: _IntOrPair = 0,
+        dilation: _IntOrPair = 1,
         return_indices: bool = False,
         ceil_mode: bool = False,
     ) -> None:
@@ -51,12 +51,12 @@ class AvgPool2d(Module):
 
     def __init__(
         self,
-        kernel_size: IntOrPair,
-        stride: Optional[IntOrPair] = None,
-        padding: IntOrPair = 0,
+        kernel_size: _IntOrPair,
+        stride: _Optional[_IntOrPair] = None,
+        padding: _IntOrPair = 0,
         ceil_mode: bool = False,
         count_include_pad: bool = True,
-        divisor_override: Optional[int] = None,
+        divisor_override: _Optional[int] = None,
     ) -> None:
         super().__init__()
         self.kernel_size = kernel_size
@@ -87,7 +87,7 @@ class AvgPool2d(Module):
 class AdaptiveAvgPool2d(Module):
     """Pool an NCHW input to an explicit spatial size."""
 
-    def __init__(self, output_size: IntOrPair) -> None:
+    def __init__(self, output_size: _IntOrPair) -> None:
         super().__init__()
         self.output_size = output_size
 

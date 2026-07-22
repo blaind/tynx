@@ -1,10 +1,12 @@
 """Learning-rate schedulers for Tynx optimizers."""
 
-import math
-from typing import Optional, Protocol, cast
+import math as _math
+from typing import Optional as _Optional
+from typing import Protocol as _Protocol
+from typing import cast as _cast
 
 
-class _Optimizer(Protocol):
+class _Optimizer(_Protocol):
     @property
     def param_groups(self) -> list[dict[str, object]]: ...
 
@@ -22,7 +24,7 @@ class LRScheduler:
         self.last_epoch = 0 if last_epoch == -1 else last_epoch
         self._last_lr = [_learning_rate(group) for group in optimizer.param_groups]
 
-    def step(self, epoch: Optional[int] = None) -> None:
+    def step(self, epoch: _Optional[int] = None) -> None:
         """Advance the schedule once, normally after an optimizer step."""
         if epoch is None:
             next_epoch = self.last_epoch + 1
@@ -171,7 +173,7 @@ class CosineAnnealingLR(LRScheduler):
         super().__init__(optimizer, last_epoch)
 
     def _rates(self, epoch: int) -> list[float]:
-        factor = (1.0 + math.cos(math.pi * epoch / self.T_max)) / 2.0
+        factor = (1.0 + _math.cos(_math.pi * epoch / self.T_max)) / 2.0
         return [self.eta_min + (rate - self.eta_min) * factor for rate in self.base_lrs]
 
     def _state_options(self) -> dict[str, object]:
@@ -190,10 +192,10 @@ class CosineAnnealingLR(LRScheduler):
 
 def _learning_rate(group: dict[str, object]) -> float:
     try:
-        rate = float(cast(float, group["lr"]))
+        rate = float(_cast(float, group["lr"]))
     except (KeyError, TypeError, ValueError) as error:
         raise TypeError("optimizer parameter groups must contain numeric learning rates") from error
-    if not math.isfinite(rate) or rate < 0:
+    if not _math.isfinite(rate) or rate < 0:
         raise ValueError(f"optimizer learning rates must be finite and non-negative, got {rate}")
     return rate
 
@@ -202,10 +204,10 @@ def _rate_list(value: object, name: str) -> list[float]:
     if not isinstance(value, list):
         raise TypeError(f"scheduler {name} must be a list")
     try:
-        rates = [float(cast(float, item)) for item in value]
+        rates = [float(_cast(float, item)) for item in value]
     except (TypeError, ValueError) as error:
         raise TypeError(f"scheduler {name} must contain numbers") from error
-    if any(not math.isfinite(rate) or rate < 0 for rate in rates):
+    if any(not _math.isfinite(rate) or rate < 0 for rate in rates):
         raise ValueError(f"scheduler {name} must contain finite non-negative values")
     return rates
 

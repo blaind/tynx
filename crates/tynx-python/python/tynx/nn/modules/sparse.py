@@ -1,6 +1,7 @@
 """Authored dense-gradient sparse-style layers."""
 
-from typing import Literal, Optional
+from typing import Literal as _Literal
+from typing import Optional as _Optional
 
 from ..._tynx import Device, Parameter, Tensor, arange, randn
 from ..functional import embedding
@@ -14,14 +15,14 @@ class Embedding(Module):
         self,
         num_embeddings: int,
         embedding_dim: int,
-        padding_idx: Optional[int] = None,
-        max_norm: Optional[float] = None,
+        padding_idx: _Optional[int] = None,
+        max_norm: _Optional[float] = None,
         norm_type: float = 2.0,
         scale_grad_by_freq: bool = False,
         sparse: bool = False,
         *,
-        device: Optional[Device] = None,
-        dtype: Optional[Literal["float32"]] = None,
+        device: _Optional[Device] = None,
+        dtype: _Optional[_Literal["float32"]] = None,
     ) -> None:
         super().__init__()
         self.num_embeddings = _positive_int(num_embeddings, "num_embeddings")

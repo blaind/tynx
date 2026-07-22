@@ -31,6 +31,13 @@ def test_public_modules_do_not_expose_imported_typing_helpers() -> None:
         dir(tynx.compiler)
     )
     assert not {"Optional", "Union"}.intersection(dir(tynx.distributions))
+    assert not {"FanMode", "Literal", "Optional", "math"}.intersection(dir(tynx.nn.init))
+    assert not {"IntOrPair", "Literal", "Optional", "Reduction", "Union"}.intersection(
+        dir(tynx.nn.functional)
+    )
+    assert not {"IntOrPair", "Optional"}.intersection(dir(tynx.nn.modules.pooling))
+    assert not {"Literal", "Optional"}.intersection(dir(tynx.nn.modules.sparse))
+    assert not {"Optional", "Protocol", "cast", "math"}.intersection(dir(tynx.optim.lr_scheduler))
     assert callable(tynx.Session)
     assert callable(tynx.Tensor)
     assert callable(tynx.Parameter)
