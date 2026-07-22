@@ -510,6 +510,15 @@ impl PyTensor {
         }
     }
 
+    pub(crate) fn with_recorded_unary(
+        mut self,
+        source: &Self,
+        operation: UnaryOp,
+    ) -> PyResult<Self> {
+        self.trace = record_unary(source, operation)?;
+        Ok(self)
+    }
+
     pub(crate) fn detached_float_value(&self, operation: &str) -> PyResult<DynTensor> {
         self.source.value().detach().float(operation)
     }

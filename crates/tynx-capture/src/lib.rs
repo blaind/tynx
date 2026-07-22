@@ -8,7 +8,7 @@
 
 use std::{collections::HashSet, fmt::Debug, rc::Rc};
 
-use tynx_core::{DType, Device, DynTensor, Result, TynxError};
+use tynx_core::{DType, Device, Distribution, DynTensor, Result, TynxError};
 use tynx_train::{ParamId, ParameterContract, ParameterSlot, backward_slots};
 
 /// Rust-only optimizer action retained by a captured whole-step program.
@@ -77,7 +77,7 @@ impl TensorSignature {
 }
 
 /// Unary operations supported by the initial runtime IR.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum UnaryOp {
     /// Rectified linear activation.
     Relu,
@@ -111,6 +111,8 @@ pub enum UnaryOp {
         /// Final shape after keepdim/rank-one-floor handling.
         output_shape: Vec<usize>,
     },
+    /// Training-mode Dropout driven by the device's advancing native RNG stream.
+    Dropout(f64),
 }
 
 /// Binary operations supported by the initial runtime IR.
@@ -425,6 +427,23 @@ fn execute_unary(op: &UnaryOp, input: DynTensor) -> Result<DynTensor> {
         UnaryOp::Permute(axes) => input.permute(axes.clone()),
         UnaryOp::Sum { dims, output_shape } => input.sum_dims(dims).reshape(output_shape.clone()),
         UnaryOp::Mean { dims, output_shape } => input.mean_dims(dims).reshape(output_shape.clone()),
+        UnaryOp::Dropout(probability) => {
+            if *probability == 1.0 {
+                Ok(input.mul_scalar(0.0))
+            } else if *probability == 0.0 {
+                Ok(input)
+            } else {
+                let mask = DynTensor::random(
+                    &input.dims(),
+                    Distribution::Bernoulli(1.0 - probability),
+                    &input.device(),
+                    DType::F32,
+                )?;
+                Ok(input
+                    .mul_broadcast(mask)?
+                    .mul_scalar(1.0 / (1.0 - probability)))
+            }
+        }
     }
 }
 

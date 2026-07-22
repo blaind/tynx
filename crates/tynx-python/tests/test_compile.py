@@ -155,12 +155,28 @@ def test_fullgraph_rejects_state_mutation_before_publication() -> None:
     assert state.tolist() == [7.0]
 
 
-def test_fullgraph_rejects_random_dropout() -> None:
-    layer = tynx.nn.Dropout(0.5)
-    forward = tynx.compile(layer, fullgraph=True)
+def test_captured_dropout_advances_and_replays_the_eager_rng_stream() -> None:
+    eager_layer = tynx.nn.Dropout(0.5)
+    input = tynx.Tensor([1.0] * 32)
+    tynx.manual_seed(314159)
+    eager = [eager_layer(input).tolist() for _ in range(6)]
 
-    with pytest.raises(RuntimeError, match="random Dropout"):
-        forward(tynx.Tensor([1.0, 1.0]))
+    calls = 0
+    captured_layer = tynx.nn.Dropout(0.5)
+
+    @tynx.compile(fullgraph=True)
+    def forward(value: tynx.Tensor) -> tynx.Tensor:
+        nonlocal calls
+        calls += 1
+        return captured_layer(value)
+
+    tynx.manual_seed(314159)
+    captured = [forward(input).tolist() for _ in range(6)]
+
+    assert captured == eager
+    assert len({tuple(sample) for sample in captured}) > 1
+    assert calls == 1
+    assert forward.replay_count == 5
 
 
 def test_declared_static_arguments_guard_separate_graphs() -> None:

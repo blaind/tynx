@@ -1,6 +1,7 @@
 //! Native random-state and sampling operations shared by Python distributions and layers.
 
 use pyo3::{exceptions::PyValueError, prelude::*};
+use tynx_capture::UnaryOp;
 use tynx_core::{DType, Device, Distribution, DynTensor};
 
 use crate::{grad_mode::is_grad_enabled, tensor::PyTensor, to_python_error};
@@ -80,7 +81,6 @@ pub(crate) fn categorical_sample_py(
 
 #[pyfunction(name = "_dropout")]
 pub(crate) fn dropout_py(input: PyRef<'_, PyTensor>, probability: f64) -> PyResult<PyTensor> {
-    input.capture_unsupported("random Dropout")?;
     if !(0.0..=1.0).contains(&probability) {
         return Err(PyValueError::new_err(format!(
             "dropout probability must be between 0 and 1, got {probability}"
@@ -107,9 +107,10 @@ pub(crate) fn dropout_py(input: PyRef<'_, PyTensor>, probability: f64) -> PyResu
             .mul_scalar(1.0 / (1.0 - probability))
     };
 
-    Ok(if tracking {
+    let output = if tracking {
         PyTensor::from_operation(output, &[&input])
     } else {
         PyTensor::from_inner(output)
-    })
+    };
+    output.with_recorded_unary(&input, UnaryOp::Dropout(probability))
 }
