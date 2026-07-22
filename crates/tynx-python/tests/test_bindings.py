@@ -49,6 +49,48 @@ def test_tensor_item_requires_one_element() -> None:
         tynx.Tensor([1.0, 2.0]).item()
 
 
+def test_tensor_backward_accumulates_leaf_gradients() -> None:
+    value = tynx.Tensor([1.0, 2.0, 3.0], requires_grad=True)
+
+    loss = (value * value).mean()
+    assert loss.shape == (1,)
+    assert loss.requires_grad
+    assert not loss.is_leaf
+    assert loss.grad is None
+    loss.backward()
+
+    assert value.is_leaf
+    assert value.requires_grad
+    assert value.grad is not None
+    assert value.grad.tolist() == pytest.approx([2.0 / 3.0, 4.0 / 3.0, 2.0])
+
+    (value * value).mean().backward()
+    assert value.grad is not None
+    assert value.grad.tolist() == pytest.approx([4.0 / 3.0, 8.0 / 3.0, 4.0])
+
+    value.zero_grad()
+    assert value.grad is None
+
+
+def test_tensor_detach_stops_gradient_tracking() -> None:
+    value = tynx.Tensor([2.0], requires_grad=True)
+    detached = (value * value).detach()
+
+    assert detached.shape == (1,)
+    assert not detached.requires_grad
+    assert not detached.is_leaf
+    with pytest.raises(ValueError, match="autodiff graph"):
+        detached.backward()
+    assert value.grad is None
+
+
+def test_tensor_backward_rejects_non_scalar_output() -> None:
+    value = tynx.Tensor([1.0, 2.0], requires_grad=True)
+
+    with pytest.raises(ValueError, match="one-element"):
+        (value * value).backward()
+
+
 def test_missing_model_raises_os_error(tmp_path: Path) -> None:
     missing_model = tmp_path / "missing.onnx"
 
