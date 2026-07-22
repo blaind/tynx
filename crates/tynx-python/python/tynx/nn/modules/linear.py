@@ -1,14 +1,10 @@
 """Fully connected eager layer."""
 
 import math
-from typing import TYPE_CHECKING, cast
 
-from ..._tynx import Parameter, Tensor
-from .._random import uniform
+from ..._tynx import Parameter, Tensor, empty
+from ..init import kaiming_uniform_, uniform_
 from .module import Module
-
-if TYPE_CHECKING:
-    from ..._tynx import TensorData
 
 
 class Linear(Module):
@@ -21,17 +17,12 @@ class Linear(Module):
         if type(bias) is not bool:
             raise TypeError(f"bias must be a bool, got {type(bias).__qualname__}")
 
-        bound = 1.0 / math.sqrt(self.in_features)
-        weights = [
-            [uniform(-bound, bound) for _ in range(self.in_features)]
-            for _ in range(self.out_features)
-        ]
-        self.weight = Parameter(cast("TensorData", weights), name="weight")
-        self.bias = (
-            Parameter([uniform(-bound, bound) for _ in range(self.out_features)], name="bias")
-            if bias
-            else None
-        )
+        self.weight = Parameter(empty((self.out_features, self.in_features)), name="weight")
+        kaiming_uniform_(self.weight, a=math.sqrt(5.0))
+        self.bias = Parameter(empty((self.out_features,)), name="bias") if bias else None
+        if self.bias is not None:
+            bound = 1.0 / math.sqrt(self.in_features)
+            uniform_(self.bias, -bound, bound)
 
     def forward(self, input: Tensor) -> Tensor:
         if input.dtype != "float32":

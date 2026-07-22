@@ -1,6 +1,6 @@
 """Neural-network building blocks and training utilities."""
 
-from . import functional, state, utils
+from . import functional, init, state, utils
 from .modules import (
     AdaptiveAvgPool2d,
     AvgPool2d,
@@ -36,6 +36,7 @@ __all__ = [
     "ReLU",
     "Sequential",
     "functional",
+    "init",
     "state",
     "utils",
 ]

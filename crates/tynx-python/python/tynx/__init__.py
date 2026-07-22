@@ -48,13 +48,11 @@ from ._tynx import (
 )
 from .checkpoint import load_checkpoint, save_checkpoint
 from .compiler import CompiledFunction, compile
-from .nn._random import seed as _seed_module_initialization
 
 
 def manual_seed(seed: int) -> None:
     """Seed device sampling and authored-module parameter initialization."""
     _manual_seed(seed)
-    _seed_module_initialization(seed)
 
 
 @_overload

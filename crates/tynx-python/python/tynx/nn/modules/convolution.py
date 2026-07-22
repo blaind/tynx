@@ -1,15 +1,12 @@
 """Authored convolution layers."""
 
 import math
-from typing import TYPE_CHECKING, Union, cast
+from typing import Union
 
-from ..._tynx import Parameter, Tensor
-from .._random import uniform
+from ..._tynx import Parameter, Tensor, empty
 from ..functional import conv2d
+from ..init import kaiming_uniform_, uniform_
 from .module import Module
-
-if TYPE_CHECKING:
-    from ..._tynx import TensorData
 
 IntOrPair = Union[int, tuple[int, int]]
 
@@ -46,23 +43,15 @@ class Conv2d(Module):
         self.padding_mode = padding_mode
 
         channels_per_group = self.in_channels // self.groups
-        bound = 1.0 / math.sqrt(channels_per_group * math.prod(self.kernel_size))
-        weights = [
-            [
-                [
-                    [uniform(-bound, bound) for _ in range(self.kernel_size[1])]
-                    for _ in range(self.kernel_size[0])
-                ]
-                for _ in range(channels_per_group)
-            ]
-            for _ in range(self.out_channels)
-        ]
-        self.weight = Parameter(cast("TensorData", weights), name="weight")
-        self.bias = (
-            Parameter([uniform(-bound, bound) for _ in range(self.out_channels)], name="bias")
-            if bias
-            else None
+        self.weight = Parameter(
+            empty((self.out_channels, channels_per_group, *self.kernel_size)), name="weight"
         )
+        kaiming_uniform_(self.weight, a=math.sqrt(5.0))
+        self.bias = Parameter(empty((self.out_channels,)), name="bias") if bias else None
+        if self.bias is not None:
+            fan_in = channels_per_group * math.prod(self.kernel_size)
+            bound = 1.0 / math.sqrt(fan_in)
+            uniform_(self.bias, -bound, bound)
 
     def forward(self, input: Tensor) -> Tensor:
         if input.dtype != "float32" or input.ndim != 4:

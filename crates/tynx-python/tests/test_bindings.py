@@ -849,7 +849,7 @@ def test_linear_and_sequential_validate_construction_and_inputs() -> None:
 
 
 def test_authored_sequential_mlp_converges_without_a_trainer() -> None:
-    random.seed(0)
+    tynx.manual_seed(0)
     model = tynx.nn.Sequential(tynx.nn.Linear(1, 4), tynx.nn.ReLU(), tynx.nn.Linear(4, 1))
     optimizer = tynx.optim.Adam(model.parameters(), lr=0.05)
     inputs = tynx.Tensor([[-1.0], [-0.5], [0.0], [0.5], [1.0]])
