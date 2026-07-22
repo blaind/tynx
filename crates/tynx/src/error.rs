@@ -12,8 +12,13 @@ pub enum TynxError {
     UnsupportedOp(String),
 
     /// A tensor rank exceeds the maximum supported rank.
-    #[error("tensor rank {0} exceeds the maximum supported rank")]
-    RankOverflow(usize),
+    #[error("tensor rank {rank} exceeds the maximum supported rank {max}")]
+    RankOverflow {
+        /// Requested tensor rank.
+        rank: usize,
+        /// Highest rank implemented by the runtime.
+        max: usize,
+    },
 
     /// A tensor could not be promoted to the requested rank.
     #[error("cannot promote rank {from} to {to}")]
@@ -50,6 +55,12 @@ mod tests {
         let error = TynxError::RankPromote { from: 4, to: 2 };
 
         assert_eq!(error.to_string(), "cannot promote rank 4 to 2");
+
+        let error = TynxError::RankOverflow { rank: 7, max: 6 };
+        assert_eq!(
+            error.to_string(),
+            "tensor rank 7 exceeds the maximum supported rank 6"
+        );
     }
 
     #[test]

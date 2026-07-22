@@ -7,6 +7,13 @@ use crate::error::{Result, TynxError};
 /// Highest tensor rank represented by Tynx.
 pub const MAX_RANK: usize = 6;
 
+fn rank_overflow(rank: usize) -> TynxError {
+    TynxError::RankOverflow {
+        rank,
+        max: MAX_RANK,
+    }
+}
+
 /// A floating-point tensor with a runtime rank.
 #[derive(Debug, Clone)]
 pub enum DynTensor {
@@ -88,7 +95,7 @@ macro_rules! reshape_dyn {
             [d0, d1, d2, d3] => $kind::R4($tensor.reshape([*d0, *d1, *d2, *d3])),
             [d0, d1, d2, d3, d4] => $kind::R5($tensor.reshape([*d0, *d1, *d2, *d3, *d4])),
             [d0, d1, d2, d3, d4, d5] => $kind::R6($tensor.reshape([*d0, *d1, *d2, *d3, *d4, *d5])),
-            _ => return Err(TynxError::RankOverflow($dims.len())),
+            _ => return Err(rank_overflow($dims.len())),
         }
     };
 }
@@ -283,7 +290,7 @@ macro_rules! impl_metadata {
                             "rank-0 tensor must be represented as a scalar".to_string(),
                         ));
                     }
-                    rank => return Err(TynxError::RankOverflow(rank)),
+                    rank => return Err(rank_overflow(rank)),
                 })
             }
 
@@ -389,7 +396,7 @@ macro_rules! impl_concat {
                             .collect(),
                         dim,
                     )),
-                    _ => return Err(TynxError::RankOverflow(rank)),
+                    _ => return Err(rank_overflow(rank)),
                 })
             }
         }
@@ -422,7 +429,7 @@ impl DynTensor {
                 value,
                 (device, dtype),
             )),
-            _ => return Err(TynxError::RankOverflow(dims.len())),
+            _ => return Err(rank_overflow(dims.len())),
         })
     }
 
@@ -490,7 +497,7 @@ impl DynTensor {
             (Self::R4(tensor), 5) => Self::R5(tensor.unsqueeze()),
             (Self::R4(tensor), 6) => Self::R6(tensor.unsqueeze()),
             (Self::R5(tensor), 6) => Self::R6(tensor.unsqueeze()),
-            (_, target) => return Err(TynxError::RankOverflow(target)),
+            (_, target) => return Err(rank_overflow(target)),
         })
     }
 
@@ -1023,7 +1030,7 @@ impl DynInt {
             (Self::R4(tensor), 5) => Self::R5(tensor.unsqueeze()),
             (Self::R4(tensor), 6) => Self::R6(tensor.unsqueeze()),
             (Self::R5(tensor), 6) => Self::R6(tensor.unsqueeze()),
-            (_, target) => return Err(TynxError::RankOverflow(target)),
+            (_, target) => return Err(rank_overflow(target)),
         })
     }
 
@@ -1344,7 +1351,7 @@ impl DynBool {
             (Self::R4(tensor), 5) => Self::R5(tensor.unsqueeze()),
             (Self::R4(tensor), 6) => Self::R6(tensor.unsqueeze()),
             (Self::R5(tensor), 6) => Self::R6(tensor.unsqueeze()),
-            (_, target) => return Err(TynxError::RankOverflow(target)),
+            (_, target) => return Err(rank_overflow(target)),
         })
     }
 

@@ -17,6 +17,11 @@ backend, is enabled by default and also works on `wasm32-unknown-unknown`.
 WGPU/WebGPU, browser WebGPU, Vulkan, and CUDA feature wiring is being carried over and is not part
 of the current default build.
 
+## Limits
+
+Rank-0 values are represented as scalars. Tensors currently support ranks 1 through 6; models that
+produce higher-rank tensors return a `RankOverflow` error.
+
 ## License
 
 Tynx is licensed under either the MIT License or the Apache License, Version 2.0, at your option.
