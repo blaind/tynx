@@ -27,7 +27,11 @@ use nn::conv2d_py;
 use optimizer::{PyAdam, PyAdamW, PySgd};
 use parameter::{PyBuffer, PyParameter};
 use random::{categorical_sample_py, dropout_py, manual_seed_py, normal_sample_py};
-use tensor::{PyTensor, maximum_py, minimum_py, where_py};
+use tensor::{
+    PyTensor, arange_py, empty_like_py, empty_py, full_like_py, full_py, maximum_py, minimum_py,
+    ones_like_py, ones_py, rand_like_py, rand_py, randint_py, randn_like_py, randn_py, where_py,
+    zeros_like_py, zeros_py,
+};
 
 /// Return the process-default execution device.
 #[pyfunction]
@@ -252,5 +256,19 @@ fn _tynx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(categorical_sample_py, module)?)?;
     module.add_function(wrap_pyfunction!(dropout_py, module)?)?;
     module.add_function(wrap_pyfunction!(conv2d_py, module)?)?;
+    module.add_function(wrap_pyfunction!(empty_py, module)?)?;
+    module.add_function(wrap_pyfunction!(full_py, module)?)?;
+    module.add_function(wrap_pyfunction!(zeros_py, module)?)?;
+    module.add_function(wrap_pyfunction!(ones_py, module)?)?;
+    module.add_function(wrap_pyfunction!(rand_py, module)?)?;
+    module.add_function(wrap_pyfunction!(randn_py, module)?)?;
+    module.add_function(wrap_pyfunction!(randint_py, module)?)?;
+    module.add_function(wrap_pyfunction!(arange_py, module)?)?;
+    module.add_function(wrap_pyfunction!(empty_like_py, module)?)?;
+    module.add_function(wrap_pyfunction!(full_like_py, module)?)?;
+    module.add_function(wrap_pyfunction!(zeros_like_py, module)?)?;
+    module.add_function(wrap_pyfunction!(ones_like_py, module)?)?;
+    module.add_function(wrap_pyfunction!(rand_like_py, module)?)?;
+    module.add_function(wrap_pyfunction!(randn_like_py, module)?)?;
     Ok(())
 }

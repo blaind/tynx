@@ -49,6 +49,110 @@ def _conv2d(
 ) -> Tensor: ...
 def get_default_device() -> Device: ...
 def synchronize(device: Device | None = None) -> None: ...
+def empty(
+    shape: Shape,
+    *,
+    dtype: TensorDType = "float32",
+    device: Device | None = None,
+    requires_grad: bool = False,
+) -> Tensor: ...
+def full(
+    shape: Shape,
+    fill_value: TensorScalar,
+    *,
+    dtype: TensorDType = "float32",
+    device: Device | None = None,
+    requires_grad: bool = False,
+) -> Tensor: ...
+def zeros(
+    shape: Shape,
+    *,
+    dtype: TensorDType = "float32",
+    device: Device | None = None,
+    requires_grad: bool = False,
+) -> Tensor: ...
+def ones(
+    shape: Shape,
+    *,
+    dtype: TensorDType = "float32",
+    device: Device | None = None,
+    requires_grad: bool = False,
+) -> Tensor: ...
+def rand(
+    shape: Shape,
+    *,
+    dtype: Literal["float32"] = "float32",
+    device: Device | None = None,
+    requires_grad: bool = False,
+) -> Tensor: ...
+def randn(
+    shape: Shape,
+    *,
+    dtype: Literal["float32"] = "float32",
+    device: Device | None = None,
+    requires_grad: bool = False,
+) -> Tensor: ...
+def randint(
+    low: int,
+    high: int,
+    shape: Shape,
+    *,
+    dtype: Literal["int64"] = "int64",
+    device: Device | None = None,
+    requires_grad: Literal[False] = False,
+) -> Tensor: ...
+def arange(
+    start: int,
+    end: int | None = None,
+    step: int = 1,
+    *,
+    dtype: Literal["float32", "int64"] | None = None,
+    device: Device | None = None,
+    requires_grad: bool = False,
+) -> Tensor: ...
+def empty_like(
+    input: Tensor,
+    *,
+    dtype: TensorDType | None = None,
+    device: Device | None = None,
+    requires_grad: bool = False,
+) -> Tensor: ...
+def full_like(
+    input: Tensor,
+    fill_value: TensorScalar,
+    *,
+    dtype: TensorDType | None = None,
+    device: Device | None = None,
+    requires_grad: bool = False,
+) -> Tensor: ...
+def zeros_like(
+    input: Tensor,
+    *,
+    dtype: TensorDType | None = None,
+    device: Device | None = None,
+    requires_grad: bool = False,
+) -> Tensor: ...
+def ones_like(
+    input: Tensor,
+    *,
+    dtype: TensorDType | None = None,
+    device: Device | None = None,
+    requires_grad: bool = False,
+) -> Tensor: ...
+def rand_like(
+    input: Tensor,
+    *,
+    dtype: Literal["float32"] | None = None,
+    device: Device | None = None,
+    requires_grad: bool = False,
+) -> Tensor: ...
+def randn_like(
+    input: Tensor,
+    *,
+    dtype: Literal["float32"] | None = None,
+    device: Device | None = None,
+    requires_grad: bool = False,
+) -> Tensor: ...
 def where(
     condition: Tensor, input: Tensor | TensorScalar, other: Tensor | TensorScalar
 ) -> Tensor: ...

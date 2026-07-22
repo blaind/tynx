@@ -815,6 +815,25 @@ impl_concat!(DynInt);
 impl_concat!(DynBool);
 
 impl DynTensor {
+    /// Create an uninitialized floating-point tensor with an explicit shape and dtype.
+    pub fn empty(dims: &[usize], device: &Device, dtype: DType) -> Result<Self> {
+        Ok(match dims {
+            [d0] => Self::R1(Tensor::<1>::empty([*d0], (device, dtype))),
+            [d0, d1] => Self::R2(Tensor::<2>::empty([*d0, *d1], (device, dtype))),
+            [d0, d1, d2] => Self::R3(Tensor::<3>::empty([*d0, *d1, *d2], (device, dtype))),
+            [d0, d1, d2, d3] => Self::R4(Tensor::<4>::empty([*d0, *d1, *d2, *d3], (device, dtype))),
+            [d0, d1, d2, d3, d4] => Self::R5(Tensor::<5>::empty(
+                [*d0, *d1, *d2, *d3, *d4],
+                (device, dtype),
+            )),
+            [d0, d1, d2, d3, d4, d5] => Self::R6(Tensor::<6>::empty(
+                [*d0, *d1, *d2, *d3, *d4, *d5],
+                (device, dtype),
+            )),
+            _ => return Err(rank_overflow(dims.len())),
+        })
+    }
+
     /// Apply an NCHW two-dimensional convolution with symmetric padding.
     pub fn conv2d(
         self,
@@ -1784,6 +1803,91 @@ impl DynTensor {
 }
 
 impl DynInt {
+    /// Create an uninitialized integer tensor with an explicit shape and dtype.
+    pub fn empty(dims: &[usize], device: &Device, dtype: DType) -> Result<Self> {
+        Ok(match dims {
+            [d0] => Self::R1(Tensor::<1, Int>::empty([*d0], (device, dtype))),
+            [d0, d1] => Self::R2(Tensor::<2, Int>::empty([*d0, *d1], (device, dtype))),
+            [d0, d1, d2] => Self::R3(Tensor::<3, Int>::empty([*d0, *d1, *d2], (device, dtype))),
+            [d0, d1, d2, d3] => Self::R4(Tensor::<4, Int>::empty(
+                [*d0, *d1, *d2, *d3],
+                (device, dtype),
+            )),
+            [d0, d1, d2, d3, d4] => Self::R5(Tensor::<5, Int>::empty(
+                [*d0, *d1, *d2, *d3, *d4],
+                (device, dtype),
+            )),
+            [d0, d1, d2, d3, d4, d5] => Self::R6(Tensor::<6, Int>::empty(
+                [*d0, *d1, *d2, *d3, *d4, *d5],
+                (device, dtype),
+            )),
+            _ => return Err(rank_overflow(dims.len())),
+        })
+    }
+
+    /// Create a random integer tensor with an explicit shape, distribution, and dtype.
+    pub fn random(
+        dims: &[usize],
+        distribution: Distribution,
+        device: &Device,
+        dtype: DType,
+    ) -> Result<Self> {
+        Ok(match dims {
+            [d0] => Self::R1(Tensor::<1, Int>::random(
+                [*d0],
+                distribution,
+                (device, dtype),
+            )),
+            [d0, d1] => Self::R2(Tensor::<2, Int>::random(
+                [*d0, *d1],
+                distribution,
+                (device, dtype),
+            )),
+            [d0, d1, d2] => Self::R3(Tensor::<3, Int>::random(
+                [*d0, *d1, *d2],
+                distribution,
+                (device, dtype),
+            )),
+            [d0, d1, d2, d3] => Self::R4(Tensor::<4, Int>::random(
+                [*d0, *d1, *d2, *d3],
+                distribution,
+                (device, dtype),
+            )),
+            [d0, d1, d2, d3, d4] => Self::R5(Tensor::<5, Int>::random(
+                [*d0, *d1, *d2, *d3, *d4],
+                distribution,
+                (device, dtype),
+            )),
+            [d0, d1, d2, d3, d4, d5] => Self::R6(Tensor::<6, Int>::random(
+                [*d0, *d1, *d2, *d3, *d4, *d5],
+                distribution,
+                (device, dtype),
+            )),
+            _ => return Err(rank_overflow(dims.len())),
+        })
+    }
+
+    /// Create a rank-one integer range with a nonzero signed step.
+    pub fn arange(start: i64, end: i64, step: i64, device: &Device, dtype: DType) -> Result<Self> {
+        if step == 0 {
+            return Err(TynxError::Shape("arange step must be nonzero".to_string()));
+        }
+        let distance = if step > 0 {
+            end.saturating_sub(start).max(0)
+        } else {
+            start.saturating_sub(end).max(0)
+        };
+        let magnitude = step.unsigned_abs();
+        let count = (distance as u64).div_ceil(magnitude);
+        let count = i64::try_from(count)
+            .map_err(|_| TynxError::Shape("arange output is too large".to_string()))?;
+        Ok(Self::R1(
+            Tensor::<1, Int>::arange(0..count, (device, dtype))
+                .mul_scalar(step)
+                .add_scalar(start),
+        ))
+    }
+
     /// Create an integer tensor filled with one value and an explicit dtype.
     pub fn full(dims: &[usize], value: i64, device: &Device, dtype: DType) -> Result<Self> {
         Ok(match dims {
@@ -2140,6 +2244,16 @@ impl DynInt {
         map_int!(self, |tensor| tensor.sub_scalar(value))
     }
 
+    /// Add a signed scalar to every integer element.
+    pub fn add_scalar(self, value: i64) -> Self {
+        map_int!(self, |tensor| tensor.add_scalar(value))
+    }
+
+    /// Multiply every integer element by a signed scalar.
+    pub fn mul_scalar(self, value: i64) -> Self {
+        map_int!(self, |tensor| tensor.mul_scalar(value))
+    }
+
     /// Create an integer tensor with the same shape, device, and dtype filled with one scalar.
     pub fn full_like(self, value: i64) -> Self {
         map_int!(self, |tensor| tensor.full_like(value))
@@ -2390,6 +2504,29 @@ fn scalar_as_u64(value: crate::Scalar) -> u64 {
 }
 
 impl DynBool {
+    /// Create an uninitialized boolean tensor with an explicit shape.
+    pub fn empty(dims: &[usize], device: &Device) -> Result<Self> {
+        let dtype = DType::Bool(burn::tensor::BoolStore::Native);
+        Ok(match dims {
+            [d0] => Self::R1(Tensor::<1, Bool>::empty([*d0], (device, dtype))),
+            [d0, d1] => Self::R2(Tensor::<2, Bool>::empty([*d0, *d1], (device, dtype))),
+            [d0, d1, d2] => Self::R3(Tensor::<3, Bool>::empty([*d0, *d1, *d2], (device, dtype))),
+            [d0, d1, d2, d3] => Self::R4(Tensor::<4, Bool>::empty(
+                [*d0, *d1, *d2, *d3],
+                (device, dtype),
+            )),
+            [d0, d1, d2, d3, d4] => Self::R5(Tensor::<5, Bool>::empty(
+                [*d0, *d1, *d2, *d3, *d4],
+                (device, dtype),
+            )),
+            [d0, d1, d2, d3, d4, d5] => Self::R6(Tensor::<6, Bool>::empty(
+                [*d0, *d1, *d2, *d3, *d4, *d5],
+                (device, dtype),
+            )),
+            _ => return Err(rank_overflow(dims.len())),
+        })
+    }
+
     /// Return the tensor's boolean storage type.
     pub fn dtype(&self) -> DType {
         match self {

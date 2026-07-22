@@ -3,6 +3,7 @@
 mod comparison;
 mod data;
 mod extrema;
+mod factory;
 mod indexing;
 mod reduction;
 mod selection;
@@ -34,6 +35,10 @@ use crate::{
 use comparison::{Comparison, MaskOperation};
 use data::TensorValue;
 use extrema::Extremum;
+pub(crate) use factory::{
+    arange_py, empty_like_py, empty_py, full_like_py, full_py, ones_like_py, ones_py, rand_like_py,
+    rand_py, randint_py, randn_like_py, randn_py, zeros_like_py, zeros_py,
+};
 use reduction::ReductionSpec;
 
 /// Eager device tensor with optional floating-point autodiff state.
