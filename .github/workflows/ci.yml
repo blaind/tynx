@@ -254,12 +254,19 @@ jobs:
           bin=$(ls -t target/release/deps/conformance-* | grep -v '\.d$' | head -1)
           cp "$bin" conformance-size-probe
           strip conformance-size-probe
-      - name: Smoke test wheel without GPU
+      - name: Smoke test wheel without GPU or NumPy
         run: |
-          pip install dist/*.whl
+          python -m pip uninstall --yes numpy || true
+          python -m pip install dist/*.whl
           python - <<'EOF'
           import tynx
           t = tynx.Tensor([1.0, 2.0], requires_grad=True)
+          try:
+              t.numpy()
+          except ModuleNotFoundError as error:
+              assert error.name == "numpy", error
+          else:
+              raise AssertionError("Tensor.numpy() succeeded without NumPy")
           (t * t).sum().backward()
           assert t.grad is not None and t.grad.tolist() == [2.0, 4.0], t.grad
           print("no-GPU fallback ok:", t.grad.tolist())
