@@ -23,7 +23,7 @@ use device::PyDevice;
 use grad_mode::{PyNoGrad, is_grad_enabled_py, no_grad};
 use gradient::{clip_grad_norm_py, clip_grad_value_py};
 use imported_model::{PyImportedModel, PyTrainabilityReport};
-use nn::conv2d_py;
+use nn::{adaptive_avg_pool2d_py, avg_pool2d_py, conv2d_py, max_pool2d_py};
 use optimizer::{PyAdam, PyAdamW, PySgd};
 use parameter::{PyBuffer, PyParameter};
 use random::{categorical_sample_py, dropout_py, manual_seed_py, normal_sample_py};
@@ -256,6 +256,9 @@ fn _tynx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(categorical_sample_py, module)?)?;
     module.add_function(wrap_pyfunction!(dropout_py, module)?)?;
     module.add_function(wrap_pyfunction!(conv2d_py, module)?)?;
+    module.add_function(wrap_pyfunction!(max_pool2d_py, module)?)?;
+    module.add_function(wrap_pyfunction!(avg_pool2d_py, module)?)?;
+    module.add_function(wrap_pyfunction!(adaptive_avg_pool2d_py, module)?)?;
     module.add_function(wrap_pyfunction!(empty_py, module)?)?;
     module.add_function(wrap_pyfunction!(full_py, module)?)?;
     module.add_function(wrap_pyfunction!(zeros_py, module)?)?;

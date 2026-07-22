@@ -2,7 +2,14 @@
 
 from typing import Literal, Optional, Union
 
-from .._tynx import Tensor, _conv2d, maximum
+from .._tynx import (
+    Tensor,
+    _adaptive_avg_pool2d,
+    _avg_pool2d,
+    _conv2d,
+    _max_pool2d,
+    maximum,
+)
 
 Reduction = Literal["none", "mean", "sum"]
 IntOrPair = Union[int, tuple[int, int]]
@@ -29,6 +36,54 @@ def conv2d(
         _pair(dilation, "dilation", positive=True),
         groups,
     )
+
+
+def max_pool2d(
+    input: Tensor,
+    kernel_size: IntOrPair,
+    stride: Optional[IntOrPair] = None,
+    padding: IntOrPair = 0,
+    dilation: IntOrPair = 1,
+    ceil_mode: bool = False,
+) -> Tensor:
+    """Apply two-dimensional max pooling to an NCHW input."""
+    kernel = _pair(kernel_size, "kernel_size", positive=True)
+    return _max_pool2d(
+        input,
+        kernel,
+        kernel if stride is None else _pair(stride, "stride", positive=True),
+        _pair(padding, "padding", positive=False),
+        _pair(dilation, "dilation", positive=True),
+        _bool(ceil_mode, "ceil_mode"),
+    )
+
+
+def avg_pool2d(
+    input: Tensor,
+    kernel_size: IntOrPair,
+    stride: Optional[IntOrPair] = None,
+    padding: IntOrPair = 0,
+    ceil_mode: bool = False,
+    count_include_pad: bool = True,
+    divisor_override: Optional[int] = None,
+) -> Tensor:
+    """Apply two-dimensional average pooling to an NCHW input."""
+    if divisor_override is not None:
+        raise NotImplementedError("avg_pool2d divisor_override is not supported")
+    kernel = _pair(kernel_size, "kernel_size", positive=True)
+    return _avg_pool2d(
+        input,
+        kernel,
+        kernel if stride is None else _pair(stride, "stride", positive=True),
+        _pair(padding, "padding", positive=False),
+        _bool(ceil_mode, "ceil_mode"),
+        _bool(count_include_pad, "count_include_pad"),
+    )
+
+
+def adaptive_avg_pool2d(input: Tensor, output_size: IntOrPair) -> Tensor:
+    """Pool an NCHW input to an explicit spatial size."""
+    return _adaptive_avg_pool2d(input, _pair(output_size, "output_size", positive=True))
 
 
 def mse_loss(input: Tensor, target: Tensor, reduction: Reduction = "mean") -> Tensor:
@@ -97,4 +152,18 @@ def _pair(value: IntOrPair, name: str, *, positive: bool) -> tuple[int, int]:
     return pair
 
 
-__all__ = ["binary_cross_entropy_with_logits", "conv2d", "cross_entropy", "mse_loss"]
+def _bool(value: bool, name: str) -> bool:
+    if type(value) is not bool:
+        raise TypeError(f"{name} must be a bool, got {type(value).__qualname__}")
+    return value
+
+
+__all__ = [
+    "adaptive_avg_pool2d",
+    "avg_pool2d",
+    "binary_cross_entropy_with_logits",
+    "conv2d",
+    "cross_entropy",
+    "max_pool2d",
+    "mse_loss",
+]

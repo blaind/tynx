@@ -8,7 +8,12 @@
 
 use burn::tensor::{
     Bool, DType, Device, Distribution, IndexingUpdateOp, Int, Slice, Tensor, TensorData,
-    activation, module::conv2d as burn_conv2d, ops::ConvOptions,
+    activation,
+    module::{
+        adaptive_avg_pool2d as burn_adaptive_avg_pool2d, avg_pool2d as burn_avg_pool2d,
+        conv2d as burn_conv2d, max_pool2d as burn_max_pool2d,
+    },
+    ops::ConvOptions,
 };
 
 use crate::error::{Result, TynxError};
@@ -68,6 +73,48 @@ fn validate_matmul_shapes(left: &[usize], right: &[usize]) -> Result<()> {
     }
 
     broadcast_shape(&left[..left.len() - 2], &right[..right.len() - 2])?;
+    Ok(())
+}
+
+fn validate_pool2d(
+    input: &[usize],
+    kernel: [usize; 2],
+    stride: [usize; 2],
+    padding: [usize; 2],
+    dilation: [usize; 2],
+    operation: &str,
+) -> Result<()> {
+    if input.len() != 4 {
+        return Err(TynxError::Shape(format!(
+            "{operation} requires rank-4 NCHW input, got {input:?}"
+        )));
+    }
+    if kernel.contains(&0) || stride.contains(&0) || dilation.contains(&0) {
+        return Err(TynxError::Shape(format!(
+            "{operation} kernel, stride, and dilation must contain positive integers"
+        )));
+    }
+    for axis in 0..2 {
+        if padding[axis] > kernel[axis] / 2 {
+            return Err(TynxError::Shape(format!(
+                "{operation} padding {} exceeds half the kernel size {} at spatial axis {axis}",
+                padding[axis], kernel[axis]
+            )));
+        }
+        let effective_kernel = dilation[axis]
+            .checked_mul(kernel[axis] - 1)
+            .and_then(|value| value.checked_add(1))
+            .ok_or_else(|| TynxError::Shape(format!("{operation} kernel extent overflowed")))?;
+        let padded_input = padding[axis]
+            .checked_mul(2)
+            .and_then(|value| input[axis + 2].checked_add(value))
+            .ok_or_else(|| TynxError::Shape(format!("{operation} padded extent overflowed")))?;
+        if padded_input < effective_kernel {
+            return Err(TynxError::Shape(format!(
+                "{operation} kernel extent {effective_kernel} exceeds padded input extent {padded_input} at spatial axis {axis}"
+            )));
+        }
+    }
     Ok(())
 }
 
@@ -927,6 +974,85 @@ impl DynTensor {
                 ConvOptions::new(stride, padding, dilation, groups),
             ))),
             _ => unreachable!("conv2d ranks were validated before dispatch"),
+        }
+    }
+
+    /// Apply rank-4 NCHW max pooling.
+    pub fn max_pool2d(
+        self,
+        kernel_size: [usize; 2],
+        stride: [usize; 2],
+        padding: [usize; 2],
+        dilation: [usize; 2],
+        ceil_mode: bool,
+    ) -> Result<Self> {
+        validate_pool2d(
+            &self.dims(),
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            "max_pool2d",
+        )?;
+        match self {
+            Self::R4(input) => Ok(Self::R4(burn_max_pool2d(
+                input,
+                kernel_size,
+                stride,
+                padding,
+                dilation,
+                ceil_mode,
+            ))),
+            _ => unreachable!("pooling rank was validated before dispatch"),
+        }
+    }
+
+    /// Apply rank-4 NCHW average pooling.
+    pub fn avg_pool2d(
+        self,
+        kernel_size: [usize; 2],
+        stride: [usize; 2],
+        padding: [usize; 2],
+        count_include_pad: bool,
+        ceil_mode: bool,
+    ) -> Result<Self> {
+        validate_pool2d(
+            &self.dims(),
+            kernel_size,
+            stride,
+            padding,
+            [1, 1],
+            "avg_pool2d",
+        )?;
+        match self {
+            Self::R4(input) => Ok(Self::R4(burn_avg_pool2d(
+                input,
+                kernel_size,
+                stride,
+                padding,
+                count_include_pad,
+                ceil_mode,
+            ))),
+            _ => unreachable!("pooling rank was validated before dispatch"),
+        }
+    }
+
+    /// Apply rank-4 NCHW adaptive average pooling.
+    pub fn adaptive_avg_pool2d(self, output_size: [usize; 2]) -> Result<Self> {
+        let dims = self.dims();
+        if dims.len() != 4 {
+            return Err(TynxError::Shape(format!(
+                "adaptive_avg_pool2d requires rank-4 NCHW input, got {dims:?}"
+            )));
+        }
+        if output_size.contains(&0) {
+            return Err(TynxError::Shape(
+                "adaptive_avg_pool2d output dimensions must be positive".to_string(),
+            ));
+        }
+        match self {
+            Self::R4(input) => Ok(Self::R4(burn_adaptive_avg_pool2d(input, output_size))),
+            _ => unreachable!("pooling rank was validated before dispatch"),
         }
     }
 

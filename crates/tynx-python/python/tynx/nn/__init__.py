@@ -2,6 +2,8 @@
 
 from . import functional, state, utils
 from .modules import (
+    AdaptiveAvgPool2d,
+    AvgPool2d,
     BatchNorm,
     BatchNorm1d,
     BatchNorm2d,
@@ -10,12 +12,15 @@ from .modules import (
     Layer,
     LayerNorm,
     Linear,
+    MaxPool2d,
     Module,
     ReLU,
     Sequential,
 )
 
 __all__ = [
+    "AdaptiveAvgPool2d",
+    "AvgPool2d",
     "BatchNorm",
     "BatchNorm1d",
     "BatchNorm2d",
@@ -24,6 +29,7 @@ __all__ = [
     "Layer",
     "LayerNorm",
     "Linear",
+    "MaxPool2d",
     "Module",
     "ReLU",
     "Sequential",

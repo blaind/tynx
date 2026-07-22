@@ -7,8 +7,11 @@ from .dropout import Dropout
 from .linear import Linear
 from .module import Layer, Module
 from .normalization import BatchNorm, BatchNorm1d, BatchNorm2d, LayerNorm
+from .pooling import AdaptiveAvgPool2d, AvgPool2d, MaxPool2d
 
 __all__ = [
+    "AdaptiveAvgPool2d",
+    "AvgPool2d",
     "BatchNorm",
     "BatchNorm1d",
     "BatchNorm2d",
@@ -17,6 +20,7 @@ __all__ = [
     "Layer",
     "LayerNorm",
     "Linear",
+    "MaxPool2d",
     "Module",
     "ReLU",
     "Sequential",

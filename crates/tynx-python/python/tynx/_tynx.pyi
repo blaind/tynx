@@ -47,6 +47,23 @@ def _conv2d(
     dilation: tuple[int, int],
     groups: int,
 ) -> Tensor: ...
+def _max_pool2d(
+    input: Tensor,
+    kernel_size: tuple[int, int],
+    stride: tuple[int, int],
+    padding: tuple[int, int],
+    dilation: tuple[int, int],
+    ceil_mode: bool,
+) -> Tensor: ...
+def _avg_pool2d(
+    input: Tensor,
+    kernel_size: tuple[int, int],
+    stride: tuple[int, int],
+    padding: tuple[int, int],
+    ceil_mode: bool,
+    count_include_pad: bool,
+) -> Tensor: ...
+def _adaptive_avg_pool2d(input: Tensor, output_size: tuple[int, int]) -> Tensor: ...
 def get_default_device() -> Device: ...
 def synchronize(device: Device | None = None) -> None: ...
 def empty(
