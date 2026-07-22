@@ -27,6 +27,26 @@ def test_compile_replays_linear_relu_without_python_dispatch() -> None:
     assert compiled.node_counts == (6,)
 
 
+def test_compile_captures_matmul_relu_and_sum_end_to_end() -> None:
+    calls = 0
+
+    @tynx.compile(fullgraph=True)
+    def forward(left: tynx.Tensor, right: tynx.Tensor) -> tynx.Tensor:
+        nonlocal calls
+        calls += 1
+        return (left @ right).relu().sum()
+
+    left = tynx.Tensor([[1.0, -2.0], [3.0, 4.0]])
+    right = tynx.Tensor([[2.0], [1.0]])
+
+    assert forward(left, right).item() == pytest.approx(10.0)
+    assert forward(left, right).item() == pytest.approx(10.0)
+    assert calls == 1
+    assert forward.compile_count == 1
+    assert forward.fallback_count == 0
+    assert forward.replay_count == 1
+
+
 def test_compile_replay_preserves_input_and_parameter_gradients() -> None:
     weight = tynx.Parameter([[2.0], [-1.0]], name="weight")
 
