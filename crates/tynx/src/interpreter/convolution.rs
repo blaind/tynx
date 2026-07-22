@@ -4,13 +4,21 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use burn::tensor::{
     DType, Device, Tensor,
-    module::{conv1d as burn_conv1d, conv2d as burn_conv2d, conv3d as burn_conv3d},
-    ops::{ConvOptions, PadMode, PaddedConvOptions},
+    module::{
+        conv_transpose1d as burn_conv_transpose1d, conv_transpose2d as burn_conv_transpose2d,
+        conv_transpose3d as burn_conv_transpose3d, conv1d as burn_conv1d, conv2d as burn_conv2d,
+        conv3d as burn_conv3d,
+    },
+    ops::{ConvOptions, ConvTransposeOptions, PadMode, PaddedConvOptions},
 };
 use onnx_ir::{
     ModelProto, Node, TensorProto, ValueInfoProto,
     ir::{Argument, OnnxGraph},
-    node::{conv1d::Conv1dNode, conv2d::Conv2dNode, conv3d::Conv3dNode},
+    node::{
+        conv_transpose1d::ConvTranspose1dNode, conv_transpose2d::ConvTranspose2dNode,
+        conv_transpose3d::ConvTranspose3dNode, conv1d::Conv1dNode, conv2d::Conv2dNode,
+        conv3d::Conv3dNode,
+    },
 };
 use protobuf::Message;
 
@@ -37,7 +45,7 @@ pub(super) fn prepare_model(data: &[u8]) -> Result<(Vec<u8>, bool)> {
     let dynamic_weights = graph
         .node
         .iter()
-        .filter(|node| node.op_type == "Conv")
+        .filter(|node| matches!(node.op_type.as_str(), "Conv" | "ConvTranspose"))
         .filter_map(|node| node.input.get(1))
         .filter(|name| !original_initializers.contains(*name))
         .cloned()
@@ -95,7 +103,7 @@ pub(super) fn restore_dynamic_inputs(data: &[u8], graph: &mut OnnxGraph) -> Resu
 
     let mut weights = VecDeque::<Option<String>>::new();
     for node in &raw_graph.node {
-        if node.op_type != "Conv" || node.input.len() < 2 {
+        if !matches!(node.op_type.as_str(), "Conv" | "ConvTranspose") || node.input.len() < 2 {
             continue;
         }
         let weight = &node.input[1];
@@ -114,6 +122,9 @@ pub(super) fn restore_dynamic_inputs(data: &[u8], graph: &mut OnnxGraph) -> Resu
             Node::Conv1d(node) => restore_weight(node, &arguments, &mut weights),
             Node::Conv2d(node) => restore_weight(node, &arguments, &mut weights),
             Node::Conv3d(node) => restore_weight(node, &arguments, &mut weights),
+            Node::ConvTranspose1d(node) => restore_weight(node, &arguments, &mut weights),
+            Node::ConvTranspose2d(node) => restore_weight(node, &arguments, &mut weights),
+            Node::ConvTranspose3d(node) => restore_weight(node, &arguments, &mut weights),
             _ => {}
         }
     }
@@ -171,7 +182,14 @@ macro_rules! impl_conv_node {
     };
 }
 
-impl_conv_node!(Conv1dNode, Conv2dNode, Conv3dNode);
+impl_conv_node!(
+    Conv1dNode,
+    Conv2dNode,
+    Conv3dNode,
+    ConvTranspose1dNode,
+    ConvTranspose2dNode,
+    ConvTranspose3dNode,
+);
 
 pub(super) fn conv1d(node: &Conv1dNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
     let input = rank3(resolve::at(env, &node.name, &node.inputs, 0, device)?.into_tensor()?)?;
@@ -266,6 +284,81 @@ pub(super) fn conv3d(node: &Conv3dNode, env: &Env, device: &Device) -> Result<Ve
     )))])
 }
 
+pub(super) fn conv_transpose1d(
+    node: &ConvTranspose1dNode,
+    env: &Env,
+    device: &Device,
+) -> Result<Vec<Value>> {
+    let input = rank3(resolve::at(env, &node.name, &node.inputs, 0, device)?.into_tensor()?)?;
+    let dtype = input.dtype();
+    let weight = rank3(
+        resolve::at(env, &node.name, &node.inputs, 1, device)?
+            .into_tensor()?
+            .cast(dtype),
+    )?;
+    let bias = bias(&node.name, &node.inputs, env, device, dtype)?;
+    let options = ConvTransposeOptions::new(
+        [node.config.stride],
+        [node.config.padding],
+        [node.config.padding_out],
+        [node.config.dilation],
+        node.config.groups,
+    );
+    Ok(vec![Value::Tensor(DynTensor::R3(burn_conv_transpose1d(
+        input, weight, bias, options,
+    )))])
+}
+
+pub(super) fn conv_transpose2d(
+    node: &ConvTranspose2dNode,
+    env: &Env,
+    device: &Device,
+) -> Result<Vec<Value>> {
+    let input = rank4(resolve::at(env, &node.name, &node.inputs, 0, device)?.into_tensor()?)?;
+    let dtype = input.dtype();
+    let weight = rank4(
+        resolve::at(env, &node.name, &node.inputs, 1, device)?
+            .into_tensor()?
+            .cast(dtype),
+    )?;
+    let bias = bias(&node.name, &node.inputs, env, device, dtype)?;
+    let options = ConvTransposeOptions::new(
+        node.config.stride,
+        node.config.padding,
+        node.config.padding_out,
+        node.config.dilation,
+        node.config.groups,
+    );
+    Ok(vec![Value::Tensor(DynTensor::R4(burn_conv_transpose2d(
+        input, weight, bias, options,
+    )))])
+}
+
+pub(super) fn conv_transpose3d(
+    node: &ConvTranspose3dNode,
+    env: &Env,
+    device: &Device,
+) -> Result<Vec<Value>> {
+    let input = rank5(resolve::at(env, &node.name, &node.inputs, 0, device)?.into_tensor()?)?;
+    let dtype = input.dtype();
+    let weight = rank5(
+        resolve::at(env, &node.name, &node.inputs, 1, device)?
+            .into_tensor()?
+            .cast(dtype),
+    )?;
+    let bias = bias(&node.name, &node.inputs, env, device, dtype)?;
+    let options = ConvTransposeOptions::new(
+        node.config.stride,
+        node.config.padding,
+        node.config.padding_out,
+        node.config.dilation,
+        node.config.groups,
+    );
+    Ok(vec![Value::Tensor(DynTensor::R5(burn_conv_transpose3d(
+        input, weight, bias, options,
+    )))])
+}
+
 fn bias(
     node_name: &str,
     inputs: &[Argument],
@@ -294,6 +387,9 @@ mod tests {
     use onnx_ir::{
         DType,
         node::{
+            conv_transpose1d::{ConvTranspose1dConfig, ConvTranspose1dNodeBuilder},
+            conv_transpose2d::{ConvTranspose2dConfig, ConvTranspose2dNodeBuilder},
+            conv_transpose3d::{ConvTranspose3dConfig, ConvTranspose3dNodeBuilder},
             conv2d::{Conv2dConfig, Conv2dNodeBuilder},
             padding::{AutoPad, PaddingConfig2d},
         },
@@ -344,5 +440,124 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(output, [3.0, 2.0, 10.0, 6.0]);
+    }
+
+    #[test]
+    fn transposed_convolution_expands_one_dimension() {
+        let node = ConvTranspose1dNodeBuilder::new("conv_transpose")
+            .input_tensor("x", 3, DType::F32)
+            .input_tensor("weight", 3, DType::F32)
+            .output_tensor("y", 3, DType::F32)
+            .config(ConvTranspose1dConfig::new(2, 1, 1, 1, 0, 0))
+            .build();
+        let device = Device::default();
+        let mut env = Env::new();
+        env.insert(
+            "x".into(),
+            Value::from_tensor_data(TensorData::new(vec![2.0_f32], [1, 1, 1]), 3, &device).unwrap(),
+        );
+        env.insert(
+            "weight".into(),
+            Value::from_tensor_data(TensorData::new(vec![1.0_f32; 2], [1, 1, 2]), 3, &device)
+                .unwrap(),
+        );
+
+        let output = conv_transpose1d(&node, &env, &device)
+            .unwrap()
+            .pop()
+            .unwrap()
+            .into_tensor()
+            .unwrap()
+            .into_data()
+            .iter::<f32>()
+            .collect::<Vec<_>>();
+
+        assert_eq!(output, [2.0, 2.0]);
+    }
+
+    #[test]
+    fn transposed_convolution_expands_two_dimensions() {
+        let node = ConvTranspose2dNodeBuilder::new("conv_transpose")
+            .input_tensor("x", 4, DType::F32)
+            .input_tensor("weight", 4, DType::F32)
+            .output_tensor("y", 4, DType::F32)
+            .config(ConvTranspose2dConfig::new(
+                [2, 2],
+                [1, 1],
+                [1, 1],
+                [0, 0],
+                [0, 0],
+                1,
+            ))
+            .build();
+        let device = Device::default();
+        let mut env = Env::new();
+        env.insert(
+            "x".into(),
+            Value::from_tensor_data(TensorData::new(vec![2.0_f32], [1, 1, 1, 1]), 4, &device)
+                .unwrap(),
+        );
+        env.insert(
+            "weight".into(),
+            Value::from_tensor_data(TensorData::new(vec![1.0_f32; 4], [1, 1, 2, 2]), 4, &device)
+                .unwrap(),
+        );
+
+        let output = conv_transpose2d(&node, &env, &device)
+            .unwrap()
+            .pop()
+            .unwrap()
+            .into_tensor()
+            .unwrap()
+            .into_data()
+            .iter::<f32>()
+            .collect::<Vec<_>>();
+
+        assert_eq!(output, [2.0; 4]);
+    }
+
+    #[test]
+    fn transposed_convolution_expands_three_dimensions() {
+        let node = ConvTranspose3dNodeBuilder::new("conv_transpose")
+            .input_tensor("x", 5, DType::F32)
+            .input_tensor("weight", 5, DType::F32)
+            .output_tensor("y", 5, DType::F32)
+            .config(ConvTranspose3dConfig::new(
+                [2, 2, 2],
+                [1, 1, 1],
+                [1, 1, 1],
+                [0, 0, 0],
+                [0, 0, 0],
+                1,
+            ))
+            .build();
+        let device = Device::default();
+        let mut env = Env::new();
+        env.insert(
+            "x".into(),
+            Value::from_tensor_data(TensorData::new(vec![2.0_f32], [1, 1, 1, 1, 1]), 5, &device)
+                .unwrap(),
+        );
+        env.insert(
+            "weight".into(),
+            Value::from_tensor_data(
+                TensorData::new(vec![1.0_f32; 8], [1, 1, 2, 2, 2]),
+                5,
+                &device,
+            )
+            .unwrap(),
+        );
+
+        let output = conv_transpose3d(&node, &env, &device)
+            .unwrap()
+            .pop()
+            .unwrap()
+            .into_tensor()
+            .unwrap()
+            .into_data()
+            .iter::<f32>()
+            .collect::<Vec<_>>();
+
+        assert_eq!(output, [2.0; 8]);
     }
 }
