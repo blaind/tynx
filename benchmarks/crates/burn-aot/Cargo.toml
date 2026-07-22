@@ -9,6 +9,7 @@ build = "build.rs"
 [features]
 default = ["flex"]
 flex = ["burn/flex"]
+mobilenet = ["tynx-bench-protocol/mobilenet"]
 wgpu = [
     "burn/autotune",
     "burn/fusion",

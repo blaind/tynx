@@ -14,13 +14,27 @@ fn main() {
         include_str!("../../models/matmul_add_relu_dynamic.onnx.hex"),
     );
     generate("tiny_cnn", include_bytes!("../../models/tiny_cnn.onnx"));
+    #[cfg(feature = "mobilenet")]
+    generate_mobilenet();
 
     println!("cargo:rerun-if-changed=../../models/sign.onnx.hex");
     println!("cargo:rerun-if-changed=../../models/matmul64.onnx.hex");
     println!("cargo:rerun-if-changed=../../models/matmul_dynamic.onnx.hex");
     println!("cargo:rerun-if-changed=../../models/matmul_add_relu_dynamic.onnx.hex");
     println!("cargo:rerun-if-changed=../../models/tiny_cnn.onnx");
+    println!("cargo:rerun-if-env-changed=TYNX_BENCH_MOBILENET_PATH");
     println!("cargo:rerun-if-changed=build.rs");
+}
+
+#[cfg(feature = "mobilenet")]
+fn generate_mobilenet() {
+    let model_path = PathBuf::from(
+        env::var_os("TYNX_BENCH_MOBILENET_PATH")
+            .expect("TYNX_BENCH_MOBILENET_PATH is required with the mobilenet feature"),
+    );
+    println!("cargo:rerun-if-changed={}", model_path.display());
+    let model = fs::read(model_path).expect("read MobileNetV2 ONNX model");
+    generate("mobilenetv2", &model);
 }
 
 fn generate_hex(name: &str, model_hex: &str) {
