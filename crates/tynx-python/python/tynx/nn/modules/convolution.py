@@ -1,10 +1,10 @@
 """Authored convolution layers."""
 
 import math
-import random
 from typing import TYPE_CHECKING, Union, cast
 
 from ..._tynx import Parameter, Tensor
+from .._random import uniform
 from ..functional import conv2d
 from .module import Module
 
@@ -50,7 +50,7 @@ class Conv2d(Module):
         weights = [
             [
                 [
-                    [random.uniform(-bound, bound) for _ in range(self.kernel_size[1])]
+                    [uniform(-bound, bound) for _ in range(self.kernel_size[1])]
                     for _ in range(self.kernel_size[0])
                 ]
                 for _ in range(channels_per_group)
@@ -59,9 +59,7 @@ class Conv2d(Module):
         ]
         self.weight = Parameter(cast("TensorData", weights), name="weight")
         self.bias = (
-            Parameter(
-                [random.uniform(-bound, bound) for _ in range(self.out_channels)], name="bias"
-            )
+            Parameter([uniform(-bound, bound) for _ in range(self.out_channels)], name="bias")
             if bias
             else None
         )
