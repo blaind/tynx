@@ -16,8 +16,8 @@ def main() -> None:
             trainable="auto",
             simplify=False,
             initializer_names={
-                "constant1_out1": "head.weight",
-                "constant2_out1": "head.bias",
+                "weight": "head.weight",
+                "bias": "head.bias",
             },
         )
         assert isinstance(model, tynx.ImportedModel)

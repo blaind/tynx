@@ -89,10 +89,10 @@ def test_accelerated_captured_imported_ppo_step_reuses_updated_weights(tmp_path:
         trainable="auto",
         simplify=False,
         initializer_names={
-            "constant1_out1": "policy.weight",
-            "constant2_out1": "policy.bias",
-            "constant3_out1": "value.weight",
-            "constant4_out1": "value.bias",
+            "policy_weight": "policy.weight",
+            "policy_bias": "policy.bias",
+            "value_weight": "value.weight",
+            "value_bias": "value.bias",
         },
     )
     assert isinstance(model, tynx.ImportedModel)

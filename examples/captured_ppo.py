@@ -17,10 +17,10 @@ def main() -> None:
             trainable="auto",
             simplify=False,
             initializer_names={
-                "constant1_out1": "policy.weight",
-                "constant2_out1": "policy.bias",
-                "constant3_out1": "value.weight",
-                "constant4_out1": "value.bias",
+                "policy_weight": "policy.weight",
+                "policy_bias": "policy.bias",
+                "value_weight": "value.weight",
+                "value_bias": "value.bias",
             },
         )
         assert isinstance(model, tynx.ImportedModel)
@@ -47,7 +47,9 @@ def main() -> None:
                 ratio * advantages,
                 ratio.clamp(0.8, 1.2) * advantages,
             ).mean()
-            value_loss = tynx.nn.functional.mse_loss(outputs[values_name].squeeze(1), returns)
+            value_loss = tynx.nn.functional.mse_loss(
+                outputs[values_name].squeeze(1), returns
+            )
             loss = policy_loss + value_loss * 0.5 - policy.entropy().mean() * 0.01
             loss.backward()
             optimizer.step()
