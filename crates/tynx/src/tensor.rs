@@ -22,6 +22,54 @@ fn rank_overflow(rank: usize) -> TynxError {
     }
 }
 
+fn broadcast_shape(left: &[usize], right: &[usize]) -> Result<Vec<usize>> {
+    let rank = left.len().max(right.len());
+    let mut output = Vec::with_capacity(rank);
+
+    for offset in 0..rank {
+        let left_dim = left
+            .len()
+            .checked_sub(offset + 1)
+            .map_or(1, |index| left[index]);
+        let right_dim = right
+            .len()
+            .checked_sub(offset + 1)
+            .map_or(1, |index| right[index]);
+
+        if left_dim != right_dim && left_dim != 1 && right_dim != 1 {
+            let axis = rank - offset - 1;
+            return Err(TynxError::Shape(format!(
+                "cannot broadcast shapes {left:?} and {right:?}: dimensions {left_dim} and {right_dim} conflict at axis {axis}"
+            )));
+        }
+        output.push(left_dim.max(right_dim));
+    }
+
+    output.reverse();
+    Ok(output)
+}
+
+fn validate_matmul_shapes(left: &[usize], right: &[usize]) -> Result<()> {
+    if left.len() != right.len() || left.len() < 2 {
+        return Err(TynxError::Shape(format!(
+            "matmul requires matching ranks >= 2, got {} and {}",
+            left.len(),
+            right.len()
+        )));
+    }
+
+    let left_inner = left[left.len() - 1];
+    let right_inner = right[right.len() - 2];
+    if left_inner != right_inner {
+        return Err(TynxError::Shape(format!(
+            "matmul inner dimensions must match for shapes {left:?} and {right:?}, got {left_inner} and {right_inner}"
+        )));
+    }
+
+    broadcast_shape(&left[..left.len() - 2], &right[..right.len() - 2])?;
+    Ok(())
+}
+
 /// A floating-point tensor with a runtime rank.
 #[derive(Debug, Clone)]
 pub enum DynTensor {
@@ -1121,6 +1169,7 @@ impl DynTensor {
 
     /// Multiply matrices or batches of matrices with matching runtime ranks.
     pub fn matmul(self, other: Self) -> Result<Self> {
+        validate_matmul_shapes(&self.dims(), &other.dims())?;
         Ok(match (self, other) {
             (Self::R2(left), Self::R2(right)) => Self::R2(left.matmul(right)),
             (Self::R3(left), Self::R3(right)) => Self::R3(left.matmul(right)),
@@ -1219,11 +1268,18 @@ impl DynTensor {
 
     /// Apply parametric rectified linear unit with a broadcastable slope tensor.
     pub fn prelu(self, slope: Self) -> Result<Self> {
+        let input_dims = self.dims();
+        let slope_dims = slope.dims();
         let input_rank = self.rank();
         if slope.rank() > input_rank {
             return Err(TynxError::Shape(format!(
                 "PRelu slope rank {} exceeds input rank {input_rank}",
                 slope.rank()
+            )));
+        }
+        if broadcast_shape(&input_dims, &slope_dims)? != input_dims {
+            return Err(TynxError::Shape(format!(
+                "PRelu slope shape {slope_dims:?} cannot broadcast to input shape {input_dims:?}"
             )));
         }
         let slope = slope.to_rank(input_rank)?;
@@ -1295,6 +1351,7 @@ impl DynTensor {
     }
 
     fn broadcast_pair(left: Self, right: Self) -> Result<(Self, Self)> {
+        broadcast_shape(&left.dims(), &right.dims())?;
         let rank = left.rank().max(right.rank());
         Ok((left.to_rank(rank)?, right.to_rank(rank)?))
     }
@@ -1594,6 +1651,8 @@ impl DynTensor {
 
     /// Select elements from two tensors using a broadcastable boolean condition.
     pub fn where_select(condition: DynBool, then: Self, otherwise: Self) -> Result<Self> {
+        let output_shape = broadcast_shape(&condition.dims(), &then.dims())?;
+        broadcast_shape(&output_shape, &otherwise.dims())?;
         let rank = condition.rank().max(then.rank()).max(otherwise.rank());
         let dtype = then.dtype();
         Ok(where_float!(
@@ -1942,9 +2001,7 @@ impl DynInt {
     /// Raise every element to a broadcastable integer exponent.
     pub fn powi_broadcast(self, exponent: Self) -> Result<Self> {
         let dtype = self.dtype();
-        let rank = self.rank().max(exponent.rank());
-        let base = self.to_rank(rank)?;
-        let exponent = exponent.cast(dtype).to_rank(rank)?;
+        let (base, exponent) = Self::broadcast_pair(self, exponent.cast(dtype))?;
         Ok(zip_int!(base, exponent, |base, exponent| base.powi(exponent)))
     }
 
@@ -1970,6 +2027,7 @@ impl DynInt {
 
     /// Multiply matrices or batches of matrices with matching runtime ranks.
     pub fn matmul(self, other: Self) -> Result<Self> {
+        validate_matmul_shapes(&self.dims(), &other.dims())?;
         Ok(match (self, other) {
             (Self::R2(left), Self::R2(right)) => Self::R2(left.matmul(right)),
             (Self::R3(left), Self::R3(right)) => Self::R3(left.matmul(right)),
@@ -2147,6 +2205,7 @@ impl DynInt {
     }
 
     fn broadcast_pair(left: Self, right: Self) -> Result<(Self, Self)> {
+        broadcast_shape(&left.dims(), &right.dims())?;
         let rank = left.rank().max(right.rank());
         Ok((left.to_rank(rank)?, right.to_rank(rank)?))
     }
@@ -2180,6 +2239,8 @@ impl DynInt {
 
     /// Select elements from two integer tensors using a broadcastable boolean condition.
     pub fn where_select(condition: DynBool, then: Self, otherwise: Self) -> Result<Self> {
+        let output_shape = broadcast_shape(&condition.dims(), &then.dims())?;
+        broadcast_shape(&output_shape, &otherwise.dims())?;
         let rank = condition.rank().max(then.rank()).max(otherwise.rank());
         let dtype = then.dtype();
         Ok(where_int!(
@@ -2488,6 +2549,8 @@ impl DynBool {
 
     /// Select elements from two boolean tensors using a broadcastable condition.
     pub fn where_select(condition: Self, then: Self, otherwise: Self) -> Result<Self> {
+        let output_shape = broadcast_shape(&condition.dims(), &then.dims())?;
+        broadcast_shape(&output_shape, &otherwise.dims())?;
         let rank = condition.rank().max(then.rank()).max(otherwise.rank());
         Ok(where_bool!(
             condition.to_rank(rank)?,
@@ -2497,6 +2560,7 @@ impl DynBool {
     }
 
     fn broadcast_pair(left: Self, right: Self) -> Result<(Self, Self)> {
+        broadcast_shape(&left.dims(), &right.dims())?;
         let rank = left.rank().max(right.rank());
         Ok((left.to_rank(rank)?, right.to_rank(rank)?))
     }
@@ -2533,6 +2597,54 @@ mod tests {
         let error = tensor.to_rank(1).unwrap_err();
 
         assert_eq!(error, TynxError::RankPromote { from: 2, to: 1 });
+    }
+
+    #[test]
+    fn rejects_incompatible_broadcast_shapes_before_dispatch() {
+        let device = Device::default();
+        let left = DynTensor::R2(Tensor::<2>::zeros([2, 3], &device));
+        let right = DynTensor::R2(Tensor::<2>::zeros([4, 5], &device));
+
+        let error = left.add_broadcast(right).unwrap_err();
+
+        assert_eq!(
+            error,
+            TynxError::Shape(
+                "cannot broadcast shapes [2, 3] and [4, 5]: dimensions 3 and 5 conflict at axis 1"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn rejects_incompatible_matmul_inner_dimensions_before_dispatch() {
+        let device = Device::default();
+        let left = DynTensor::R2(Tensor::<2>::zeros([1, 2], &device));
+        let right = DynTensor::R2(Tensor::<2>::zeros([1, 2], &device));
+
+        let error = left.matmul(right).unwrap_err();
+
+        assert_eq!(
+            error,
+            TynxError::Shape(
+                "matmul inner dimensions must match for shapes [1, 2] and [1, 2], got 2 and 1"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn rejects_incompatible_where_shapes_before_dispatch() {
+        let device = Device::default();
+        let condition = DynBool::R2(Tensor::<2, Bool>::zeros([2, 3], &device));
+        let then = DynTensor::R2(Tensor::<2>::zeros([2, 3], &device));
+        let otherwise = DynTensor::R2(Tensor::<2>::zeros([4, 5], &device));
+
+        let error = DynTensor::where_select(condition, then, otherwise).unwrap_err();
+
+        assert!(
+            matches!(error, TynxError::Shape(message) if message.contains("cannot broadcast shapes"))
+        );
     }
 
     #[test]
