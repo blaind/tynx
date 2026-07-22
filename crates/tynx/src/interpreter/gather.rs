@@ -142,7 +142,7 @@ pub(super) fn gather_nd(node: &GatherNDNode, env: &Env, device: &Device) -> Resu
     Ok(vec![output])
 }
 
-fn indices_tensor(value: Value, device: &Device) -> Result<DynInt> {
+pub(super) fn indices_tensor(value: Value, device: &Device) -> Result<DynInt> {
     match value {
         Value::Int(indices) => Ok(indices),
         Value::Shape(values) => {
@@ -200,7 +200,7 @@ fn prepend_batch_coordinates(
     DynInt::concat(parts, rank - 1)
 }
 
-fn normalize_coordinate_tuples(
+pub(super) fn normalize_coordinate_tuples(
     indices: DynInt,
     data_dims: &[usize],
     tuple_size: usize,

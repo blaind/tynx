@@ -1,6 +1,8 @@
 //! Rank-erased tensor containers used by the runtime.
 
-use burn::tensor::{Bool, DType, Device, Int, Slice, Tensor, TensorData, activation};
+use burn::tensor::{
+    Bool, DType, Device, IndexingUpdateOp, Int, Slice, Tensor, TensorData, activation,
+};
 
 use crate::error::{Result, TynxError};
 
@@ -479,6 +481,102 @@ macro_rules! gather_nd_dyn {
     };
 }
 
+macro_rules! scatter_dyn {
+    ($tensor:expr, $dim:expr, $indices:expr, $values:expr, $update:expr, $kind:ident) => {
+        match ($tensor, $indices, $values) {
+            ($kind::R1(tensor), DynInt::R1(indices), $kind::R1(values)) => {
+                $kind::R1(tensor.scatter($dim, indices, values, $update))
+            }
+            ($kind::R2(tensor), DynInt::R2(indices), $kind::R2(values)) => {
+                $kind::R2(tensor.scatter($dim, indices, values, $update))
+            }
+            ($kind::R3(tensor), DynInt::R3(indices), $kind::R3(values)) => {
+                $kind::R3(tensor.scatter($dim, indices, values, $update))
+            }
+            ($kind::R4(tensor), DynInt::R4(indices), $kind::R4(values)) => {
+                $kind::R4(tensor.scatter($dim, indices, values, $update))
+            }
+            ($kind::R5(tensor), DynInt::R5(indices), $kind::R5(values)) => {
+                $kind::R5(tensor.scatter($dim, indices, values, $update))
+            }
+            ($kind::R6(tensor), DynInt::R6(indices), $kind::R6(values)) => {
+                $kind::R6(tensor.scatter($dim, indices, values, $update))
+            }
+            (tensor, indices, values) => {
+                return Err(TynxError::Shape(format!(
+                    "scatter ranks differ: data {}, indices {}, updates {}",
+                    tensor.rank(),
+                    indices.rank(),
+                    values.rank()
+                )));
+            }
+        }
+    };
+}
+
+macro_rules! scatter_nd_values {
+    ($tensor:expr, $indices:expr, $values:expr, $update:expr, $kind:ident, $variant:ident) => {
+        match $values {
+            $kind::R1(values) => $kind::$variant($tensor.scatter_nd($indices, values, $update)),
+            $kind::R2(values) => $kind::$variant($tensor.scatter_nd($indices, values, $update)),
+            $kind::R3(values) => $kind::$variant($tensor.scatter_nd($indices, values, $update)),
+            $kind::R4(values) => $kind::$variant($tensor.scatter_nd($indices, values, $update)),
+            $kind::R5(values) => $kind::$variant($tensor.scatter_nd($indices, values, $update)),
+            $kind::R6(values) => $kind::$variant($tensor.scatter_nd($indices, values, $update)),
+        }
+    };
+}
+
+macro_rules! scatter_nd_indices {
+    ($tensor:expr, $indices:expr, $values:expr, $update:expr, $kind:ident, $variant:ident) => {
+        match $indices {
+            DynInt::R1(indices) => {
+                scatter_nd_values!($tensor, indices, $values, $update, $kind, $variant)
+            }
+            DynInt::R2(indices) => {
+                scatter_nd_values!($tensor, indices, $values, $update, $kind, $variant)
+            }
+            DynInt::R3(indices) => {
+                scatter_nd_values!($tensor, indices, $values, $update, $kind, $variant)
+            }
+            DynInt::R4(indices) => {
+                scatter_nd_values!($tensor, indices, $values, $update, $kind, $variant)
+            }
+            DynInt::R5(indices) => {
+                scatter_nd_values!($tensor, indices, $values, $update, $kind, $variant)
+            }
+            DynInt::R6(indices) => {
+                scatter_nd_values!($tensor, indices, $values, $update, $kind, $variant)
+            }
+        }
+    };
+}
+
+macro_rules! scatter_nd_dyn {
+    ($tensor:expr, $indices:expr, $values:expr, $update:expr, $kind:ident) => {
+        match $tensor {
+            $kind::R1(tensor) => {
+                scatter_nd_indices!(tensor, $indices, $values, $update, $kind, R1)
+            }
+            $kind::R2(tensor) => {
+                scatter_nd_indices!(tensor, $indices, $values, $update, $kind, R2)
+            }
+            $kind::R3(tensor) => {
+                scatter_nd_indices!(tensor, $indices, $values, $update, $kind, R3)
+            }
+            $kind::R4(tensor) => {
+                scatter_nd_indices!(tensor, $indices, $values, $update, $kind, R4)
+            }
+            $kind::R5(tensor) => {
+                scatter_nd_indices!(tensor, $indices, $values, $update, $kind, R5)
+            }
+            $kind::R6(tensor) => {
+                scatter_nd_indices!(tensor, $indices, $values, $update, $kind, R6)
+            }
+        }
+    };
+}
+
 impl_concat!(DynTensor);
 impl_concat!(DynInt);
 impl_concat!(DynBool);
@@ -583,6 +681,27 @@ impl DynTensor {
     /// Gather slices using tuples stored in the last index dimension.
     pub fn gather_nd(self, indices: DynInt, output_rank: usize) -> Result<Self> {
         Ok(gather_nd_dyn!(self, indices, output_rank, DynTensor))
+    }
+
+    /// Scatter same-rank updates along one dimension.
+    pub fn scatter(
+        self,
+        dim: usize,
+        indices: DynInt,
+        values: Self,
+        update: IndexingUpdateOp,
+    ) -> Result<Self> {
+        Ok(scatter_dyn!(self, dim, indices, values, update, DynTensor))
+    }
+
+    /// Scatter updates using tuples stored in the last index dimension.
+    pub fn scatter_nd(
+        self,
+        indices: DynInt,
+        values: Self,
+        update: IndexingUpdateOp,
+    ) -> Result<Self> {
+        Ok(scatter_nd_dyn!(self, indices, values, update, DynTensor))
     }
 
     /// Permute the tensor dimensions.
@@ -1224,6 +1343,27 @@ impl DynInt {
         Ok(gather_nd_dyn!(self, indices, output_rank, DynInt))
     }
 
+    /// Scatter same-rank updates along one dimension.
+    pub fn scatter(
+        self,
+        dim: usize,
+        indices: DynInt,
+        values: Self,
+        update: IndexingUpdateOp,
+    ) -> Result<Self> {
+        Ok(scatter_dyn!(self, dim, indices, values, update, DynInt))
+    }
+
+    /// Scatter updates using tuples stored in the last index dimension.
+    pub fn scatter_nd(
+        self,
+        indices: DynInt,
+        values: Self,
+        update: IndexingUpdateOp,
+    ) -> Result<Self> {
+        Ok(scatter_nd_dyn!(self, indices, values, update, DynInt))
+    }
+
     /// Permute the tensor dimensions.
     pub fn permute(self, axes: Vec<usize>) -> Result<Self> {
         if axes.len() != self.rank() {
@@ -1637,6 +1777,27 @@ impl DynBool {
     /// Gather slices using tuples stored in the last index dimension.
     pub fn gather_nd(self, indices: DynInt, output_rank: usize) -> Result<Self> {
         Ok(gather_nd_dyn!(self, indices, output_rank, DynBool))
+    }
+
+    /// Scatter same-rank updates along one dimension.
+    pub fn scatter(
+        self,
+        dim: usize,
+        indices: DynInt,
+        values: Self,
+        update: IndexingUpdateOp,
+    ) -> Result<Self> {
+        Ok(scatter_dyn!(self, dim, indices, values, update, DynBool))
+    }
+
+    /// Scatter updates using tuples stored in the last index dimension.
+    pub fn scatter_nd(
+        self,
+        indices: DynInt,
+        values: Self,
+        update: IndexingUpdateOp,
+    ) -> Result<Self> {
+        Ok(scatter_nd_dyn!(self, indices, values, update, DynBool))
     }
 
     /// Permute the tensor dimensions.

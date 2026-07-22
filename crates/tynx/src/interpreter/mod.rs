@@ -17,6 +17,7 @@ mod pooling;
 mod pow;
 mod reduction;
 mod resolve;
+mod scatter;
 mod shape;
 mod slice;
 mod softmax;
@@ -137,6 +138,8 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Relu(node) => unary::relu(node, env, device),
         Node::Round(node) => unary::round(node, env, device),
         Node::Selu(node) => unary::selu(node, env, device),
+        Node::ScatterElements(node) => scatter::scatter_elements(node, env, device),
+        Node::ScatterND(node) => scatter::scatter_nd(node, env, device),
         Node::Shape(node) => shape::shape_of(node, env, device),
         Node::Sigmoid(node) => unary::sigmoid(node, env, device),
         Node::Sign(node) => unary::sign(node, env, device),
