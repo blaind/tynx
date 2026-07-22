@@ -6,8 +6,23 @@ build-backend = "maturin"
 name = "tynx"
 dynamic = ["version"]
 description = "A lightweight neural network runtime for inference and training"
+readme = "README.md"
 requires-python = ">=3.9"
 license = "MIT OR Apache-2.0"
+keywords = ["onnx", "machine-learning", "neural-network", "inference", "training", "burn"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
+]
+
+[project.urls]
+Repository = "https://github.com/blaind/tynx"
+Issues = "https://github.com/blaind/tynx/issues"
 
 [dependency-groups]
 test = ["pytest>=8,<9", "pytest-xdist>=3,<4"]
