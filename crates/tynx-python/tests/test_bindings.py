@@ -1414,6 +1414,48 @@ def test_tensor_backward_accepts_explicit_gradient() -> None:
         (value * value).backward(tynx.Tensor([1.0]))
 
 
+def test_tensor_repeated_backward_reports_consumed_graph_without_dispatch() -> None:
+    value = tynx.Tensor([2.0], requires_grad=True)
+    output = (value * value).sum()
+
+    output.backward()
+    with pytest.raises(ValueError, match="already freed by a previous backward"):
+        output.backward()
+
+
+def test_tensor_sibling_results_share_backward_consumption() -> None:
+    value = tynx.Tensor([2.0, 3.0], requires_grad=True)
+    shared = value * value
+    first = shared.sum()
+    second = shared.mean()
+
+    first.backward()
+    with pytest.raises(ValueError, match="already freed by a previous backward"):
+        second.backward()
+
+
+def test_tensor_leaf_allows_repeated_backward() -> None:
+    value = tynx.Tensor([2.0], requires_grad=True)
+
+    value.backward()
+    value.backward()
+
+    assert value.grad is not None
+    assert value.grad.tolist() == [2.0]
+
+
+def test_parameter_allows_backward_after_value_generation_changes() -> None:
+    parameter = tynx.Parameter([2.0])
+
+    parameter.backward()
+    parameter.copy_(tynx.Tensor([3.0]))
+    parameter.zero_grad()
+    parameter.backward()
+
+    assert parameter.grad is not None
+    assert parameter.grad.tolist() == [1.0]
+
+
 def test_no_grad_is_nested_and_restores_tracking() -> None:
     value = tynx.Tensor([2.0], requires_grad=True)
     assert tynx.is_grad_enabled()
