@@ -27,7 +27,9 @@ class CompiledFunction(Generic[R]):
         self._signature = signature(function)
         self._fullgraph = fullgraph
         self._static_argnames = _validate_static_argnames(self._signature, static_argnames)
-        self._graphs: list[tuple[tuple[tuple[str, type[object], object], ...], _CapturedGraph]] = []
+        self._graphs: list[
+            tuple[tuple[tuple[str, type[object], object], ...], _CapturedGraph, object]
+        ] = []
         self._fallback = False
         self._warned = False
         self.compile_count = 0
@@ -43,7 +45,7 @@ class CompiledFunction(Generic[R]):
     @property
     def node_counts(self) -> tuple[int, ...]:
         """Recorded IR node count for each cached graph."""
-        return tuple(graph.node_count for _, graph in self._graphs)
+        return tuple(graph.node_count for _, graph, _ in self._graphs)
 
     def clear_cache(self) -> None:
         """Discard captured graphs and retry capture on the next compatible call."""
@@ -69,30 +71,34 @@ class CompiledFunction(Generic[R]):
             return self._function(*args, **kwargs)
 
         tensor_args, static_key = prepared
-        for cached_static_key, graph in self._graphs:
+        for cached_static_key, graph, output_spec in self._graphs:
             if cached_static_key == static_key and graph.matches(*tensor_args):
                 self.replay_count += 1
-                return cast(R, graph(*tensor_args))
+                return cast(R, _restore_output(iter(graph(*tensor_args)), output_spec))
 
         session = _CaptureSession(fullgraph=self._fullgraph)
         traced = iter(session.input(argument) for argument in tensor_args)
         traced_bound = _replace_tensor_arguments(bound, traced)
         output = self._function(*traced_bound.args, **traced_bound.kwargs)
-        if not isinstance(output, Tensor):
-            reason = "a return value other than one Tensor"
+        flattened = _flatten_output(output)
+        if isinstance(flattened, str):
+            reason = flattened
             if self._fullgraph:
                 raise RuntimeError(f"tynx.compile(fullgraph=True) cannot capture {reason}")
             self._disable(reason)
             self.fallback_count += 1
             return output
+        output_tensors, output_spec = flattened
 
-        captured_graph = session.finish(output)
-        released_output = session.release(output)
+        captured_graph = session.finish(tuple(output_tensors))
+        released_output = _restore_output(
+            iter(session.release(tensor) for tensor in output_tensors), output_spec
+        )
         if captured_graph is None:
             self._disable("an unsupported tensor operation or trace-disconnected output")
             self.fallback_count += 1
             return cast(R, released_output)
-        self._graphs.append((static_key, captured_graph))
+        self._graphs.append((static_key, captured_graph, output_spec))
         self.compile_count += 1
         return cast(R, released_output)
 
@@ -139,6 +145,47 @@ def _replace_tensor_arguments(bound: BoundArguments, traced: Iterator[Tensor]) -
         for name, value in bound.arguments.items()
     )
     return BoundArguments(bound.signature, arguments)
+
+
+def _flatten_output(output: object) -> Union[tuple[list[Tensor], object], str]:
+    tensors: list[Tensor] = []
+
+    def visit(value: object) -> object:
+        if isinstance(value, Tensor):
+            index = len(tensors)
+            tensors.append(value)
+            return ("tensor", index)
+        if isinstance(value, tuple):
+            return ("tuple", tuple(visit(item) for item in value))
+        if isinstance(value, list):
+            return ("list", tuple(visit(item) for item in value))
+        if isinstance(value, dict) and all(isinstance(key, str) for key in value):
+            return ("dict", tuple((key, visit(item)) for key, item in value.items()))
+        raise TypeError(type(value).__qualname__)
+
+    try:
+        spec = visit(output)
+    except TypeError as error:
+        return f"a return value containing unsupported type {error.args[0]}"
+    if not tensors:
+        return "a return value without any Tensor outputs"
+    return tensors, spec
+
+
+def _restore_output(tensors: Iterator[Tensor], spec: object) -> object:
+    kind, contents = cast(tuple[str, object], spec)
+    if kind == "tensor":
+        return next(tensors)
+    if kind == "tuple":
+        return tuple(_restore_output(tensors, item) for item in cast(tuple[object, ...], contents))
+    if kind == "list":
+        return [_restore_output(tensors, item) for item in cast(tuple[object, ...], contents)]
+    if kind == "dict":
+        return {
+            key: _restore_output(tensors, item)
+            for key, item in cast(tuple[tuple[str, object], ...], contents)
+        }
+    raise RuntimeError(f"unknown captured output kind {kind!r}")
 
 
 def _validate_static_argnames(signature: Signature, names: Iterable[str]) -> frozenset[str]:

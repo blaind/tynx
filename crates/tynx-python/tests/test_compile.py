@@ -27,6 +27,37 @@ def test_compile_replays_linear_relu_without_python_dispatch() -> None:
     assert compiled.node_counts == (6,)
 
 
+def test_compile_preserves_nested_multi_output_structure() -> None:
+    calls = 0
+
+    @tynx.compile(fullgraph=True)
+    def forward(input: tynx.Tensor) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        activated = input.relu()
+        return {"raw": input, "derived": (activated, [activated.sigmoid()])}
+
+    first = forward(tynx.Tensor([-1.0, 2.0]))
+    second = forward(tynx.Tensor([3.0, -4.0]))
+
+    first_raw = first["raw"]
+    second_raw = second["raw"]
+    assert isinstance(first_raw, tynx.Tensor)
+    assert first_raw.tolist() == [-1.0, 2.0]
+    assert isinstance(second_raw, tynx.Tensor)
+    assert second_raw.tolist() == [3.0, -4.0]
+    derived = second["derived"]
+    assert isinstance(derived, tuple)
+    assert isinstance(derived[0], tynx.Tensor)
+    assert derived[0].tolist() == [3.0, 0.0]
+    assert isinstance(derived[1], list)
+    assert isinstance(derived[1][0], tynx.Tensor)
+    assert derived[1][0].tolist() == pytest.approx([0.95257413, 0.5])
+    assert calls == 1
+    assert forward.compile_count == 1
+    assert forward.replay_count == 1
+
+
 def test_compile_replay_preserves_input_and_parameter_gradients() -> None:
     weight = tynx.Parameter([[2.0], [-1.0]], name="weight")
 

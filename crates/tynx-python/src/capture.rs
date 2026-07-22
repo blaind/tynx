@@ -105,7 +105,7 @@ impl CaptureState {
         Ok(())
     }
 
-    fn finish(&self, output: ValueId) -> PyResult<Option<Graph>> {
+    fn finish(&self, outputs: Vec<ValueId>) -> PyResult<Option<Graph>> {
         let mut inner = self.inner.borrow_mut();
         if let Some(reason) = inner.failure.take() {
             inner.builder = None;
@@ -118,10 +118,7 @@ impl CaptureState {
             };
         }
         let builder = inner.builder.take().ok_or_else(capture_finished)?;
-        builder
-            .finish(vec![output])
-            .map(Some)
-            .map_err(to_python_error)
+        builder.finish(outputs).map(Some).map_err(to_python_error)
     }
 }
 
@@ -300,20 +297,25 @@ impl PyCaptureSession {
         }))
     }
 
-    fn finish(&self, output: PyRef<'_, PyTensor>) -> PyResult<Option<PyCapturedGraph>> {
+    fn finish(&self, outputs: &Bound<'_, PyTuple>) -> PyResult<Option<PyCapturedGraph>> {
         deactivate(&self.state);
-        let Some(trace) = output.trace() else {
-            self.state
-                .unsupported("a function whose output is not connected to its Tensor inputs")?;
-            return Ok(None);
-        };
-        if !Rc::ptr_eq(&self.state, &trace.state) {
-            self.state
-                .unsupported("an output from another capture session")?;
-            return Ok(None);
+        let mut values = Vec::with_capacity(outputs.len());
+        for output in outputs.iter() {
+            let output = output.extract::<PyRef<'_, PyTensor>>()?;
+            let Some(trace) = output.trace() else {
+                self.state
+                    .unsupported("a function output disconnected from its Tensor inputs")?;
+                return Ok(None);
+            };
+            if !Rc::ptr_eq(&self.state, &trace.state) {
+                self.state
+                    .unsupported("an output from another capture session")?;
+                return Ok(None);
+            }
+            values.push(trace.value);
         }
         self.state
-            .finish(trace.value)
+            .finish(values)
             .map(|graph| graph.map(PyCapturedGraph::new))
     }
 
@@ -376,26 +378,30 @@ impl PyCapturedGraph {
     }
 
     #[pyo3(signature = (*inputs))]
-    fn __call__(&self, inputs: &Bound<'_, PyTuple>) -> PyResult<PyTensor> {
+    fn __call__(&self, py: Python<'_>, inputs: &Bound<'_, PyTuple>) -> PyResult<Py<PyTuple>> {
         let inputs = Self::inputs(inputs, "captured graph replay")?;
         let tracking = is_grad_enabled();
         let values = inputs
             .iter()
             .map(|input| input.operation_float_value(tracking, "captured graph replay"))
             .collect::<PyResult<Vec<_>>>()?;
-        let mut outputs = self.graph.run(&values, tracking).map_err(to_python_error)?;
-        let output = outputs
-            .pop()
-            .expect("capture graphs are constructed with one output");
-        if tracking {
-            let sources = inputs.iter().map(|input| &**input).collect::<Vec<_>>();
-            Ok(PyTensor::from_imported_operation(
-                output,
-                &sources,
-                self.parameters.iter().cloned(),
-            ))
-        } else {
-            Ok(PyTensor::from_inner(output))
-        }
+        let outputs = self.graph.run(&values, tracking).map_err(to_python_error)?;
+        let sources = inputs.iter().map(|input| &**input).collect::<Vec<_>>();
+        let outputs = outputs
+            .into_iter()
+            .map(|output| {
+                let tensor = if tracking {
+                    PyTensor::from_imported_operation(
+                        output,
+                        &sources,
+                        self.parameters.iter().cloned(),
+                    )
+                } else {
+                    PyTensor::from_inner(output)
+                };
+                Py::new(py, tensor)
+            })
+            .collect::<PyResult<Vec<_>>>()?;
+        PyTuple::new(py, outputs).map(Bound::unbind)
     }
 }
