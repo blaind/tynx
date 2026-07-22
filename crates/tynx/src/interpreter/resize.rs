@@ -18,15 +18,19 @@ pub(super) fn resize(node: &ResizeNode, env: &Env, device: &Device) -> Result<Ve
         )));
     }
     let (output_size, scales) = resolve_geometry(node, env, device, &dims)?;
+    let crop_roi = resolve_crop_roi(node, env, device)?;
 
     let output = match node.config.mode {
-        ResizeMode::Nearest => nearest_resize(node, input, &dims, output_size, scales, device)?,
+        ResizeMode::Nearest => {
+            nearest_resize(node, input, &dims, output_size, scales, crop_roi, device)?
+        }
         ResizeMode::Linear | ResizeMode::Cubic => match input {
             Value::Tensor(tensor) => Value::Tensor(interpolate_2d(
                 tensor,
                 &dims,
                 output_size,
                 scales,
+                crop_roi,
                 node,
                 device,
             )?),
@@ -81,13 +85,10 @@ fn resolve_geometry(
 
     let scales = match node.config.scales.as_ref() {
         Some(ResizeScales::Static(scales)) => scales.clone(),
-        Some(ResizeScales::Runtime(reference)) => float_values(resolve::at(
-            env,
-            &node.name,
-            &node.inputs,
-            reference.input_index,
-            device,
-        )?)?,
+        Some(ResizeScales::Runtime(reference)) => float_values(
+            resolve::at(env, &node.name, &node.inputs, reference.input_index, device)?,
+            "scales",
+        )?,
         None => return Err(TynxError::Shape("Resize requires scales or sizes".into())),
     };
     let scales = spatial_values(&scales, "scales")?;
@@ -117,14 +118,78 @@ fn spatial_values<T: Copy>(values: &[T], name: &str) -> Result<[T; 2]> {
     }
 }
 
-fn float_values(value: Value) -> Result<Vec<f32>> {
+fn float_values(value: Value, name: &str) -> Result<Vec<f32>> {
     match value {
         Value::Tensor(tensor) => Ok(tensor.into_data().iter::<f32>().collect()),
         Value::Shape(values) => Ok(values.into_iter().map(|value| value as f32).collect()),
         other => Err(TynxError::TypeMismatch(format!(
-            "Resize scales must be a float tensor, got {other:?}"
+            "Resize {name} must be a float tensor, got {other:?}"
         ))),
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CropRoi {
+    height: [f64; 2],
+    width: [f64; 2],
+}
+
+impl CropRoi {
+    fn for_axis(self, axis: usize) -> Option<[f64; 2]> {
+        match axis {
+            2 => Some(self.height),
+            3 => Some(self.width),
+            _ => None,
+        }
+    }
+}
+
+fn resolve_crop_roi(node: &ResizeNode, env: &Env, device: &Device) -> Result<Option<CropRoi>> {
+    if !matches!(
+        node.config.coordinate_transformation_mode,
+        CoordinateTransformMode::TfCropAndResize
+    ) {
+        return Ok(None);
+    }
+    if node.config.extrapolation_value != 0.0 {
+        return Err(TynxError::UnsupportedOp(
+            "Resize tf_crop_and_resize with nonzero extrapolation".into(),
+        ));
+    }
+    let roi = float_values(
+        resolve::at(env, &node.name, &node.inputs, 1, device)?,
+        "roi",
+    )?;
+    let [
+        n_start,
+        c_start,
+        h_start,
+        w_start,
+        n_end,
+        c_end,
+        h_end,
+        w_end,
+    ] = roi.as_slice()
+    else {
+        return Err(TynxError::Shape(format!(
+            "Resize tf_crop_and_resize ROI must have 8 NCHW values, got {}",
+            roi.len()
+        )));
+    };
+    if !roi.iter().all(|value| value.is_finite()) {
+        return Err(TynxError::Shape(
+            "Resize tf_crop_and_resize ROI must be finite".into(),
+        ));
+    }
+    if (*n_start, *c_start, *n_end, *c_end) != (0.0, 0.0, 1.0, 1.0) {
+        return Err(TynxError::UnsupportedOp(
+            "Resize tf_crop_and_resize over batch or channel axes".into(),
+        ));
+    }
+    Ok(Some(CropRoi {
+        height: [f64::from(*h_start), f64::from(*h_end)],
+        width: [f64::from(*w_start), f64::from(*w_end)],
+    }))
 }
 
 fn nearest_resize(
@@ -133,15 +198,16 @@ fn nearest_resize(
     input_dims: &[usize],
     output_size: [usize; 2],
     scales: [f64; 2],
+    crop_roi: Option<CropRoi>,
     device: &Device,
 ) -> Result<Value> {
-    reject_crop_coordinates(node)?;
     let height = nearest_indices(
         input_dims[2],
         output_size[0],
         scales[0],
         &node.config.coordinate_transformation_mode,
         &node.config.nearest_mode,
+        crop_roi.and_then(|roi| roi.for_axis(2)),
     )?;
     let width = nearest_indices(
         input_dims[3],
@@ -149,6 +215,7 @@ fn nearest_resize(
         scales[1],
         &node.config.coordinate_transformation_mode,
         &node.config.nearest_mode,
+        crop_roi.and_then(|roi| roi.for_axis(3)),
     )?;
     let height = DynInt::from_data(TensorData::new(height, [output_size[0]]), 1, device)?;
     let width = DynInt::from_data(TensorData::new(width, [output_size[1]]), 1, device)?;
@@ -169,6 +236,7 @@ fn nearest_indices(
     scale: f64,
     transform: &CoordinateTransformMode,
     nearest: &NearestMode,
+    crop_roi: Option<[f64; 2]>,
 ) -> Result<Vec<i64>> {
     if input_size == 0 || output_size == 0 {
         return Err(TynxError::Shape(
@@ -177,7 +245,13 @@ fn nearest_indices(
     }
     (0..output_size)
         .map(|output| {
-            let source = source_coordinate(output, input_size, output_size, scale, transform);
+            let source =
+                source_coordinate(output, input_size, output_size, scale, transform, crop_roi)?;
+            if crop_roi.is_some() && !(0.0..=(input_size - 1) as f64).contains(&source) {
+                return Err(TynxError::UnsupportedOp(
+                    "nearest Resize tf_crop_and_resize extrapolation".into(),
+                ));
+            }
             let index = match nearest {
                 NearestMode::RoundPreferFloor => (source - 0.5).ceil(),
                 NearestMode::RoundPreferCeil => (source + 0.5).floor(),
@@ -194,16 +268,17 @@ fn interpolate_2d(
     input_dims: &[usize],
     output_size: [usize; 2],
     scales: [f64; 2],
+    crop_roi: Option<CropRoi>,
     node: &ResizeNode,
     device: &Device,
 ) -> Result<DynTensor> {
-    reject_crop_coordinates(node)?;
     let tensor = interpolate_axis(
         tensor,
         2,
         input_dims[2],
         output_size[0],
         scales[0],
+        crop_roi.and_then(|roi| roi.for_axis(2)),
         node,
         device,
     )?;
@@ -213,6 +288,7 @@ fn interpolate_2d(
         input_dims[3],
         output_size[1],
         scales[1],
+        crop_roi.and_then(|roi| roi.for_axis(3)),
         node,
         device,
     )
@@ -225,6 +301,7 @@ fn interpolate_axis(
     input_size: usize,
     output_size: usize,
     scale: f64,
+    crop_roi: Option<[f64; 2]>,
     node: &ResizeNode,
     device: &Device,
 ) -> Result<DynTensor> {
@@ -242,22 +319,30 @@ fn interpolate_axis(
             output_size,
             scale,
             &node.config.coordinate_transformation_mode,
-        );
+            crop_roi,
+        )?;
+        let extrapolated =
+            crop_roi.is_some() && !(0.0..=(input_size.saturating_sub(1)) as f64).contains(&source);
         let base = source.floor() as i64;
         if tap_count == 2 {
             let fraction = source - source.floor();
             tap_indices[0].push(clamp_index(base, input_size));
             tap_indices[1].push(clamp_index(base + 1, input_size));
-            tap_weights[0].push((1.0 - fraction) as f32);
-            tap_weights[1].push(fraction as f32);
+            tap_weights[0].push(if extrapolated {
+                0.0
+            } else {
+                (1.0 - fraction) as f32
+            });
+            tap_weights[1].push(if extrapolated { 0.0 } else { fraction as f32 });
         } else {
             for tap in 0..4 {
                 let index = base + tap as i64 - 1;
                 tap_indices[tap].push(clamp_index(index, input_size));
-                tap_weights[tap].push(cubic_weight(
-                    source - index as f64,
-                    node.config.cubic_coeff_a as f64,
-                ) as f32);
+                tap_weights[tap].push(if extrapolated {
+                    0.0
+                } else {
+                    cubic_weight(source - index as f64, node.config.cubic_coeff_a as f64) as f32
+                });
             }
         }
     }
@@ -287,9 +372,10 @@ fn source_coordinate(
     output_size: usize,
     scale: f64,
     transform: &CoordinateTransformMode,
-) -> f64 {
+    crop_roi: Option<[f64; 2]>,
+) -> Result<f64> {
     let output = output as f64;
-    match transform {
+    Ok(match transform {
         CoordinateTransformMode::HalfPixel => (output + 0.5) / scale - 0.5,
         CoordinateTransformMode::PytorchHalfPixel => {
             if output_size > 1 {
@@ -308,8 +394,18 @@ fn source_coordinate(
         }
         CoordinateTransformMode::Asymmetric => output / scale,
         CoordinateTransformMode::TfHalfPixelForNn => (output + 0.5) / scale,
-        CoordinateTransformMode::TfCropAndResize => unreachable!(),
-    }
+        CoordinateTransformMode::TfCropAndResize => {
+            let [start, end] = crop_roi.ok_or_else(|| {
+                TynxError::Shape("Resize tf_crop_and_resize is missing ROI values".into())
+            })?;
+            let last = input_size.saturating_sub(1) as f64;
+            if output_size > 1 {
+                start * last + output * (end - start) * last / (output_size - 1) as f64
+            } else {
+                0.5 * (start + end) * last
+            }
+        }
+    })
 }
 
 fn clamp_index(index: i64, size: usize) -> i64 {
@@ -329,22 +425,79 @@ fn cubic_weight(distance: f64, coefficient: f64) -> f64 {
     }
 }
 
-fn reject_crop_coordinates(node: &ResizeNode) -> Result<()> {
-    if matches!(
-        node.config.coordinate_transformation_mode,
-        CoordinateTransformMode::TfCropAndResize
-    ) {
-        Err(TynxError::UnsupportedOp(
-            "Resize tf_crop_and_resize coordinates".into(),
-        ))
-    } else {
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use onnx_ir::{
+        DType,
+        ir::RuntimeInputRef,
+        node::resize::{ResizeConfig, ResizeNodeBuilder},
+    };
+
     use super::*;
+
+    #[test]
+    fn linearly_resizes_a_spatial_crop() {
+        let node = ResizeNodeBuilder::new("resize")
+            .input_tensor("x", 4, DType::F32)
+            .input_tensor("roi", 1, DType::F32)
+            .input_tensor("sizes", 1, DType::I64)
+            .output_tensor("y", 4, DType::F32)
+            .config(ResizeConfig {
+                mode: ResizeMode::Linear,
+                sizes: Some(ResizeSizes::Runtime(RuntimeInputRef {
+                    name: "sizes".into(),
+                    input_index: 2,
+                })),
+                coordinate_transformation_mode: CoordinateTransformMode::TfCropAndResize,
+                ..Default::default()
+            })
+            .build();
+        let device = Device::default();
+        let mut env = Env::new();
+        env.insert(
+            "x".into(),
+            Value::from_tensor_data(
+                TensorData::new(
+                    (1..=16).map(|value| value as f32).collect::<Vec<_>>(),
+                    [1, 1, 4, 4],
+                ),
+                4,
+                &device,
+            )
+            .unwrap(),
+        );
+        env.insert(
+            "roi".into(),
+            Value::from_tensor_data(
+                TensorData::new(vec![0.0_f32, 0.0, 0.4, 0.6, 1.0, 1.0, 0.6, 0.8], [8]),
+                1,
+                &device,
+            )
+            .unwrap(),
+        );
+        env.insert(
+            "sizes".into(),
+            Value::from_tensor_data(TensorData::new(vec![1_i64, 1, 3, 3], [4]), 1, &device)
+                .unwrap(),
+        );
+
+        let output = resize(&node, &env, &device)
+            .unwrap()
+            .pop()
+            .unwrap()
+            .into_tensor()
+            .unwrap();
+
+        assert_eq!(output.dims(), [1, 1, 3, 3]);
+        let output = output.into_data().iter::<f32>().collect::<Vec<_>>();
+        let expected = [7.6_f32, 7.9, 8.2, 8.8, 9.1, 9.4, 10.0, 10.3, 10.6];
+        assert!(
+            output
+                .iter()
+                .zip(expected)
+                .all(|(actual, expected)| (actual - expected).abs() < 1e-5)
+        );
+    }
 
     #[test]
     fn nearest_asymmetric_floor_repeats_source_cells() {
@@ -354,7 +507,8 @@ mod tests {
                 4,
                 2.0,
                 &CoordinateTransformMode::Asymmetric,
-                &NearestMode::Floor
+                &NearestMode::Floor,
+                None,
             )
             .unwrap(),
             [0, 0, 1, 1]
@@ -369,7 +523,8 @@ mod tests {
                 5,
                 5.0 / 3.0,
                 &CoordinateTransformMode::AlignCorners,
-                &NearestMode::RoundPreferFloor
+                &NearestMode::RoundPreferFloor,
+                None,
             )
             .unwrap(),
             [0, 0, 1, 1, 2]

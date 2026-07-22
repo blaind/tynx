@@ -1227,7 +1227,7 @@
     "test_resize_downsample_sizes_nearest": "pass",
     "test_resize_downsample_sizes_nearest_not_larger": "parse_unsupported",
     "test_resize_downsample_sizes_nearest_not_smaller": "parse_unsupported",
-    "test_resize_tf_crop_and_resize": "runtime_unsupported",
+    "test_resize_tf_crop_and_resize": "pass",
     "test_resize_tf_crop_and_resize_axes_2_3": "parse_unsupported",
     "test_resize_tf_crop_and_resize_axes_3_2": "parse_unsupported",
     "test_resize_tf_crop_and_resize_extrapolation_value": "parse_unsupported",
