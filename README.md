@@ -62,9 +62,10 @@ tested headless in Chrome on both CPU and WebGPU. The workspace forbids `unsafe`
 
 ## Benchmarks
 
-Tynx includes a reproducible benchmark suite comparing its runtime with burn-onnx AOT and ONNX
-Runtime. See the [benchmark suite](benchmarks/README.md) for the workloads, methodology, and local
-commands. [CI benchmark runs](https://github.com/blaind/tynx/actions/workflows/benchmarks.yml)
+Tynx includes a reproducible benchmark suite comparing inference with burn-onnx AOT and ONNX
+Runtime, plus matched imported-model training against Burn AOT. See the
+[benchmark suite](benchmarks/README.md) for the workloads, synchronization and warmup methodology,
+and local commands. [CI benchmark runs](https://github.com/blaind/tynx/actions/workflows/benchmarks.yml)
 publish job summaries and downloadable JSON results.
 
 ## Relationship to Burn
