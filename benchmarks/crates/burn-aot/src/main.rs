@@ -31,6 +31,11 @@ mod matmul_add_relu_dynamic {
 mod tiny_cnn {
     include!(concat!(env!("OUT_DIR"), "/model/tiny_cnn.rs"));
 }
+#[cfg(feature = "mobilenet")]
+#[allow(dead_code)]
+mod mobilenetv2 {
+    include!(concat!(env!("OUT_DIR"), "/model/mobilenetv2.rs"));
+}
 
 fn main() -> BenchResult<()> {
     require_release()?;
@@ -57,6 +62,10 @@ fn run_case(
             run_matmul_add_relu(case, backend, device, device_name)
         }
         "models/tiny_cnn.onnx" => run_tiny_cnn(case, backend, device, device_name),
+        #[cfg(feature = "mobilenet")]
+        "external/mobilenetv2_100_opset16.onnx" => {
+            run_mobilenet(case, backend, device, device_name)
+        }
         model => Err(format!("burn AOT runner does not embed model '{model}'").into()),
     }
 }
@@ -200,6 +209,39 @@ fn run_tiny_cnn(
     let model = tiny_cnn::Model::from_bytes(
         Bytes::from_bytes_vec(
             include_bytes!(concat!(env!("OUT_DIR"), "/model/tiny_cnn.bpk")).to_vec(),
+        ),
+        device,
+    );
+    let load_ms = started.elapsed().as_secs_f64() * 1_000.0;
+
+    measure("burn-onnx-aot", backend, device_name, load_ms, case, || {
+        let input = Tensor::<4>::from_data(
+            TensorData::new(input.values.clone(), input.shape.clone()),
+            device,
+        );
+        let output = model.forward(input).into_data();
+        Ok(output.convert::<f32>().to_vec::<f32>()?)
+    })
+}
+
+#[cfg(feature = "mobilenet")]
+fn run_mobilenet(
+    case: &Case,
+    backend: &str,
+    device: &Device,
+    device_name: Option<String>,
+) -> BenchResult<Report> {
+    let [input] = case.inputs.as_slice() else {
+        return Err("the MobileNetV2 AOT model expects one input".into());
+    };
+    if input.shape.len() != 4 {
+        return Err("the MobileNetV2 AOT model expects a rank-4 input".into());
+    }
+
+    let started = Instant::now();
+    let model = mobilenetv2::Model::from_bytes(
+        Bytes::from_bytes_vec(
+            include_bytes!(concat!(env!("OUT_DIR"), "/model/mobilenetv2.bpk")).to_vec(),
         ),
         device,
     );

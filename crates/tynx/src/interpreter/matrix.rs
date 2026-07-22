@@ -2,7 +2,8 @@
 
 use burn::tensor::{DType, Device, linalg::det as burn_det};
 use onnx_ir::node::{
-    det::DetNode, gemm::GemmNode, matmul::MatMulNode, matmulinteger::MatMulIntegerNode,
+    det::DetNode, gemm::GemmNode, linear::LinearNode, matmul::MatMulNode,
+    matmulinteger::MatMulIntegerNode,
 };
 
 use super::{Env, resolve, shape};
@@ -68,6 +69,37 @@ pub(super) fn gemm(node: &GemmNode, env: &Env, device: &Device) -> Result<Vec<Va
             other => {
                 return Err(TynxError::TypeMismatch(format!(
                     "Gemm bias must be a float tensor or scalar, got {other:?}"
+                )));
+            }
+        };
+    }
+
+    Ok(vec![Value::Tensor(output)])
+}
+
+pub(super) fn linear(node: &LinearNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
+    let input = resolve::at(env, &node.name, &node.inputs, 0, device)?.into_tensor()?;
+    let mut weight = resolve::at(env, &node.name, &node.inputs, 1, device)?.into_tensor()?;
+    if node.config.transpose_weight {
+        weight = weight.permute(vec![1, 0])?;
+    }
+
+    let dtype = input.dtype();
+    let mut output = matmul_values(
+        Value::Tensor(input),
+        Value::Tensor(weight.cast(dtype)),
+        device,
+    )?
+    .into_tensor()?;
+
+    if node.inputs.get(2).is_some_and(|input| !input.is_optional()) {
+        let bias = resolve::at(env, &node.name, &node.inputs, 2, device)?;
+        output = match bias {
+            Value::Tensor(bias) => output.add_broadcast(bias.cast(dtype))?,
+            Value::Scalar(bias) => output.add_scalar(bias.as_f64()),
+            other => {
+                return Err(TynxError::TypeMismatch(format!(
+                    "Linear bias must be a float tensor or scalar, got {other:?}"
                 )));
             }
         };
@@ -230,10 +262,63 @@ mod tests {
     use burn::tensor::TensorData;
     use onnx_ir::{
         DType,
-        node::{det::DetNodeBuilder, matmul::MatMulNodeBuilder},
+        ir::{ArgType, Argument, TensorType},
+        node::{
+            det::DetNodeBuilder,
+            linear::{LinearConfig, LinearNode},
+            matmul::MatMulNodeBuilder,
+        },
     };
 
     use super::*;
+
+    #[test]
+    fn executes_linear_with_transposed_weight_and_bias() {
+        let tensor = |name, shape: Vec<usize>| {
+            Argument::new(
+                name,
+                ArgType::Tensor(TensorType::new_known(DType::F32, shape)),
+            )
+        };
+        let node = LinearNode {
+            name: "linear".into(),
+            inputs: vec![
+                tensor("input", vec![2, 2]),
+                tensor("weight", vec![3, 2]),
+                tensor("bias", vec![3]),
+            ],
+            outputs: vec![tensor("output", vec![2, 3])],
+            config: LinearConfig::new(true),
+        };
+        let device = Device::default();
+        let mut env = Env::new();
+        for (name, values, shape) in [
+            ("input", vec![1.0_f32, 2.0, 3.0, 4.0], vec![2, 2]),
+            ("weight", vec![1.0_f32, 0.0, 0.0, 1.0, 1.0, 1.0], vec![3, 2]),
+            ("bias", vec![0.5_f32, 1.0, -1.0], vec![3]),
+        ] {
+            env.insert(
+                name.into(),
+                Value::from_tensor_data(
+                    TensorData::new(values, shape.clone()),
+                    shape.len(),
+                    &device,
+                )
+                .unwrap(),
+            );
+        }
+
+        let output = linear(&node, &env, &device)
+            .unwrap()
+            .remove(0)
+            .into_tensor()
+            .unwrap();
+
+        assert_eq!(
+            output.into_data().to_vec::<f32>().unwrap(),
+            vec![1.5, 3.0, 2.0, 3.5, 5.0, 6.0]
+        );
+    }
 
     #[test]
     fn multiplies_two_matrices() {

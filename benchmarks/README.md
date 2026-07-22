@@ -6,7 +6,7 @@ This standalone Rust workspace compares the same ONNX model and input across:
 - ONNX Runtime
 - burn-onnx ahead-of-time generated Rust
 
-The registry starts with seven workloads:
+The registry contains ten self-contained workloads and one optional cached model:
 
 | Case | Purpose |
 | --- | --- |
@@ -16,12 +16,15 @@ The registry starts with seven workloads:
 | `matmul-512x512` | Medium dynamic-shape scaling point |
 | `matmul-1024x1024` | Large dynamic-shape scaling point |
 | `matmul-add-relu-256x256` | Small multi-op graph with broadcast input |
-| `tiny-cnn-32` | Compact image classifier with embedded parameters |
+| `tiny-cnn-32` | Compact image classifier, batch 1 |
+| `tiny-cnn-32-b8` | Compact image classifier, batch 8 |
+| `tiny-cnn-32-b32` | Compact image classifier, batch 32 |
+| `tiny-cnn-32-b128` | Compact image classifier, batch 128 |
+| `mobilenetv2-100-b1` | Pretrained MobileNetV2 1.0 ImageNet classifier |
 
-The tiny CNN runs Conv, ReLU, MaxPool, global average pooling, Gemm, and Softmax over a 32x32 RGB
-input. Its deterministic parameters and reference probabilities make it a repeatable structural
-workload, not an accuracy benchmark. Larger representative models are still needed before drawing
-system-level performance conclusions.
+The tiny CNN runs Conv, ReLU, MaxPool, global average pooling, Gemm, and Softmax over repeated 32x32
+RGB inputs. Its dynamic batch dimension and deterministic reference probabilities make it a
+repeatable scaling workload, not an accuracy benchmark.
 
 ## CPU
 
@@ -37,6 +40,22 @@ Each runner executes every registered case by default and emits one JSON report 
 `TYNX_BENCH_CASE` to limit a run to one case. The manual GitHub workflow invokes each engine once,
 adds a comparison table to the job summary, and uploads its JSON reports. Leave the workflow
 iteration inputs blank to use the per-case defaults.
+
+## MobileNetV2
+
+MobileNetV2 is opt-in so normal builds do not download or embed its 14 MB of weights. Fetch the
+pinned model, then enable it for any runner:
+
+```sh
+export TYNX_BENCH_MOBILENET_PATH="$(benchmarks/models/fetch-mobilenetv2.sh)"
+TYNX_BENCH_CASE=mobilenetv2-100-b1 \
+  cargo run --manifest-path benchmarks/Cargo.toml --locked --release \
+  -p tynx-bench --features mobilenet
+```
+
+The fetcher caches the model under `.cache/benchmark-models` and verifies SHA-256
+`c1793982c0504e1808e7d0d99d4cc5972de35137d6b5e8492573ecb72b2e241f`. It is the Apache-2.0
+licensed [ONNX Model Zoo MobileNetV2 1.0 opset 16 model](https://github.com/onnx/models/tree/d55d2baeb0d6641643d5295a4f42b545fcf9d9e2/Computer_Vision/mobilenetv2_100_Opset16_timm).
 
 ## GPU
 
@@ -72,8 +91,9 @@ Every runner:
 
 MatMul cases report estimated GFLOP/s using the conventional `2 * M * N * K` operation count. The
 tiny CNN uses two operations per Conv and Gemm multiply-accumulate. Other operators are excluded
-from its estimate. Timing includes host input construction and host output materialization, so the
-value measures end-to-end inference rather than kernel-only throughput.
+from its estimate. MobileNetV2 uses the same convention for Conv and Gemm. Batched model cases also
+report images per second. Timing includes host input construction and host output materialization,
+so the value measures end-to-end inference rather than kernel-only throughput.
 
 Override the selected case and sample counts with:
 

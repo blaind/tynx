@@ -6,6 +6,7 @@ license.workspace = true
 publish.workspace = true
 
 [features]
+mobilenet = []
 wgpu-device = ["dep:pollster", "dep:wgpu"]
 
 [dependencies]

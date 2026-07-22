@@ -170,6 +170,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::LayerNormalization(node) => normalization::layer_normalization(node, env, device),
         Node::Less(node) => comparison::less(node, env, device),
         Node::LessOrEqual(node) => comparison::less_or_equal(node, env, device),
+        Node::Linear(node) => matrix::linear(node, env, device),
         Node::Log(node) => unary::log(node, env, device),
         Node::LogSoftmax(node) => softmax::log_softmax(node, env, device),
         Node::Loop(node) => control_flow::loop_node(node, env, device),

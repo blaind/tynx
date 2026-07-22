@@ -240,7 +240,120 @@
       "tolerance": 0.0001,
       "warmup": 20,
       "iterations": 200,
-      "estimated_flops": 1032512
+      "estimated_flops": 1032512,
+      "batch_size": 1
+    },
+    {
+      "id": "tiny-cnn-32-b8",
+      "model": "models/tiny_cnn.onnx",
+      "inputs": [
+        {
+          "name": "input",
+          "shape": [8, 3, 32, 32],
+          "data": {
+            "kind": "repeated_linear",
+            "start": -1.0,
+            "step": 0.00065125366,
+            "period": 3072
+          }
+        }
+      ],
+      "expected": {
+        "shape": [8, 10],
+        "data": {
+          "kind": "repeated_explicit",
+          "values": [0.0982463658, 0.0990530327, 0.0997324586, 0.1002615094, 0.1006218567, 0.1008008495, 0.100792177, 0.1005961373, 0.1002196521, 0.0996759161]
+        }
+      },
+      "tolerance": 0.0001,
+      "warmup": 20,
+      "iterations": 100,
+      "estimated_flops": 8260096,
+      "batch_size": 8
+    },
+    {
+      "id": "tiny-cnn-32-b32",
+      "model": "models/tiny_cnn.onnx",
+      "inputs": [
+        {
+          "name": "input",
+          "shape": [32, 3, 32, 32],
+          "data": {
+            "kind": "repeated_linear",
+            "start": -1.0,
+            "step": 0.00065125366,
+            "period": 3072
+          }
+        }
+      ],
+      "expected": {
+        "shape": [32, 10],
+        "data": {
+          "kind": "repeated_explicit",
+          "values": [0.0982463658, 0.0990530327, 0.0997324586, 0.1002615094, 0.1006218567, 0.1008008495, 0.100792177, 0.1005961373, 0.1002196521, 0.0996759161]
+        }
+      },
+      "tolerance": 0.0001,
+      "warmup": 10,
+      "iterations": 50,
+      "estimated_flops": 33040384,
+      "batch_size": 32
+    },
+    {
+      "id": "tiny-cnn-32-b128",
+      "model": "models/tiny_cnn.onnx",
+      "inputs": [
+        {
+          "name": "input",
+          "shape": [128, 3, 32, 32],
+          "data": {
+            "kind": "repeated_linear",
+            "start": -1.0,
+            "step": 0.00065125366,
+            "period": 3072
+          }
+        }
+      ],
+      "expected": {
+        "shape": [128, 10],
+        "data": {
+          "kind": "repeated_explicit",
+          "values": [0.0982463658, 0.0990530327, 0.0997324586, 0.1002615094, 0.1006218567, 0.1008008495, 0.100792177, 0.1005961373, 0.1002196521, 0.0996759161]
+        }
+      },
+      "tolerance": 0.0001,
+      "warmup": 5,
+      "iterations": 20,
+      "estimated_flops": 132161536,
+      "batch_size": 128
+    },
+    {
+      "id": "mobilenetv2-100-b1",
+      "model": "external/mobilenetv2_100_opset16.onnx",
+      "required_feature": "mobilenet",
+      "inputs": [
+        {
+          "name": "x",
+          "shape": [1, 3, 224, 224],
+          "data": {
+            "kind": "linear",
+            "start": -1.0,
+            "step": 0.000013286653
+          }
+        }
+      ],
+      "expected": {
+        "shape": [1, 1000],
+        "data": {
+          "kind": "reference",
+          "path": "models/mobilenetv2_100_opset16.expected.json"
+        }
+      },
+      "tolerance": 0.001,
+      "warmup": 5,
+      "iterations": 20,
+      "estimated_flops": 601548544,
+      "batch_size": 1
     }
   ]
 }
