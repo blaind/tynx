@@ -303,8 +303,18 @@ impl AdamEngine {
     fn set_learning_rate(&mut self, learning_rate: f64) -> Result<()> {
         let mut next = self.config;
         next.learning_rate = learning_rate;
-        validate_config(next)?;
-        self.config = next;
+        self.set_config(next)
+    }
+
+    fn set_config(&mut self, config: AdamConfig) -> Result<()> {
+        validate_config(config)?;
+        if config.amsgrad != self.config.amsgrad {
+            for state in self.state.values_mut() {
+                state.max_second_moment =
+                    config.amsgrad.then(|| state.second_moment.clone().detach());
+            }
+        }
+        self.config = config;
         Ok(())
     }
 
@@ -549,6 +559,11 @@ impl Adam {
         self.engine.set_learning_rate(learning_rate)
     }
 
+    /// Replace the live parameter-group configuration while retaining compatible moments.
+    pub fn set_config(&mut self, config: AdamConfig) -> Result<()> {
+        self.engine.set_config(config)
+    }
+
     /// Return the number of parameter-state entries.
     pub fn state_len(&self) -> usize {
         self.engine.state.len()
@@ -632,6 +647,11 @@ impl AdamW {
     /// Change the learning rate without discarding moment state.
     pub fn set_learning_rate(&mut self, learning_rate: f64) -> Result<()> {
         self.engine.set_learning_rate(learning_rate)
+    }
+
+    /// Replace the live parameter-group configuration while retaining compatible moments.
+    pub fn set_config(&mut self, config: AdamWConfig) -> Result<()> {
+        self.engine.set_config(config.inner)
     }
 
     /// Return the number of parameter-state entries.

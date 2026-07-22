@@ -100,6 +100,45 @@ impl PySgd {
         self.set_lr(value)
     }
 
+    fn _set_config(
+        &mut self,
+        lr: f64,
+        momentum: f64,
+        dampening: f64,
+        weight_decay: f64,
+        nesterov: bool,
+    ) -> PyResult<()> {
+        self.inner
+            .set_config(
+                SgdConfig::new(lr)
+                    .with_momentum(momentum)
+                    .with_dampening(dampening)
+                    .with_weight_decay(weight_decay)
+                    .with_nesterov(nesterov),
+            )
+            .map_err(to_python_error)
+    }
+
+    #[getter]
+    fn momentum(&self) -> f64 {
+        self.inner.config().momentum()
+    }
+
+    #[getter]
+    fn dampening(&self) -> f64 {
+        self.inner.config().dampening()
+    }
+
+    #[getter]
+    fn weight_decay(&self) -> f64 {
+        self.inner.config().weight_decay()
+    }
+
+    #[getter]
+    fn nesterov(&self) -> bool {
+        self.inner.config().is_nesterov()
+    }
+
     /// Number of unique managed parameters.
     #[getter]
     fn parameter_count(&self) -> usize {

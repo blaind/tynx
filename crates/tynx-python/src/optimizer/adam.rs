@@ -96,6 +96,25 @@ impl PyAdam {
         self.set_lr(value)
     }
 
+    fn _set_config(
+        &mut self,
+        lr: f64,
+        betas: (f64, f64),
+        eps: f64,
+        weight_decay: f64,
+        amsgrad: bool,
+    ) -> PyResult<()> {
+        self.inner
+            .set_config(
+                AdamConfig::new(lr)
+                    .with_betas(betas.0, betas.1)
+                    .with_epsilon(eps)
+                    .with_weight_decay(weight_decay)
+                    .with_amsgrad(amsgrad),
+            )
+            .map_err(to_python_error)
+    }
+
     #[getter]
     fn betas(&self) -> (f64, f64) {
         self.inner.config().betas()
@@ -224,6 +243,25 @@ impl PyAdamW {
     #[setter]
     fn set_learning_rate(&mut self, value: f64) -> PyResult<()> {
         self.set_lr(value)
+    }
+
+    fn _set_config(
+        &mut self,
+        lr: f64,
+        betas: (f64, f64),
+        eps: f64,
+        weight_decay: f64,
+        amsgrad: bool,
+    ) -> PyResult<()> {
+        self.inner
+            .set_config(
+                AdamWConfig::new(lr)
+                    .with_betas(betas.0, betas.1)
+                    .with_epsilon(eps)
+                    .with_weight_decay(weight_decay)
+                    .with_amsgrad(amsgrad),
+            )
+            .map_err(to_python_error)
     }
 
     #[getter]

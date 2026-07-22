@@ -189,8 +189,16 @@ impl Sgd {
     pub fn set_learning_rate(&mut self, learning_rate: f64) -> Result<()> {
         let mut next = self.config;
         next.learning_rate = learning_rate;
-        validate_config(next)?;
-        self.config = next;
+        self.set_config(next)
+    }
+
+    /// Replace the live parameter-group configuration without discarding compatible momentum.
+    pub fn set_config(&mut self, config: SgdConfig) -> Result<()> {
+        validate_config(config)?;
+        if config.momentum == 0.0 {
+            self.momentum_buffers.clear();
+        }
+        self.config = config;
         Ok(())
     }
 
