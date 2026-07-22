@@ -8,6 +8,7 @@ mod classification;
 mod clip;
 mod comparison;
 mod concat;
+mod control_flow;
 mod convolution;
 mod cumsum;
 mod dft;
@@ -137,6 +138,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::HammingWindow(node) => window::hamming_window(node, env, device),
         Node::HannWindow(node) => window::hann_window(node, env, device),
         Node::Identity(node) => Ok(vec![resolve::first(env, &node.name, &node.inputs, device)?]),
+        Node::If(node) => control_flow::if_node(node, env, device),
         Node::InstanceNormalization(node) => {
             normalization::instance_normalization(node, env, device)
         }
@@ -147,6 +149,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::LessOrEqual(node) => comparison::less_or_equal(node, env, device),
         Node::Log(node) => unary::log(node, env, device),
         Node::LogSoftmax(node) => softmax::log_softmax(node, env, device),
+        Node::Loop(node) => control_flow::loop_node(node, env, device),
         Node::LpNormalization(node) => normalization::lp_normalization(node, env, device),
         Node::LpPool1d(node) => pooling::lp_pool1d(node, env, device),
         Node::LpPool2d(node) => pooling::lp_pool2d(node, env, device),
@@ -195,6 +198,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Selu(node) => unary::selu(node, env, device),
         Node::ScatterElements(node) => scatter::scatter_elements(node, env, device),
         Node::ScatterND(node) => scatter::scatter_nd(node, env, device),
+        Node::Scan(node) => control_flow::scan(node, env, device),
         Node::Shape(node) => shape::shape_of(node, env, device),
         Node::Size(node) => shape::size(node, env, device),
         Node::Sigmoid(node) => unary::sigmoid(node, env, device),

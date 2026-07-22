@@ -63,21 +63,7 @@ impl Session {
 
     /// Run inference and return the graph outputs by name.
     pub fn run(&self, device: &Device, mut env: Env) -> Result<Env> {
-        for node in &self.graph.nodes {
-            let values = execute(node, &env, device)?;
-            if values.len() != node.outputs().len() {
-                return Err(TynxError::Shape(format!(
-                    "node '{}' returned {} values for {} outputs",
-                    node.name(),
-                    values.len(),
-                    node.outputs().len()
-                )));
-            }
-
-            for (output, value) in node.outputs().iter().zip(values) {
-                env.insert(output.name.clone(), value);
-            }
-        }
+        run_graph(&self.graph, &mut env, device)?;
 
         self.graph
             .outputs
@@ -91,6 +77,25 @@ impl Session {
             })
             .collect()
     }
+}
+
+pub(crate) fn run_graph(graph: &OnnxGraph, env: &mut Env, device: &Device) -> Result<()> {
+    for node in &graph.nodes {
+        let values = execute(node, env, device)?;
+        if values.len() != node.outputs().len() {
+            return Err(TynxError::Shape(format!(
+                "node '{}' returned {} values for {} outputs",
+                node.name(),
+                values.len(),
+                node.outputs().len()
+            )));
+        }
+
+        for (output, value) in node.outputs().iter().zip(values) {
+            env.insert(output.name.clone(), value);
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
