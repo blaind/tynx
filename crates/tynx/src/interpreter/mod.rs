@@ -9,6 +9,7 @@ mod concat;
 mod convolution;
 mod dropout;
 mod extrema;
+mod gather;
 mod logical;
 mod matrix;
 mod normalization;
@@ -87,6 +88,9 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Floor(node) => unary::floor(node, env, device),
         Node::Flatten(node) => shape::flatten(node, env, device),
         Node::Gelu(node) => unary::gelu(node, env, device),
+        Node::Gather(node) => gather::gather(node, env, device),
+        Node::GatherElements(node) => gather::gather_elements(node, env, device),
+        Node::GatherND(node) => gather::gather_nd(node, env, device),
         Node::GlobalAveragePool(node) => pooling::global_average_pool(node, env, device),
         Node::GlobalMaxPool(node) => pooling::global_max_pool(node, env, device),
         Node::Greater(node) => comparison::greater(node, env, device),

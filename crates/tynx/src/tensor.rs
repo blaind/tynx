@@ -403,6 +403,82 @@ macro_rules! impl_concat {
     };
 }
 
+macro_rules! select_dyn {
+    ($tensor:expr, $dim:expr, $indices:expr, $kind:ident) => {
+        match $indices {
+            DynInt::R1(indices) => match $tensor {
+                $kind::R1(tensor) => $kind::R1(tensor.select($dim, indices)),
+                $kind::R2(tensor) => $kind::R2(tensor.select($dim, indices)),
+                $kind::R3(tensor) => $kind::R3(tensor.select($dim, indices)),
+                $kind::R4(tensor) => $kind::R4(tensor.select($dim, indices)),
+                $kind::R5(tensor) => $kind::R5(tensor.select($dim, indices)),
+                $kind::R6(tensor) => $kind::R6(tensor.select($dim, indices)),
+            },
+            _ => return Err(TynxError::Shape("select indices must be rank 1".into())),
+        }
+    };
+}
+
+macro_rules! gather_dyn {
+    ($tensor:expr, $dim:expr, $indices:expr, $kind:ident) => {
+        match ($tensor, $indices) {
+            ($kind::R1(tensor), DynInt::R1(indices)) => $kind::R1(tensor.gather($dim, indices)),
+            ($kind::R2(tensor), DynInt::R2(indices)) => $kind::R2(tensor.gather($dim, indices)),
+            ($kind::R3(tensor), DynInt::R3(indices)) => $kind::R3(tensor.gather($dim, indices)),
+            ($kind::R4(tensor), DynInt::R4(indices)) => $kind::R4(tensor.gather($dim, indices)),
+            ($kind::R5(tensor), DynInt::R5(indices)) => $kind::R5(tensor.gather($dim, indices)),
+            ($kind::R6(tensor), DynInt::R6(indices)) => $kind::R6(tensor.gather($dim, indices)),
+            (tensor, indices) => {
+                return Err(TynxError::Shape(format!(
+                    "gather ranks differ: data {}, indices {}",
+                    tensor.rank(),
+                    indices.rank()
+                )));
+            }
+        }
+    };
+}
+
+macro_rules! gather_nd_output {
+    ($tensor:expr, $indices:expr, $rank:expr, $kind:ident) => {
+        match $rank {
+            1 => $kind::R1($tensor.gather_nd($indices)),
+            2 => $kind::R2($tensor.gather_nd($indices)),
+            3 => $kind::R3($tensor.gather_nd($indices)),
+            4 => $kind::R4($tensor.gather_nd($indices)),
+            5 => $kind::R5($tensor.gather_nd($indices)),
+            6 => $kind::R6($tensor.gather_nd($indices)),
+            rank => return Err(rank_overflow(rank)),
+        }
+    };
+}
+
+macro_rules! gather_nd_indices {
+    ($tensor:expr, $indices:expr, $rank:expr, $kind:ident) => {
+        match $indices {
+            DynInt::R1(indices) => gather_nd_output!($tensor, indices, $rank, $kind),
+            DynInt::R2(indices) => gather_nd_output!($tensor, indices, $rank, $kind),
+            DynInt::R3(indices) => gather_nd_output!($tensor, indices, $rank, $kind),
+            DynInt::R4(indices) => gather_nd_output!($tensor, indices, $rank, $kind),
+            DynInt::R5(indices) => gather_nd_output!($tensor, indices, $rank, $kind),
+            DynInt::R6(indices) => gather_nd_output!($tensor, indices, $rank, $kind),
+        }
+    };
+}
+
+macro_rules! gather_nd_dyn {
+    ($tensor:expr, $indices:expr, $rank:expr, $kind:ident) => {
+        match $tensor {
+            $kind::R1(tensor) => gather_nd_indices!(tensor, $indices, $rank, $kind),
+            $kind::R2(tensor) => gather_nd_indices!(tensor, $indices, $rank, $kind),
+            $kind::R3(tensor) => gather_nd_indices!(tensor, $indices, $rank, $kind),
+            $kind::R4(tensor) => gather_nd_indices!(tensor, $indices, $rank, $kind),
+            $kind::R5(tensor) => gather_nd_indices!(tensor, $indices, $rank, $kind),
+            $kind::R6(tensor) => gather_nd_indices!(tensor, $indices, $rank, $kind),
+        }
+    };
+}
+
 impl_concat!(DynTensor);
 impl_concat!(DynInt);
 impl_concat!(DynBool);
@@ -492,6 +568,21 @@ impl DynTensor {
     /// Slice the tensor with one slice per dimension.
     pub fn slice(self, slices: &[Slice]) -> Self {
         map_float!(self, |tensor| tensor.slice(slices))
+    }
+
+    /// Select slices along one dimension using flattened indices.
+    pub fn select(self, dim: usize, indices: DynInt) -> Result<Self> {
+        Ok(select_dyn!(self, dim, indices, DynTensor))
+    }
+
+    /// Gather elements from a same-rank index tensor.
+    pub fn gather(self, dim: usize, indices: DynInt) -> Result<Self> {
+        Ok(gather_dyn!(self, dim, indices, DynTensor))
+    }
+
+    /// Gather slices using tuples stored in the last index dimension.
+    pub fn gather_nd(self, indices: DynInt, output_rank: usize) -> Result<Self> {
+        Ok(gather_nd_dyn!(self, indices, output_rank, DynTensor))
     }
 
     /// Permute the tensor dimensions.
@@ -1105,6 +1196,34 @@ impl DynInt {
         map_int!(self, |tensor| tensor.slice(slices))
     }
 
+    /// Map negative indices into the corresponding positive dimension indices.
+    pub fn normalize_indices(self, size: usize) -> Result<Self> {
+        if size == 0 {
+            return Err(TynxError::Shape("cannot index an empty dimension".into()));
+        }
+        let size = i64::try_from(size)
+            .map_err(|_| TynxError::Shape("indexed dimension exceeds i64".into()))?;
+        Ok(map_int!(self, |tensor| {
+            let negative = tensor.clone().lower_elem(0);
+            tensor.clone().mask_where(negative, tensor.add_scalar(size))
+        }))
+    }
+
+    /// Select slices along one dimension using flattened indices.
+    pub fn select(self, dim: usize, indices: DynInt) -> Result<Self> {
+        Ok(select_dyn!(self, dim, indices, DynInt))
+    }
+
+    /// Gather elements from a same-rank index tensor.
+    pub fn gather(self, dim: usize, indices: DynInt) -> Result<Self> {
+        Ok(gather_dyn!(self, dim, indices, DynInt))
+    }
+
+    /// Gather slices using tuples stored in the last index dimension.
+    pub fn gather_nd(self, indices: DynInt, output_rank: usize) -> Result<Self> {
+        Ok(gather_nd_dyn!(self, indices, output_rank, DynInt))
+    }
+
     /// Permute the tensor dimensions.
     pub fn permute(self, axes: Vec<usize>) -> Result<Self> {
         if axes.len() != self.rank() {
@@ -1503,6 +1622,21 @@ impl DynBool {
     /// Slice the tensor with one slice per dimension.
     pub fn slice(self, slices: &[Slice]) -> Self {
         map_bool!(self, |tensor| tensor.slice(slices))
+    }
+
+    /// Select slices along one dimension using flattened indices.
+    pub fn select(self, dim: usize, indices: DynInt) -> Result<Self> {
+        Ok(select_dyn!(self, dim, indices, DynBool))
+    }
+
+    /// Gather elements from a same-rank index tensor.
+    pub fn gather(self, dim: usize, indices: DynInt) -> Result<Self> {
+        Ok(gather_dyn!(self, dim, indices, DynBool))
+    }
+
+    /// Gather slices using tuples stored in the last index dimension.
+    pub fn gather_nd(self, indices: DynInt, output_rank: usize) -> Result<Self> {
+        Ok(gather_nd_dyn!(self, indices, output_rank, DynBool))
     }
 
     /// Permute the tensor dimensions.
