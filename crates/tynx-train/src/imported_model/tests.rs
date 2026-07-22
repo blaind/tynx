@@ -113,6 +113,35 @@ fn imported_gemm_learns_and_next_forward_reads_updated_slots() {
 }
 
 #[test]
+fn imported_simplified_model_preserves_declared_output_name() {
+    let session = Session::from_bytes(&gemm_model_bytes()).unwrap();
+    assert_eq!(session.outputs()[0].name, "y");
+    assert_ne!(session.graph().outputs[0].name, "y");
+
+    let device = Device::autodiff(Device::default());
+    let model = ImportedModel::from_session(session, device.clone()).unwrap();
+    let internal_output = model.session().graph().outputs[0].name.as_str();
+    let report = model.trainability_report();
+    assert_eq!(report.selected_outputs(), ["y"]);
+    assert!(report.parameters_for_output("y").is_some());
+    assert!(report.parameters_for_output(internal_output).is_none());
+
+    let selected = model.trainability_for_outputs(Some(&["y"]));
+    assert_eq!(selected.selected_outputs(), ["y"]);
+    selected.require_trainable().unwrap();
+
+    let outputs = model
+        .run(env_with_input(tensor(
+            vec![2.0, 3.0, 4.0, 5.0],
+            &[4, 1],
+            &device,
+        )))
+        .unwrap();
+
+    assert_eq!(outputs.keys().collect::<Vec<_>>(), ["y"]);
+}
+
+#[test]
 fn repeated_imported_steps_remain_generation_local() {
     const STEPS: u64 = 2_048;
 

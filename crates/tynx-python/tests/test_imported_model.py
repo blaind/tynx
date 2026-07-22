@@ -109,6 +109,24 @@ def test_imported_trainability_report_is_structured_and_output_specific(tmp_path
         model.require_trainable(outputs=["missing"])
 
 
+def test_simplified_imported_trainability_uses_declared_output_names(tmp_path: Path) -> None:
+    model = tynx.load(
+        _model_path(tmp_path),
+        trainable="auto",
+        simplify=True,
+        initializer_names={"constant1_out1": "head.weight", "constant2_out1": "head.bias"},
+    )
+
+    assert model.outputs == ["y"]
+    report = model.trainability_report()
+    assert report.selected_outputs == ["y"]
+    assert "y" in report.output_parameters
+
+    selected = model.require_trainable(outputs=["y"])
+    assert selected.selected_outputs == ["y"]
+    assert "y" in selected.output_parameters
+
+
 def test_imported_model_binds_multiple_named_inputs_and_returns_named_outputs(
     tmp_path: Path,
 ) -> None:

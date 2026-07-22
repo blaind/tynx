@@ -66,17 +66,7 @@ pub(super) fn run(
         }
     }
 
-    session
-        .outputs()
-        .iter()
-        .map(|output| {
-            let value = env
-                .get(&output.name)
-                .cloned()
-                .ok_or_else(|| TynxError::MissingValue(output.name.clone()))?;
-            Ok((output.name.clone(), value))
-        })
-        .collect()
+    session.collect_outputs(&env)
 }
 
 fn execute_linear(

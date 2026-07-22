@@ -383,13 +383,10 @@ impl PyImportedModel {
 
     #[pyo3(signature = (outputs=None))]
     fn require_trainable(&self, outputs: Option<Vec<String>>) -> PyResult<PyTrainabilityReport> {
-        let report = match outputs {
-            Some(outputs) => {
-                let outputs = outputs.iter().map(String::as_str).collect::<Vec<_>>();
-                TrainabilityReport::analyze_outputs(self.inner.session().graph(), &outputs)
-            }
-            None => TrainabilityReport::analyze_all_outputs(self.inner.session().graph()),
-        };
+        let outputs = outputs
+            .as_ref()
+            .map(|outputs| outputs.iter().map(String::as_str).collect::<Vec<_>>());
+        let report = self.inner.trainability_for_outputs(outputs.as_deref());
         report.require_trainable().map_err(to_python_error)?;
         Ok(report.into())
     }

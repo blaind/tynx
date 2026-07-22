@@ -51,12 +51,7 @@ impl ImportedModel {
         role_overrides: &TrainabilityOverrides,
         name_overrides: &InitializerNameOverrides,
     ) -> Result<Self> {
-        let trainability = match outputs {
-            Some(outputs) => {
-                TrainabilityReport::analyze_outputs_with(session.graph(), outputs, role_overrides)
-            }
-            None => TrainabilityReport::analyze_all_outputs_with(session.graph(), role_overrides),
-        };
+        let trainability = analyze_session_outputs(&session, outputs, role_overrides);
         trainability.require_trainable()?;
         let state = ImportedState::materialize_with(
             session.graph(),
@@ -88,6 +83,11 @@ impl ImportedModel {
         &self.trainability
     }
 
+    /// Re-run output-specific trainability analysis using declared ONNX output names.
+    pub fn trainability_for_outputs(&self, outputs: Option<&[&str]>) -> TrainabilityReport {
+        analyze_session_outputs(&self.session, outputs, &TrainabilityOverrides::new())
+    }
+
     /// Return imported parameter and buffer state.
     pub fn state(&self) -> &ImportedState {
         &self.state
@@ -107,6 +107,37 @@ impl ImportedModel {
     pub fn run_with_tracking(&self, env: Env, tracking: bool) -> Result<Env> {
         executor::run(&self.session, &self.state, &self.device, env, tracking)
     }
+}
+
+fn analyze_session_outputs(
+    session: &Session,
+    outputs: Option<&[&str]>,
+    role_overrides: &TrainabilityOverrides,
+) -> TrainabilityReport {
+    let internal_outputs = outputs.map(|outputs| {
+        outputs
+            .iter()
+            .map(|output| {
+                session
+                    .internal_output_name(output)
+                    .unwrap_or(output)
+                    .to_string()
+            })
+            .collect::<Vec<_>>()
+    });
+    let mut report = match &internal_outputs {
+        Some(outputs) => {
+            let outputs = outputs.iter().map(String::as_str).collect::<Vec<_>>();
+            TrainabilityReport::analyze_outputs_with(session.graph(), &outputs, role_overrides)
+        }
+        None => TrainabilityReport::analyze_all_outputs_with(session.graph(), role_overrides),
+    };
+    let internal_to_public = session
+        .output_name_mapping()
+        .map(|(public, internal)| (internal.to_string(), public.to_string()))
+        .collect::<std::collections::HashMap<_, _>>();
+    report.remap_outputs(&internal_to_public);
+    report
 }
 
 #[cfg(test)]
