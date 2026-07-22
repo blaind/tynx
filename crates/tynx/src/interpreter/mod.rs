@@ -12,6 +12,7 @@ mod convolution;
 mod cumsum;
 mod dft;
 mod dropout;
+mod einsum;
 mod extrema;
 mod eye_like;
 mod gather;
@@ -111,6 +112,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Div(node) => binary::div(node, env, device),
         Node::Dropout(node) => dropout::dropout(node, env, device),
         Node::Elu(node) => unary::elu(node, env, device),
+        Node::Einsum(node) => einsum::einsum(node, env, device),
         Node::Equal(node) => comparison::equal(node, env, device),
         Node::Erf(node) => unary::erf(node, env, device),
         Node::EyeLike(node) => eye_like::eye_like(node, env, device),
