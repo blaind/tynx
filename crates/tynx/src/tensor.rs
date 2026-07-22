@@ -779,6 +779,16 @@ impl DynTensor {
         map_float!(self, |tensor| activation::gelu(tensor))
     }
 
+    /// Apply softmax along one dimension.
+    pub fn softmax(self, dim: usize) -> Self {
+        map_float!(self, |tensor| activation::softmax(tensor, dim))
+    }
+
+    /// Apply log-softmax along one dimension.
+    pub fn log_softmax(self, dim: usize) -> Self {
+        map_float!(self, |tensor| activation::log_softmax(tensor, dim))
+    }
+
     /// Clamp every element to the optional lower and upper bounds.
     pub fn clip(self, min: Option<f64>, max: Option<f64>) -> Self {
         match (min, max) {

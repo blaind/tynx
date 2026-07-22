@@ -11,6 +11,7 @@ mod pow;
 mod reduction;
 mod resolve;
 mod shape;
+mod softmax;
 mod spatial;
 mod unary;
 mod variadic;
@@ -81,6 +82,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Less(node) => comparison::less(node, env, device),
         Node::LessOrEqual(node) => comparison::less_or_equal(node, env, device),
         Node::Log(node) => unary::log(node, env, device),
+        Node::LogSoftmax(node) => softmax::log_softmax(node, env, device),
         Node::Gemm(node) => matrix::gemm(node, env, device),
         Node::Max(node) => variadic::max(node, env, device),
         Node::MatMul(node) => matrix::matmul(node, env, device),
@@ -117,6 +119,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Sin(node) => unary::sin(node, env, device),
         Node::Sinh(node) => unary::sinh(node, env, device),
         Node::Softplus(node) => unary::softplus(node, env, device),
+        Node::Softmax(node) => softmax::softmax(node, env, device),
         Node::Softsign(node) => unary::softsign(node, env, device),
         Node::Sqrt(node) => unary::sqrt(node, env, device),
         Node::Squeeze(node) => shape::squeeze(node, env, device),
