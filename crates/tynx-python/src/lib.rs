@@ -1,6 +1,7 @@
 //! Python bindings for Tynx.
 
 mod grad_mode;
+mod gradient;
 mod optimizer;
 mod parameter;
 mod tensor;
@@ -12,6 +13,7 @@ use pyo3::prelude::*;
 use tynx_core::Session;
 
 use grad_mode::{PyNoGrad, is_grad_enabled_py, no_grad};
+use gradient::{clip_grad_norm_py, clip_grad_value_py};
 use optimizer::{PyAdam, PyAdamW, PySgd};
 use parameter::PyParameter;
 use tensor::{PyTensor, maximum_py, minimum_py, where_py};
@@ -87,5 +89,7 @@ fn _tynx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(where_py, module)?)?;
     module.add_function(wrap_pyfunction!(maximum_py, module)?)?;
     module.add_function(wrap_pyfunction!(minimum_py, module)?)?;
+    module.add_function(wrap_pyfunction!(clip_grad_norm_py, module)?)?;
+    module.add_function(wrap_pyfunction!(clip_grad_value_py, module)?)?;
     Ok(())
 }

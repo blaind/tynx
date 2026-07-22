@@ -408,6 +408,42 @@ def test_adam_trains_an_authored_python_linear_model() -> None:
     assert bias.item() == pytest.approx(1.0, abs=1e-3)
 
 
+def test_clip_grad_norm_returns_pre_clip_norm_and_deduplicates_parameters() -> None:
+    parameter = tynx.Parameter([3.0, 4.0])
+    (parameter * parameter).sum().backward()
+
+    total_norm = tynx.nn.utils.clip_grad_norm_([parameter, parameter], 5.0)
+
+    assert total_norm.shape == (1,)
+    assert total_norm.item() == pytest.approx(10.0)
+    assert parameter.grad is not None
+    assert parameter.grad.tolist() == pytest.approx([3.0, 4.0], abs=1e-5)
+
+
+def test_clip_grad_value_clamps_gradients_and_skips_missing_ones() -> None:
+    parameter = tynx.Parameter([-3.0, 4.0])
+    missing = tynx.Parameter([1.0])
+    (parameter * parameter).sum().backward()
+
+    tynx.nn.utils.clip_grad_value_([parameter, parameter, missing], 2.0)
+
+    assert parameter.grad is not None
+    assert parameter.grad.tolist() == pytest.approx([-2.0, 2.0])
+    assert missing.grad is None
+
+
+def test_gradient_clipping_validates_arguments_and_handles_missing_gradients() -> None:
+    parameter = tynx.Parameter([3.0, 4.0])
+
+    assert tynx.nn.utils.clip_grad_norm_([parameter], 1.0).item() == pytest.approx(0.0)
+    with pytest.raises(ValueError, match="at least one Parameter"):
+        tynx.nn.utils.clip_grad_norm_([], 1.0)
+    with pytest.raises(ValueError, match=r"norm_type=2\.0"):
+        tynx.nn.utils.clip_grad_norm_([parameter], 1.0, norm_type=1.0)
+    with pytest.raises(ValueError, match="non-negative"):
+        tynx.nn.utils.clip_grad_value_([parameter], -1.0)
+
+
 def test_tensor_eager_operators() -> None:
     left = tynx.Tensor([[1.0, 2.0], [3.0, 4.0]])
     right = tynx.Tensor([[2.0, 0.5], [1.0, 2.0]])

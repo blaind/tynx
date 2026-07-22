@@ -102,7 +102,7 @@ impl PySgd {
     }
 }
 
-fn collect_parameters(
+pub(crate) fn collect_parameters(
     parameters: &Bound<'_, PyAny>,
     optimizer_name: &str,
 ) -> PyResult<Vec<ParameterSlot>> {

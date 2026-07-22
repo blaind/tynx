@@ -1,6 +1,6 @@
 """Python bindings for the Tynx neural network runtime."""
 
-from . import optim
+from . import nn, optim
 from ._tynx import (
     Parameter,
     Session,
@@ -21,6 +21,7 @@ __all__ = [
     "is_grad_enabled",
     "maximum",
     "minimum",
+    "nn",
     "no_grad",
     "optim",
     "where",

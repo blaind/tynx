@@ -115,7 +115,7 @@ impl LeafState {
 }
 
 impl PyTensor {
-    fn from_inner(inner: DynTensor) -> Self {
+    pub(crate) fn from_inner(inner: DynTensor) -> Self {
         Self {
             source: TensorSource::Owned(Box::new(TensorValue::Float(inner))),
             targets: Vec::new(),

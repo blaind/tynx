@@ -155,6 +155,24 @@ impl ParameterSlot {
         self.state.borrow_mut().grad = None;
     }
 
+    pub(crate) fn replace_grad(&self, gradient: DynTensor) -> Result<()> {
+        let mut state = self.state.borrow_mut();
+        let gradient_device = tensor_device(&gradient);
+        if gradient.dims() != state.contract.shape
+            || gradient.dtype() != state.contract.dtype
+            || gradient_device != state.contract.device
+        {
+            return Err(TynxError::TypeMismatch(format!(
+                "replacement gradient shape {:?}, dtype {:?}, and device {gradient_device:?} do not match parameter contract {:?}",
+                gradient.dims(),
+                gradient.dtype(),
+                state.contract,
+            )));
+        }
+        state.grad = Some(off_tape(gradient, &gradient_device));
+        Ok(())
+    }
+
     /// Read the tensor used by a forward pass.
     ///
     /// Trainable slots create one leaf on the first read of each value generation and reuse that
