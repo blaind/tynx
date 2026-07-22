@@ -3,16 +3,108 @@
 use std::collections::HashSet;
 
 use burn::tensor::{Device, TensorData};
-use onnx_ir::node::{
-    flatten::FlattenNode,
-    reshape::{ReshapeInput, ReshapeNode},
-    squeeze::{SqueezeInput, SqueezeNode},
-    transpose::TransposeNode,
-    unsqueeze::{UnsqueezeConfig, UnsqueezeNode},
+use onnx_ir::{
+    ir::ArgType,
+    node::{
+        constant_of_shape::{ConstantOfShapeNode, ConstantOfShapeShape},
+        flatten::FlattenNode,
+        reshape::{ReshapeInput, ReshapeNode},
+        shape::ShapeNode,
+        squeeze::{SqueezeInput, SqueezeNode},
+        transpose::TransposeNode,
+        unsqueeze::{UnsqueezeConfig, UnsqueezeNode},
+    },
 };
 
 use super::{Env, resolve};
-use crate::{Result, Scalar, TynxError, Value};
+use crate::{DynBool, DynInt, DynTensor, Result, Scalar, TynxError, Value};
+
+pub(super) fn shape_of(node: &ShapeNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
+    let input = resolve::first(env, &node.name, &node.inputs, device)?;
+    let dims = match &node.inputs[0].ty {
+        ArgType::Shape(_) => vec![value_to_i64s(input)?.len() as i64],
+        ArgType::ScalarTensor(_) => vec![1],
+        ArgType::ScalarNative(_) => {
+            return Err(TynxError::TypeMismatch(
+                "Shape does not support a native scalar".to_string(),
+            ));
+        }
+        ArgType::Tensor(_) => value_dims(&input)
+            .into_iter()
+            .map(|dim| {
+                i64::try_from(dim).map_err(|_| TynxError::Shape("dimension exceeds i64".into()))
+            })
+            .collect::<Result<Vec<_>>>()?,
+    };
+    let end = node.config.end.min(dims.len());
+    let start = node.config.start.min(end);
+    Ok(vec![Value::Shape(dims[start..end].to_vec())])
+}
+
+pub(super) fn constant_of_shape(
+    node: &ConstantOfShapeNode,
+    env: &Env,
+    device: &Device,
+) -> Result<Vec<Value>> {
+    let raw_shape = match &node.config.shape {
+        ConstantOfShapeShape::Static(shape) => shape.clone(),
+        ConstantOfShapeShape::Runtime(reference) => value_to_i64s(resolve::at(
+            env,
+            &node.name,
+            &node.inputs,
+            reference.input_index,
+            device,
+        )?)?,
+    };
+    let dims = raw_shape
+        .into_iter()
+        .map(|dim| {
+            usize::try_from(dim).map_err(|_| {
+                TynxError::Shape(format!(
+                    "ConstantOfShape dimension must be non-negative, got {dim}"
+                ))
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let fill_data = node
+        .config
+        .value
+        .clone()
+        .unwrap_or_else(|| TensorData::new(vec![0.0_f32], [1]));
+    let dtype = fill_data.dtype;
+    let fill = Value::from_tensor_data(fill_data, 0, device)?.into_scalar()?;
+
+    if let Some(ArgType::Shape(size)) = node.outputs.first().map(|output| &output.ty) {
+        let value = scalar_to_i64(fill)?;
+        return Ok(vec![Value::Shape(vec![value; *size])]);
+    }
+    if dims.is_empty() {
+        return Ok(vec![Value::Scalar(fill)]);
+    }
+
+    let output = if dtype.is_float() {
+        Value::Tensor(DynTensor::full(&dims, fill.as_f64(), device, dtype)?)
+    } else if dtype.is_int() || dtype.is_uint() {
+        Value::Int(DynInt::full(&dims, scalar_to_i64(fill)?, device, dtype)?)
+    } else if dtype.is_bool() {
+        Value::Bool(DynBool::full(&dims, fill.as_f64() != 0.0, device)?)
+    } else {
+        return Err(TynxError::TypeMismatch(format!(
+            "ConstantOfShape dtype {dtype:?} is unsupported"
+        )));
+    };
+    Ok(vec![output])
+}
+
+fn scalar_to_i64(value: Scalar) -> Result<i64> {
+    match value {
+        Scalar::I64(value) => Ok(value),
+        Scalar::U64(value) => i64::try_from(value)
+            .map_err(|_| TynxError::Shape(format!("constant {value} exceeds i64"))),
+        Scalar::F64(value) => Ok(value as i64),
+        Scalar::Bool(value) => Ok(i64::from(value)),
+    }
+}
 
 pub(super) fn reshape(node: &ReshapeNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
     let input = resolve::first(env, &node.name, &node.inputs, device)?;
@@ -319,7 +411,13 @@ mod tests {
     use burn::tensor::TensorData;
     use onnx_ir::{
         DType,
-        node::flatten::{FlattenConfig, FlattenNodeBuilder},
+        node::{
+            constant_of_shape::{
+                ConstantOfShapeConfig, ConstantOfShapeNodeBuilder, ConstantOfShapeShape,
+            },
+            flatten::{FlattenConfig, FlattenNodeBuilder},
+            shape::{ShapeConfig, ShapeNodeBuilder},
+        },
     };
 
     use super::*;
@@ -360,5 +458,52 @@ mod tests {
     fn normalizes_negative_axes_and_rejects_duplicates() {
         assert_eq!(normalize_axes(&[-1, 0], 3).unwrap(), [0, 2]);
         assert!(normalize_axes(&[1, -2], 3).is_err());
+    }
+
+    #[test]
+    fn extracts_partial_shape() {
+        let node = ShapeNodeBuilder::new("shape")
+            .input_tensor("x", 4, DType::F32)
+            .output_shape("y", 2)
+            .config(ShapeConfig { start: 1, end: 3 })
+            .build();
+        let device = Device::default();
+        let mut env = Env::new();
+        env.insert(
+            "x".into(),
+            Value::from_tensor_data(
+                TensorData::new(vec![0.0_f32; 2 * 3 * 4 * 5], [2, 3, 4, 5]),
+                4,
+                &device,
+            )
+            .unwrap(),
+        );
+
+        let output = shape_of(&node, &env, &device).unwrap();
+
+        assert!(matches!(output.as_slice(), [Value::Shape(dims)] if dims == &[3, 4]));
+    }
+
+    #[test]
+    fn creates_typed_constant_tensor() {
+        let node = ConstantOfShapeNodeBuilder::new("constant_of_shape")
+            .input_shape("dims", 2)
+            .output_tensor("y", 2, DType::I32)
+            .config(ConstantOfShapeConfig::new(
+                ConstantOfShapeShape::Static(vec![2, 3]),
+                Some(TensorData::new(vec![7_i32], [1])),
+            ))
+            .build();
+
+        let output = constant_of_shape(&node, &Env::new(), &Device::default())
+            .unwrap()
+            .pop()
+            .unwrap()
+            .into_int()
+            .unwrap();
+
+        assert_eq!(output.dtype(), DType::I32);
+        assert_eq!(output.dims(), [2, 3]);
+        assert_eq!(output.into_data().iter::<i64>().collect::<Vec<_>>(), [7; 6]);
     }
 }

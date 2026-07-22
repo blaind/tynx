@@ -1010,6 +1010,35 @@ impl DynTensor {
 }
 
 impl DynInt {
+    /// Create an integer tensor filled with one value and an explicit dtype.
+    pub fn full(dims: &[usize], value: i64, device: &Device, dtype: DType) -> Result<Self> {
+        Ok(match dims {
+            [d0] => Self::R1(Tensor::<1, Int>::full([*d0], value, (device, dtype))),
+            [d0, d1] => Self::R2(Tensor::<2, Int>::full([*d0, *d1], value, (device, dtype))),
+            [d0, d1, d2] => Self::R3(Tensor::<3, Int>::full(
+                [*d0, *d1, *d2],
+                value,
+                (device, dtype),
+            )),
+            [d0, d1, d2, d3] => Self::R4(Tensor::<4, Int>::full(
+                [*d0, *d1, *d2, *d3],
+                value,
+                (device, dtype),
+            )),
+            [d0, d1, d2, d3, d4] => Self::R5(Tensor::<5, Int>::full(
+                [*d0, *d1, *d2, *d3, *d4],
+                value,
+                (device, dtype),
+            )),
+            [d0, d1, d2, d3, d4, d5] => Self::R6(Tensor::<6, Int>::full(
+                [*d0, *d1, *d2, *d3, *d4, *d5],
+                value,
+                (device, dtype),
+            )),
+            _ => return Err(rank_overflow(dims.len())),
+        })
+    }
+
     /// Reshape the tensor while preserving its elements and dtype.
     pub fn reshape(self, dims: Vec<usize>) -> Result<Self> {
         Ok(match self {
