@@ -75,19 +75,13 @@ def main() -> None:
 
     input = tynx.Tensor(
         [
-            [
-                ((row * args.features + column) % 31 - 15) / 16.0
-                for column in range(args.features)
-            ]
+            [((row * args.features + column) % 31 - 15) / 16.0 for column in range(args.features)]
             for row in range(args.batch)
         ]
     )
     target = tynx.Tensor(
         [
-            [
-                ((row * args.outputs + column) % 13 - 6) / 8.0
-                for column in range(args.outputs)
-            ]
+            [((row * args.outputs + column) % 13 - 6) / 8.0 for column in range(args.outputs)]
             for row in range(args.batch)
         ]
     )
