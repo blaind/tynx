@@ -14,9 +14,10 @@ mod tensor;
 use std::path::PathBuf;
 
 use capture::{PyCaptureSession, PyCapturedGraph};
-use pyo3::exceptions::{PyOSError, PyValueError};
+use pyo3::exceptions::{PyOSError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use tynx_core::Session;
+use pyo3::types::{PyDict, PyTuple};
+use tynx_core::{Device, Env, PreparedSession, Scalar, Session, Value};
 
 use device::PyDevice;
 use grad_mode::{PyNoGrad, is_grad_enabled_py, no_grad};
@@ -46,7 +47,7 @@ fn synchronize(device: Option<PyRef<'_, PyDevice>>) -> PyResult<()> {
 /// A parsed ONNX model.
 #[pyclass(name = "Session", frozen)]
 struct PySession {
-    inner: Box<Session>,
+    inner: Box<PreparedSession>,
 }
 
 #[pymethods]
@@ -59,6 +60,8 @@ impl PySession {
             PyOSError::new_err(format!("could not read '{}': {error}", path.display()))
         })?;
         let session = Session::from_bytes_with(&data, simplify).map_err(to_python_error)?;
+        let device = Device::autodiff(tynx_core::default_device());
+        let session = session.prepare(&device).map_err(to_python_error)?;
 
         Ok(Self {
             inner: Box::new(session),
@@ -85,12 +88,132 @@ impl PySession {
             .collect()
     }
 
+    /// Run inference with positional or ONNX-named Tensor inputs.
+    #[pyo3(signature = (*args, **kwargs))]
+    fn run<'py>(
+        &self,
+        py: Python<'py>,
+        args: &Bound<'py, PyTuple>,
+        kwargs: Option<&Bound<'py, PyDict>>,
+    ) -> PyResult<Py<PyAny>> {
+        self.execute(py, args, kwargs)
+    }
+
+    #[pyo3(signature = (*args, **kwargs))]
+    fn __call__<'py>(
+        &self,
+        py: Python<'py>,
+        args: &Bound<'py, PyTuple>,
+        kwargs: Option<&Bound<'py, PyDict>>,
+    ) -> PyResult<Py<PyAny>> {
+        self.execute(py, args, kwargs)
+    }
+
     fn __repr__(&self) -> String {
         format!(
             "Session(inputs={:?}, outputs={:?})",
             self.inputs(),
             self.outputs()
         )
+    }
+}
+
+impl PySession {
+    fn execute<'py>(
+        &self,
+        py: Python<'py>,
+        args: &Bound<'py, PyTuple>,
+        kwargs: Option<&Bound<'py, PyDict>>,
+    ) -> PyResult<Py<PyAny>> {
+        let inputs = self.inner.inputs();
+        let outputs = self.inner.outputs();
+        if args.len() > inputs.len() {
+            return Err(PyTypeError::new_err(format!(
+                "Session expected at most {} positional inputs, got {}",
+                inputs.len(),
+                args.len()
+            )));
+        }
+
+        let mut bound = (0..inputs.len()).map(|_| None).collect::<Vec<_>>();
+        for (index, destination) in bound.iter_mut().enumerate().take(args.len()) {
+            *destination = Some(args.get_item(index)?.extract::<PyRef<'py, PyTensor>>()?);
+        }
+        if let Some(kwargs) = kwargs {
+            for (name, value) in kwargs.iter() {
+                let name = name
+                    .extract::<String>()
+                    .map_err(|_| PyTypeError::new_err("Session input names must be strings"))?;
+                let index = inputs
+                    .iter()
+                    .position(|input| input.name == name)
+                    .ok_or_else(|| {
+                        PyTypeError::new_err(format!(
+                            "Session got an unexpected input {name:?}; expected {:?}",
+                            self.inputs()
+                        ))
+                    })?;
+                if bound[index].is_some() {
+                    return Err(PyTypeError::new_err(format!(
+                        "Session got multiple values for input {name:?}"
+                    )));
+                }
+                bound[index] = Some(value.extract::<PyRef<'py, PyTensor>>()?);
+            }
+        }
+        let missing = inputs
+            .iter()
+            .zip(&bound)
+            .filter(|(_, value)| value.is_none())
+            .map(|(input, _)| input.name.clone())
+            .collect::<Vec<_>>();
+        if !missing.is_empty() {
+            return Err(PyTypeError::new_err(format!(
+                "Session is missing required inputs {missing:?}"
+            )));
+        }
+
+        let mut env = Env::new();
+        for (input, value) in inputs.iter().zip(&bound) {
+            env.insert(
+                input.name.clone(),
+                value
+                    .as_ref()
+                    .expect("missing Session inputs were rejected above")
+                    .detached_runtime_value(),
+            );
+        }
+        let mut result = self.inner.run(env).map_err(to_python_error)?;
+        let mut take_output = |name: &str| -> PyResult<Py<PyAny>> {
+            let value = result
+                .remove(name)
+                .expect("PreparedSession returns every declared output");
+            runtime_output_to_python(py, value)
+        };
+
+        if outputs.len() == 1 {
+            return take_output(&outputs[0].name);
+        }
+        let named = PyDict::new(py);
+        for output in outputs {
+            named.set_item(&output.name, take_output(&output.name)?)?;
+        }
+        Ok(named.unbind().into_any())
+    }
+}
+
+fn runtime_output_to_python(py: Python<'_>, value: Value) -> PyResult<Py<PyAny>> {
+    match value {
+        Value::Tensor(_) | Value::Int(_) | Value::Bool(_) => {
+            Ok(Py::new(py, PyTensor::from_runtime_value(value)?)?.into_any())
+        }
+        Value::Scalar(Scalar::F64(value)) => Ok(value.into_pyobject(py)?.unbind().into_any()),
+        Value::Scalar(Scalar::I64(value)) => Ok(value.into_pyobject(py)?.unbind().into_any()),
+        Value::Scalar(Scalar::U64(value)) => Ok(value.into_pyobject(py)?.unbind().into_any()),
+        Value::Scalar(Scalar::Bool(value)) => {
+            Ok(value.into_pyobject(py)?.to_owned().unbind().into_any())
+        }
+        Value::Shape(value) => Ok(value.into_pyobject(py)?.unbind().into_any()),
     }
 }
 

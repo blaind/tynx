@@ -115,7 +115,15 @@ def test_no_grad_imported_call_is_detached_and_plain_load_remains_inference(tmp_
         output = model(tynx.Tensor([[2.0], [-1.0]], requires_grad=True))
 
     assert output.requires_grad is False
-    assert isinstance(tynx.load(path, simplify=False), tynx.Session)
+    session = tynx.load(path, simplify=False)
+    assert isinstance(session, tynx.Session)
+    input = tynx.Tensor([[2.0], [-1.0]], requires_grad=True)
+    positional = session(input)
+    named = session.run(x=input)
+    assert isinstance(positional, tynx.Tensor)
+    assert isinstance(named, tynx.Tensor)
+    assert positional.flatten().tolist() == pytest.approx([5.0, -1.0])
+    assert named.flatten().tolist() == pytest.approx([5.0, -1.0])
 
 
 def test_imported_trainability_report_is_structured_and_output_specific(tmp_path: Path) -> None:
