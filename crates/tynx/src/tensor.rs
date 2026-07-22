@@ -1274,6 +1274,32 @@ impl DynTensor {
         map_float!(self, |tensor| tensor.sign())
     }
 
+    /// Test each element for infinity, optionally filtering by sign.
+    pub fn is_inf_signed(self, detect_negative: bool, detect_positive: bool) -> DynBool {
+        macro_rules! classify {
+            ($tensor:expr, $variant:path) => {{
+                let tensor = $tensor;
+                let infinite = tensor.clone().is_inf();
+                let output = match (detect_negative, detect_positive) {
+                    (true, true) => infinite,
+                    (true, false) => infinite.bool_and(tensor.lower_elem(0.0)),
+                    (false, true) => infinite.bool_and(tensor.greater_elem(0.0)),
+                    (false, false) => infinite.clone().bool_and(infinite.bool_not()),
+                };
+                $variant(output)
+            }};
+        }
+
+        match self {
+            Self::R1(tensor) => classify!(tensor, DynBool::R1),
+            Self::R2(tensor) => classify!(tensor, DynBool::R2),
+            Self::R3(tensor) => classify!(tensor, DynBool::R3),
+            Self::R4(tensor) => classify!(tensor, DynBool::R4),
+            Self::R5(tensor) => classify!(tensor, DynBool::R5),
+            Self::R6(tensor) => classify!(tensor, DynBool::R6),
+        }
+    }
+
     /// Apply the softplus function element-wise.
     pub fn softplus(self) -> Self {
         map_float!(self, |tensor| activation::softplus(tensor, 1.0))

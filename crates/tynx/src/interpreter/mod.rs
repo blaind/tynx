@@ -4,6 +4,7 @@ mod attention;
 mod binary;
 mod broadcasting;
 mod cast;
+mod classification;
 mod clip;
 mod comparison;
 mod concat;
@@ -122,6 +123,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::InstanceNormalization(node) => {
             normalization::instance_normalization(node, env, device)
         }
+        Node::IsInf(node) => classification::is_inf(node, env, device),
         Node::LeakyRelu(node) => unary::leaky_relu(node, env, device),
         Node::LayerNormalization(node) => normalization::layer_normalization(node, env, device),
         Node::Less(node) => comparison::less(node, env, device),
