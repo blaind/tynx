@@ -1,7 +1,8 @@
 """Small differentiable probability distributions over eager Tynx tensors."""
 
-import math
-from typing import Optional, Union
+import math as _math
+from typing import Optional as _Optional
+from typing import Union as _Union
 
 from ._tynx import Tensor, _categorical_sample, _normal_sample
 
@@ -11,8 +12,8 @@ class Categorical:
 
     def __init__(
         self,
-        probs: Optional[Tensor] = None,
-        logits: Optional[Tensor] = None,
+        probs: _Optional[Tensor] = None,
+        logits: _Optional[Tensor] = None,
     ) -> None:
         if (probs is None) == (logits is None):
             raise ValueError("Categorical requires exactly one of probs or logits")
@@ -25,7 +26,7 @@ class Categorical:
             self.probs = normalized
             self.logits = normalized.log()
 
-    def sample(self, *, seed: Optional[int] = None) -> Tensor:
+    def sample(self, *, seed: _Optional[int] = None) -> Tensor:
         """Draw detached int64 class indices, advancing native device RNG state."""
         return _categorical_sample(self.logits, seed)
 
@@ -43,7 +44,7 @@ class Categorical:
 class Normal:
     """Elementwise normal distribution with differentiable parameters."""
 
-    def __init__(self, loc: Union[Tensor, float], scale: Union[Tensor, float]) -> None:
+    def __init__(self, loc: _Union[Tensor, float], scale: _Union[Tensor, float]) -> None:
         if not isinstance(loc, Tensor):
             loc = scale.detach() * 0.0 + loc if isinstance(scale, Tensor) else Tensor([loc])
         if not isinstance(scale, Tensor):
@@ -53,7 +54,7 @@ class Normal:
         self.loc = loc
         self.scale = scale
 
-    def sample(self, *, seed: Optional[int] = None) -> Tensor:
+    def sample(self, *, seed: _Optional[int] = None) -> Tensor:
         """Draw a detached sample, advancing native device RNG state."""
         return _normal_sample(self.loc, self.scale, seed)
 
@@ -61,12 +62,14 @@ class Normal:
         """Return elementwise log density."""
         standardized = (value - self.loc) / self.scale
         return (
-            -(standardized * standardized) / 2.0 - self.scale.log() - 0.5 * math.log(2.0 * math.pi)
+            -(standardized * standardized) / 2.0
+            - self.scale.log()
+            - 0.5 * _math.log(2.0 * _math.pi)
         )
 
     def entropy(self) -> Tensor:
         """Return elementwise differential entropy."""
-        return self.scale.log() + 0.5 * math.log(2.0 * math.pi * math.e)
+        return self.scale.log() + 0.5 * _math.log(2.0 * _math.pi * _math.e)
 
 
 __all__ = ["Categorical", "Normal"]

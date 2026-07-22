@@ -1,8 +1,11 @@
 """Python bindings for the Tynx neural network runtime."""
 
-from collections.abc import Mapping
-from os import PathLike
-from typing import Literal, Optional, Union, overload
+from collections.abc import Mapping as _Mapping
+from os import PathLike as _PathLike
+from typing import Literal as _Literal
+from typing import Optional as _Optional
+from typing import Union as _Union
+from typing import overload as _overload
 
 from . import distributions, nn, optim
 from ._tynx import (
@@ -27,22 +30,22 @@ from .checkpoint import load_checkpoint, save_checkpoint
 from .compiler import CompiledFunction, compile
 
 
-@overload
+@_overload
 def load(
-    path: Union[str, PathLike[str]],
+    path: _Union[str, _PathLike[str]],
     *,
-    trainable: Literal[True, "auto"],
+    trainable: _Literal[True, "auto"],
     simplify: bool = True,
-    initializer_names: Optional[Mapping[str, str]] = None,
-    outputs: Optional[list[str]] = None,
+    initializer_names: _Optional[_Mapping[str, str]] = None,
+    outputs: _Optional[list[str]] = None,
 ) -> ImportedModel: ...
 
 
-@overload
+@_overload
 def load(
-    path: Union[str, PathLike[str]],
+    path: _Union[str, _PathLike[str]],
     *,
-    trainable: Literal[False] = False,
+    trainable: _Literal[False] = False,
     simplify: bool = True,
     initializer_names: None = None,
     outputs: None = None,
@@ -50,13 +53,13 @@ def load(
 
 
 def load(
-    path: Union[str, PathLike[str]],
+    path: _Union[str, _PathLike[str]],
     *,
-    trainable: Union[bool, Literal["auto"]] = False,
+    trainable: _Union[bool, _Literal["auto"]] = False,
     simplify: bool = True,
-    initializer_names: Optional[Mapping[str, str]] = None,
-    outputs: Optional[list[str]] = None,
-) -> Union[Session, ImportedModel]:
+    initializer_names: _Optional[_Mapping[str, str]] = None,
+    outputs: _Optional[list[str]] = None,
+) -> _Union[Session, ImportedModel]:
     """Load an inference Session or a callable slot-backed training model."""
     if trainable is False:
         if initializer_names is not None or outputs is not None:
