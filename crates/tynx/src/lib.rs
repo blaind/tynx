@@ -12,6 +12,8 @@ pub use session::Session;
 pub use tensor::{DynBool, DynInt, DynTensor, MAX_RANK};
 pub use value::{Scalar, Value};
 
+pub use burn::tensor::{DType, Device, TensorData};
+
 #[cfg(feature = "training")]
 pub use burn::tensor::Gradients;
 
