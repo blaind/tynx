@@ -161,7 +161,7 @@ impl PyTensor {
         }
     }
 
-    fn from_operation(inner: DynTensor, sources: &[&Self]) -> Self {
+    pub(crate) fn from_operation(inner: DynTensor, sources: &[&Self]) -> Self {
         let mut targets: Vec<GradTarget> = Vec::new();
         for source in sources {
             for target in &source.targets {
