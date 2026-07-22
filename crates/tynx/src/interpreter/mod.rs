@@ -6,6 +6,7 @@ mod broadcasting;
 mod cast;
 mod classification;
 mod clip;
+mod col2im;
 mod comparison;
 mod concat;
 mod control_flow;
@@ -129,6 +130,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Ceil(node) => unary::ceil(node, env, device),
         Node::Celu(node) => unary::celu(node, env, device),
         Node::Clip(node) => clip::clip(node, env, device),
+        Node::Col2Im(node) => col2im::col2im(node, env, device),
         Node::Concat(node) => concat::concat(node, env, device),
         Node::Constant(node) => Ok(vec![resolve::first(env, &node.name, &node.inputs, device)?]),
         Node::ConstantOfShape(node) => shape::constant_of_shape(node, env, device),
