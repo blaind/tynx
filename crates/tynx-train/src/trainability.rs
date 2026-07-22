@@ -1,7 +1,7 @@
 //! Conservative ONNX initializer-role classification.
 
 use std::{
-    collections::{BTreeSet, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     fmt,
 };
 
@@ -10,6 +10,8 @@ use tynx_core::onnx_ir::{
     ir::{ArgType, Argument, OnnxGraph, ValueSource},
 };
 use tynx_core::{Result, TynxError};
+
+use crate::backward_support::{BackwardCapability, BackwardSupportRegistry};
 
 /// Stable-enough identity available for an initializer in the processed ONNX graph.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -165,14 +167,59 @@ impl TrainabilityOverrides {
     }
 }
 
-/// Structured initializer-role portion of the imported-model trainability report.
-///
-/// Backward-path support analysis is deliberately not implied by this type yet. This first
-/// foundation answers which embedded values may become parameters, buffers, or constants and
-/// records every conservative or ambiguous decision visibly.
+/// One blocked edge on a selected parameter-to-output backward slice.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackwardPathIssue {
+    output: String,
+    node_name: String,
+    operator: String,
+    input_index: usize,
+    capability: BackwardCapability,
+    parameters: Vec<String>,
+}
+
+impl BackwardPathIssue {
+    /// Return the requested model output whose backward slice contains this edge.
+    pub fn output(&self) -> &str {
+        &self.output
+    }
+
+    /// Return the node name.
+    pub fn node_name(&self) -> &str {
+        &self.node_name
+    }
+
+    /// Return the operator name.
+    pub fn operator(&self) -> &str {
+        &self.operator
+    }
+
+    /// Return the blocked input position.
+    pub fn input_index(&self) -> usize {
+        self.input_index
+    }
+
+    /// Return whether the edge is deliberately stopped or lacks backward support.
+    pub fn capability(&self) -> BackwardCapability {
+        self.capability
+    }
+
+    /// Return trainable parameters upstream of this blocked edge.
+    pub fn parameters(&self) -> &[String] {
+        &self.parameters
+    }
+}
+
+/// Structured imported-model role and output-specific trainability report.
 #[derive(Debug, Clone, Default)]
 pub struct TrainabilityReport {
     initializers: Vec<InitializerReport>,
+    role_errors: bool,
+    output_analysis_complete: bool,
+    selected_outputs: Vec<String>,
+    output_parameters: BTreeMap<String, Vec<String>>,
+    backward_issues: Vec<BackwardPathIssue>,
+    unused_parameters: Vec<String>,
     warnings: Vec<String>,
     errors: Vec<String>,
 }
@@ -186,6 +233,37 @@ impl TrainabilityReport {
     /// Classify every initializer and apply exact-name role overrides.
     pub fn analyze_initializers_with(graph: &OnnxGraph, overrides: &TrainabilityOverrides) -> Self {
         analyze(graph, overrides)
+    }
+
+    /// Analyze every declared graph output using automatic initializer roles.
+    pub fn analyze_all_outputs(graph: &OnnxGraph) -> Self {
+        Self::analyze_all_outputs_with(graph, &TrainabilityOverrides::new())
+    }
+
+    /// Analyze every declared graph output using explicit initializer-role overrides.
+    pub fn analyze_all_outputs_with(graph: &OnnxGraph, overrides: &TrainabilityOverrides) -> Self {
+        let outputs = graph
+            .outputs
+            .iter()
+            .map(|output| output.name.as_str())
+            .collect::<Vec<_>>();
+        Self::analyze_outputs_with(graph, &outputs, overrides)
+    }
+
+    /// Analyze only the named declared graph outputs using automatic initializer roles.
+    pub fn analyze_outputs(graph: &OnnxGraph, outputs: &[&str]) -> Self {
+        Self::analyze_outputs_with(graph, outputs, &TrainabilityOverrides::new())
+    }
+
+    /// Analyze only the named declared graph outputs using explicit initializer-role overrides.
+    pub fn analyze_outputs_with(
+        graph: &OnnxGraph,
+        outputs: &[&str],
+        overrides: &TrainabilityOverrides,
+    ) -> Self {
+        let mut report = analyze(graph, overrides);
+        analyze_backward_paths(graph, outputs, &mut report);
+        report
     }
 
     /// Return initializer reports in first-consumer graph order.
@@ -214,23 +292,93 @@ impl TrainabilityReport {
             .filter(|initializer| initializer.role == InitializerRole::Constant)
     }
 
+    /// Return whether output-specific backward analysis has run.
+    pub fn has_output_analysis(&self) -> bool {
+        self.output_analysis_complete
+    }
+
+    /// Return requested outputs in caller order, with duplicates removed.
+    pub fn selected_outputs(&self) -> &[String] {
+        &self.selected_outputs
+    }
+
+    /// Return trainable parameters that structurally influence one requested output.
+    pub fn parameters_for_output(&self, output: &str) -> Option<&[String]> {
+        self.output_parameters.get(output).map(Vec::as_slice)
+    }
+
+    /// Return blocked edges found only on requested parameter-to-output slices.
+    pub fn backward_issues(&self) -> &[BackwardPathIssue] {
+        &self.backward_issues
+    }
+
+    /// Return selected trainable parameters unused by every requested output.
+    pub fn unused_parameters(&self) -> &[String] {
+        &self.unused_parameters
+    }
+
     /// Return visible conservative/ambiguity/provenance warnings.
     pub fn warnings(&self) -> &[String] {
         &self.warnings
     }
 
-    /// Return errors that prevent materializing a valid v1 trainable store.
+    /// Return errors that prevent a valid role or requested-output training contract.
     pub fn errors(&self) -> &[String] {
         &self.errors
     }
 
     /// Return whether role classification is unambiguous and compatible with v1 f32 training.
     pub fn roles_ready(&self) -> bool {
-        self.errors.is_empty()
+        !self.role_errors
             && self
                 .initializers
                 .iter()
                 .all(|initializer| initializer.role != InitializerRole::Ambiguous)
+    }
+
+    /// Return whether requested outputs have fully supported paths to their influencing parameters.
+    pub fn is_trainable(&self) -> bool {
+        self.output_analysis_complete
+            && self.roles_ready()
+            && self.errors.is_empty()
+            && self.backward_issues.is_empty()
+    }
+
+    /// Reject an incomplete or unsupported requested-output training contract.
+    pub fn require_trainable(&self) -> Result<()> {
+        if !self.output_analysis_complete {
+            return Err(TynxError::TypeMismatch(
+                "output-specific trainability analysis has not run".to_string(),
+            ));
+        }
+        if let Some(error) = self.errors.first() {
+            return Err(TynxError::TypeMismatch(format!(
+                "model is not trainable: {error}"
+            )));
+        }
+        if self
+            .initializers
+            .iter()
+            .any(|initializer| initializer.role == InitializerRole::Ambiguous)
+        {
+            return Err(TynxError::TypeMismatch(
+                "model is not trainable: one or more initializer roles are ambiguous".to_string(),
+            ));
+        }
+        if let Some(issue) = self.backward_issues.first() {
+            return Err(TynxError::UnsupportedOp(format!(
+                "{} '{}' input {} blocks gradients to output '{}': {}",
+                issue.operator,
+                issue.node_name,
+                issue.input_index,
+                issue.output,
+                issue
+                    .capability
+                    .reason()
+                    .unwrap_or("unknown backward restriction")
+            )));
+        }
+        Ok(())
     }
 }
 
@@ -250,6 +398,33 @@ impl fmt::Display for TrainabilityReport {
                 .iter()
                 .filter(|initializer| initializer.role == InitializerRole::Ambiguous),
         )?;
+        if self.output_analysis_complete {
+            writeln!(formatter, "Requested outputs:")?;
+            for output in &self.selected_outputs {
+                let parameters = self
+                    .parameters_for_output(output)
+                    .unwrap_or_default()
+                    .join(", ");
+                writeln!(formatter, "  {output}: [{parameters}]")?;
+            }
+            writeln!(formatter, "Blocked backward paths:")?;
+            for issue in &self.backward_issues {
+                writeln!(
+                    formatter,
+                    "  {}:{} input {} -> {} ({}) [{}]",
+                    issue.operator,
+                    issue.node_name,
+                    issue.input_index,
+                    issue.output,
+                    issue.capability.reason().unwrap_or("unknown restriction"),
+                    issue.parameters.join(", ")
+                )?;
+            }
+            writeln!(formatter, "Unused parameters:")?;
+            for parameter in &self.unused_parameters {
+                writeln!(formatter, "  {parameter}")?;
+            }
+        }
         write_message_section(formatter, "Warnings", &self.warnings)?;
         write_message_section(formatter, "Errors", &self.errors)
     }
@@ -382,6 +557,7 @@ fn analyze(graph: &OnnxGraph, overrides: &TrainabilityOverrides) -> Trainability
             }
         }
         if role == InitializerRole::Parameter && entry.dtype != Some(DType::F32) {
+            report.role_errors = true;
             report.errors.push(format!(
                 "initializer '{}' is a trainable parameter with dtype {:?}; v1 training requires f32",
                 entry.name, entry.dtype
@@ -407,6 +583,170 @@ fn analyze(graph: &OnnxGraph, overrides: &TrainabilityOverrides) -> Trainability
         }
     }
     report
+}
+
+fn analyze_backward_paths(graph: &OnnxGraph, outputs: &[&str], report: &mut TrainabilityReport) {
+    report.output_analysis_complete = true;
+
+    let declared_outputs = graph
+        .outputs
+        .iter()
+        .map(|output| output.name.as_str())
+        .collect::<HashSet<_>>();
+    let mut selected = HashSet::new();
+    for output in outputs {
+        if output.is_empty() {
+            report
+                .errors
+                .push("requested output name cannot be empty".to_string());
+        } else if !declared_outputs.contains(output) {
+            report.errors.push(format!(
+                "requested output '{output}' is not a declared graph output"
+            ));
+        } else if selected.insert((*output).to_string()) {
+            report.selected_outputs.push((*output).to_string());
+        }
+    }
+    if outputs.is_empty() {
+        report.errors.push(
+            "at least one graph output must be selected for trainability analysis".to_string(),
+        );
+    }
+
+    let parameter_names = report
+        .trainable_parameters()
+        .map(|parameter| (parameter.id.clone(), parameter.name.clone()))
+        .collect::<HashMap<_, _>>();
+    let all_parameters = parameter_names.values().cloned().collect::<BTreeSet<_>>();
+
+    let mut value_parameters = HashMap::<String, BTreeSet<String>>::new();
+    for (node_index, node) in graph.nodes.iter().enumerate() {
+        let mut parameters = BTreeSet::new();
+        for (input_index, input) in node.inputs().iter().enumerate() {
+            parameters.extend(parameters_for_argument(
+                node_index,
+                input_index,
+                input,
+                &parameter_names,
+                &value_parameters,
+            ));
+        }
+        for output in node.outputs() {
+            if !output.name.is_empty() {
+                value_parameters.insert(output.name.clone(), parameters.clone());
+            }
+        }
+    }
+
+    let producers = graph
+        .nodes
+        .iter()
+        .enumerate()
+        .flat_map(|(node_index, node)| {
+            node.outputs()
+                .iter()
+                .enumerate()
+                .filter(|(_, output)| !output.name.is_empty())
+                .map(move |(output_index, output)| {
+                    (output.name.clone(), (node_index, output_index))
+                })
+        })
+        .collect::<HashMap<_, _>>();
+
+    let mut used_parameters = BTreeSet::new();
+    for output in report.selected_outputs.clone() {
+        let influencing = value_parameters.get(&output).cloned().unwrap_or_default();
+        used_parameters.extend(influencing.iter().cloned());
+        report
+            .output_parameters
+            .insert(output.clone(), influencing.iter().cloned().collect());
+        if influencing.is_empty() {
+            report.warnings.push(format!(
+                "requested output '{output}' is not influenced by any selected trainable parameter"
+            ));
+            continue;
+        }
+
+        let mut queue = VecDeque::from([output.clone()]);
+        let mut visited_values = HashSet::new();
+        while let Some(value_name) = queue.pop_front() {
+            if !visited_values.insert(value_name.clone()) {
+                continue;
+            }
+            let Some(&(node_index, output_index)) = producers.get(&value_name) else {
+                continue;
+            };
+            let node = &graph.nodes[node_index];
+            for (input_index, input) in node.inputs().iter().enumerate() {
+                let upstream = parameters_for_argument(
+                    node_index,
+                    input_index,
+                    input,
+                    &parameter_names,
+                    &value_parameters,
+                )
+                .intersection(&influencing)
+                .cloned()
+                .collect::<BTreeSet<_>>();
+                if upstream.is_empty() {
+                    continue;
+                }
+
+                let capability =
+                    BackwardSupportRegistry::input_capability(node, output_index, input_index);
+                if capability.is_differentiable() {
+                    if matches!(input.value_source, ValueSource::Dynamic) && !input.name.is_empty()
+                    {
+                        queue.push_back(input.name.clone());
+                    }
+                } else {
+                    let issue = BackwardPathIssue {
+                        output: output.clone(),
+                        node_name: node.name().to_string(),
+                        operator: node_kind_name(node),
+                        input_index,
+                        capability,
+                        parameters: upstream.into_iter().collect(),
+                    };
+                    if !report.backward_issues.contains(&issue) {
+                        report.backward_issues.push(issue);
+                    }
+                }
+            }
+        }
+    }
+
+    report.unused_parameters = all_parameters
+        .difference(&used_parameters)
+        .cloned()
+        .collect();
+    for parameter in &report.unused_parameters {
+        report.warnings.push(format!(
+            "selected trainable parameter '{parameter}' is unused by the requested outputs"
+        ));
+    }
+}
+
+fn parameters_for_argument(
+    node_index: usize,
+    input_index: usize,
+    input: &Argument,
+    parameter_names: &HashMap<InitializerId, String>,
+    value_parameters: &HashMap<String, BTreeSet<String>>,
+) -> BTreeSet<String> {
+    if matches!(
+        input.value_source,
+        ValueSource::Static(_) | ValueSource::Constant
+    ) {
+        let id = initializer_id(input, node_index, input_index);
+        if let Some(parameter) = parameter_names.get(&id) {
+            return BTreeSet::from([parameter.clone()]);
+        }
+    }
+    value_parameters
+        .get(&input.name)
+        .cloned()
+        .unwrap_or_default()
 }
 
 fn initializer_id(input: &Argument, node_index: usize, input_index: usize) -> InitializerId {
@@ -559,6 +899,19 @@ fn operator_name(node: &Node) -> &'static str {
     }
 }
 
+fn node_kind_name(node: &Node) -> String {
+    let registered = operator_name(node);
+    if registered != "Other" {
+        return registered.to_string();
+    }
+    let debug = format!("{node:?}");
+    debug
+        .split(['(', '{'])
+        .next()
+        .unwrap_or("Unknown")
+        .to_string()
+}
+
 fn write_role_section<'a>(
     formatter: &mut fmt::Formatter<'_>,
     heading: &str,
@@ -593,8 +946,12 @@ mod tests {
         ir::{TensorType, ValueSource},
         node::{
             batch_norm::{BatchNormConfig, BatchNormRuntimeConfig, BatchNormalizationNode},
+            ceil::CeilNode,
+            det::DetNode,
+            gather::{GatherConfig, GatherNode},
             identity::IdentityNode,
             linear::{LinearConfig, LinearNode},
+            relu::ReluNode,
         },
     };
 
@@ -620,10 +977,20 @@ mod tests {
     }
 
     fn linear(weight: Argument, bias: Argument) -> Node {
+        linear_named("linear", "x", "y", weight, bias)
+    }
+
+    fn linear_named(
+        name: &str,
+        input: &str,
+        output: &str,
+        weight: Argument,
+        bias: Argument,
+    ) -> Node {
         Node::Linear(LinearNode {
-            name: "linear".to_string(),
-            inputs: vec![dynamic("x", DType::F32, &[1, 2]), weight, bias],
-            outputs: vec![dynamic("y", DType::F32, &[1, 2])],
+            name: name.to_string(),
+            inputs: vec![dynamic(input, DType::F32, &[1, 2]), weight, bias],
+            outputs: vec![dynamic(output, DType::F32, &[1, 2])],
             config: LinearConfig::new(false),
         })
     }
@@ -646,6 +1013,15 @@ mod tests {
     fn graph(nodes: Vec<Node>) -> OnnxGraph {
         let mut graph = OnnxGraph::default();
         graph.nodes = nodes;
+        graph
+    }
+
+    fn graph_with_outputs(nodes: Vec<Node>, outputs: &[&str]) -> OnnxGraph {
+        let mut graph = graph(nodes);
+        graph.outputs = outputs
+            .iter()
+            .map(|name| dynamic(name, DType::F32, &[1, 2]))
+            .collect();
         graph
     }
 
@@ -843,5 +1219,145 @@ mod tests {
         assert!(display.contains("Fixed buffers:"));
         assert!(display.contains("Warnings:"));
         assert!(display.contains("weight"));
+    }
+
+    #[test]
+    fn registry_distinguishes_gather_data_from_indices() {
+        let node = Node::Gather(GatherNode {
+            name: "gather".to_string(),
+            inputs: vec![
+                dynamic("data", DType::F32, &[4, 2]),
+                dynamic("indices", DType::I64, &[1]),
+            ],
+            outputs: vec![dynamic("selected", DType::F32, &[1, 2])],
+            config: GatherConfig::new(0),
+        });
+
+        assert_eq!(
+            BackwardSupportRegistry::input_capability(&node, 0, 0),
+            BackwardCapability::Differentiable
+        );
+        assert!(matches!(
+            BackwardSupportRegistry::input_capability(&node, 0, 1),
+            BackwardCapability::StopGradient(_)
+        ));
+    }
+
+    #[test]
+    fn supported_slice_reports_influencing_and_unused_parameters() {
+        let graph = two_branch_graph();
+
+        let report = TrainabilityReport::analyze_outputs(&graph, &["policy"]);
+
+        assert!(report.is_trainable());
+        assert_eq!(
+            report.parameters_for_output("policy").unwrap(),
+            ["policy.bias", "policy.weight"]
+        );
+        assert!(report.backward_issues().is_empty());
+        assert_eq!(
+            report.unused_parameters(),
+            ["diagnostic.bias", "diagnostic.weight"]
+        );
+        report.require_trainable().unwrap();
+    }
+
+    #[test]
+    fn irrelevant_stop_gradient_branch_does_not_block_selected_output() {
+        let graph = two_branch_graph();
+
+        let policy = TrainabilityReport::analyze_outputs(&graph, &["policy"]);
+        let diagnostic = TrainabilityReport::analyze_outputs(&graph, &["diagnostic"]);
+
+        assert!(policy.is_trainable());
+        assert!(!diagnostic.is_trainable());
+        assert_eq!(diagnostic.backward_issues().len(), 1);
+        let issue = &diagnostic.backward_issues()[0];
+        assert_eq!(issue.operator(), "Ceil");
+        assert_eq!(issue.node_name(), "diagnostic_round");
+        assert!(matches!(
+            issue.capability(),
+            BackwardCapability::StopGradient(_)
+        ));
+        assert_eq!(issue.parameters(), ["diagnostic.bias", "diagnostic.weight"]);
+        assert!(matches!(
+            diagnostic.require_trainable(),
+            Err(TynxError::UnsupportedOp(_))
+        ));
+    }
+
+    #[test]
+    fn unregistered_backward_operator_is_actionable() {
+        let nodes = vec![
+            linear_named(
+                "matrix",
+                "x",
+                "matrix_value",
+                named_constant("matrix.weight", DType::F32, &[2, 2]),
+                named_constant("matrix.bias", DType::F32, &[2]),
+            ),
+            Node::Det(DetNode {
+                name: "determinant".to_string(),
+                inputs: vec![dynamic("matrix_value", DType::F32, &[1, 2])],
+                outputs: vec![dynamic("score", DType::F32, &[1])],
+            }),
+        ];
+        let graph = graph_with_outputs(nodes, &["score"]);
+
+        let report = TrainabilityReport::analyze_all_outputs(&graph);
+
+        assert!(!report.is_trainable());
+        let issue = &report.backward_issues()[0];
+        assert_eq!(issue.operator(), "Det");
+        assert!(matches!(
+            issue.capability(),
+            BackwardCapability::Unsupported(_)
+        ));
+        assert!(report.to_string().contains("determinant"));
+    }
+
+    #[test]
+    fn unknown_requested_output_fails_before_execution() {
+        let graph = two_branch_graph();
+
+        let report = TrainabilityReport::analyze_outputs(&graph, &["missing"]);
+
+        assert!(!report.is_trainable());
+        assert!(report.roles_ready());
+        assert!(report.errors()[0].contains("not a declared graph output"));
+        assert!(matches!(
+            report.require_trainable(),
+            Err(TynxError::TypeMismatch(_))
+        ));
+    }
+
+    fn two_branch_graph() -> OnnxGraph {
+        let nodes = vec![
+            linear_named(
+                "policy_linear",
+                "x",
+                "policy_hidden",
+                named_constant("policy.weight", DType::F32, &[2, 2]),
+                named_constant("policy.bias", DType::F32, &[2]),
+            ),
+            Node::Relu(ReluNode {
+                name: "policy_relu".to_string(),
+                inputs: vec![dynamic("policy_hidden", DType::F32, &[1, 2])],
+                outputs: vec![dynamic("policy", DType::F32, &[1, 2])],
+            }),
+            linear_named(
+                "diagnostic_linear",
+                "x",
+                "diagnostic_hidden",
+                named_constant("diagnostic.weight", DType::F32, &[2, 2]),
+                named_constant("diagnostic.bias", DType::F32, &[2]),
+            ),
+            Node::Ceil(CeilNode {
+                name: "diagnostic_round".to_string(),
+                inputs: vec![dynamic("diagnostic_hidden", DType::F32, &[1, 2])],
+                outputs: vec![dynamic("diagnostic", DType::F32, &[1, 2])],
+            }),
+        ];
+        graph_with_outputs(nodes, &["policy", "diagnostic"])
     }
 }
