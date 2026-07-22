@@ -1058,6 +1058,11 @@ impl DynTensor {
         map_float!(self, |tensor| tensor.sub_scalar(value))
     }
 
+    /// Create a tensor with the same shape, device, and dtype filled with one scalar.
+    pub fn full_like(self, value: f64) -> Self {
+        map_float!(self, |tensor| tensor.full_like(value))
+    }
+
     /// Multiply matrices or batches of matrices with matching runtime ranks.
     pub fn matmul(self, other: Self) -> Result<Self> {
         Ok(match (self, other) {
@@ -1901,6 +1906,11 @@ impl DynInt {
         map_int!(self, |tensor| tensor.sub_scalar(value))
     }
 
+    /// Create an integer tensor with the same shape, device, and dtype filled with one scalar.
+    pub fn full_like(self, value: i64) -> Self {
+        map_int!(self, |tensor| tensor.full_like(value))
+    }
+
     /// Multiply matrices or batches of matrices with matching runtime ranks.
     pub fn matmul(self, other: Self) -> Result<Self> {
         Ok(match (self, other) {
@@ -2369,6 +2379,11 @@ impl DynBool {
     /// Apply logical NOT element-wise.
     pub fn logical_not(self) -> Self {
         map_bool!(self, |tensor| tensor.bool_not())
+    }
+
+    /// Create a boolean tensor with the same shape and device filled with one scalar.
+    pub fn full_like(self, value: bool) -> Self {
+        map_bool!(self, |tensor| tensor.full_like(value))
     }
 
     /// Convert the boolean tensor to an integer tensor with an explicit dtype.
