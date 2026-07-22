@@ -1,6 +1,7 @@
 //! Runtime dispatch for individual ONNX nodes.
 
 mod binary;
+mod cast;
 mod clip;
 mod comparison;
 mod convolution;
@@ -58,6 +59,8 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::AveragePool1d(node) => pooling::average_pool1d(node, env, device),
         Node::AveragePool2d(node) => pooling::average_pool2d(node, env, device),
         Node::AveragePool3d(node) => pooling::average_pool3d(node, env, device),
+        Node::Cast(node) => cast::cast(node, env, device),
+        Node::CastLike(node) => cast::cast_like(node, env, device),
         Node::Ceil(node) => unary::ceil(node, env, device),
         Node::Celu(node) => unary::celu(node, env, device),
         Node::Clip(node) => clip::clip(node, env, device),

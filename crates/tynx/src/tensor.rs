@@ -593,6 +593,18 @@ impl DynTensor {
         }
     }
 
+    /// Convert the tensor to booleans using nonzero truth semantics.
+    pub fn to_bool(self) -> DynBool {
+        match self {
+            Self::R1(tensor) => DynBool::R1(tensor.bool()),
+            Self::R2(tensor) => DynBool::R2(tensor.bool()),
+            Self::R3(tensor) => DynBool::R3(tensor.bool()),
+            Self::R4(tensor) => DynBool::R4(tensor.bool()),
+            Self::R5(tensor) => DynBool::R5(tensor.bool()),
+            Self::R6(tensor) => DynBool::R6(tensor.bool()),
+        }
+    }
+
     fn broadcast_pair(left: Self, right: Self) -> Result<(Self, Self)> {
         let rank = left.rank().max(right.rank());
         Ok((left.to_rank(rank)?, right.to_rank(rank)?))
@@ -950,6 +962,18 @@ impl DynInt {
         }
     }
 
+    /// Convert the tensor to booleans using nonzero truth semantics.
+    pub fn to_bool(self) -> DynBool {
+        match self {
+            Self::R1(tensor) => DynBool::R1(tensor.bool()),
+            Self::R2(tensor) => DynBool::R2(tensor.bool()),
+            Self::R3(tensor) => DynBool::R3(tensor.bool()),
+            Self::R4(tensor) => DynBool::R4(tensor.bool()),
+            Self::R5(tensor) => DynBool::R5(tensor.bool()),
+            Self::R6(tensor) => DynBool::R6(tensor.bool()),
+        }
+    }
+
     /// Return indices of extrema along one dimension using ONNX tie semantics.
     pub fn arg_extreme(self, dim: usize, maximum: bool, select_last: bool) -> Self {
         macro_rules! apply {
@@ -1251,6 +1275,30 @@ impl DynBool {
     /// Apply logical NOT element-wise.
     pub fn logical_not(self) -> Self {
         map_bool!(self, |tensor| tensor.bool_not())
+    }
+
+    /// Convert the boolean tensor to an integer tensor with an explicit dtype.
+    pub fn to_int(self, dtype: DType) -> DynInt {
+        match self {
+            Self::R1(tensor) => DynInt::R1(tensor.int().cast(dtype)),
+            Self::R2(tensor) => DynInt::R2(tensor.int().cast(dtype)),
+            Self::R3(tensor) => DynInt::R3(tensor.int().cast(dtype)),
+            Self::R4(tensor) => DynInt::R4(tensor.int().cast(dtype)),
+            Self::R5(tensor) => DynInt::R5(tensor.int().cast(dtype)),
+            Self::R6(tensor) => DynInt::R6(tensor.int().cast(dtype)),
+        }
+    }
+
+    /// Convert the boolean tensor to a floating-point tensor with an explicit dtype.
+    pub fn to_float(self, dtype: DType) -> DynTensor {
+        match self {
+            Self::R1(tensor) => DynTensor::R1(tensor.float().cast(dtype)),
+            Self::R2(tensor) => DynTensor::R2(tensor.float().cast(dtype)),
+            Self::R3(tensor) => DynTensor::R3(tensor.float().cast(dtype)),
+            Self::R4(tensor) => DynTensor::R4(tensor.float().cast(dtype)),
+            Self::R5(tensor) => DynTensor::R5(tensor.float().cast(dtype)),
+            Self::R6(tensor) => DynTensor::R6(tensor.float().cast(dtype)),
+        }
     }
 
     /// Take the maximum along dimensions while retaining singleton dimensions.
