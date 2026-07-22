@@ -22,7 +22,7 @@ use pyo3::{
 use tynx_core::{Device, DynInt, DynTensor, Gradients};
 use tynx_train::ParameterSlot;
 
-use crate::{grad_mode::is_grad_enabled, to_python_error};
+use crate::{device::PyDevice, grad_mode::is_grad_enabled, to_python_error};
 use comparison::{Comparison, MaskOperation};
 use data::TensorValue;
 use extrema::Extremum;
@@ -515,6 +515,12 @@ impl PyTensor {
     #[getter]
     fn dtype(&self) -> &'static str {
         self.source.value().dtype_name()
+    }
+
+    /// Execution device used by this tensor.
+    #[getter]
+    fn device(&self) -> PyDevice {
+        PyDevice::new(self.source.value().device())
     }
 
     /// Whether this tensor participates in an autodiff graph.

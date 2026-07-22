@@ -14,6 +14,11 @@ def test_module_metadata() -> None:
     assert callable(tynx.Session)
     assert callable(tynx.Tensor)
     assert callable(tynx.Parameter)
+    device = tynx.get_default_device()
+    assert isinstance(device, tynx.Device)
+    assert str(device)
+    tynx.synchronize()
+    tynx.synchronize(device)
 
 
 def test_tensor_metadata_and_host_conversion() -> None:
@@ -26,6 +31,9 @@ def test_tensor_metadata_and_host_conversion() -> None:
     assert tensor.tolist() == [[1.0, 2.0], [3.0, 4.0]]
     assert tynx.Tensor(3.5).shape == (1,)
     assert tynx.Tensor([3.5]).item() == pytest.approx(3.5)
+    assert isinstance(tensor.device, tynx.Device)
+    assert str(tensor.device)
+    assert tensor.device == tynx.get_default_device()
     assert len(tensor) == 2
     assert tynx.Tensor(tensor).tolist() == tensor.tolist()
     assert tynx.Tensor(range(3)).tolist() == [0.0, 1.0, 2.0]
