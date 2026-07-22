@@ -325,6 +325,15 @@ def test_tensor_arg_extrema_return_first_indices() -> None:
         tynx.Tensor([True, False], dtype="bool").argmax()
 
 
+def test_tensor_arg_extrema_select_first_nan() -> None:
+    values = tynx.Tensor([[1.0, float("nan"), 3.0], [float("nan"), 5.0, float("nan")]])
+
+    assert values.argmax().tolist() == [1]
+    assert values.argmin().tolist() == [1]
+    assert values.argmax(dim=1).tolist() == [1, 0]
+    assert values.argmin(dim=1).tolist() == [1, 0]
+
+
 def test_tensor_elementwise_minimum_maximum_broadcast_and_gradients() -> None:
     left = tynx.Tensor([[-2.0], [3.0]], requires_grad=True)
     right = tynx.Tensor([[1.0, 2.0]], requires_grad=True)
