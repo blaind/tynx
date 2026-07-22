@@ -74,6 +74,34 @@ impl TensorValue {
         }
     }
 
+    pub(super) fn scalar_like(self, scalar: &Bound<'_, PyAny>, context: &str) -> PyResult<Self> {
+        match self {
+            Self::Float(value) => scalar
+                .extract::<f64>()
+                .map(|scalar| Self::Float(value.full_like(scalar)))
+                .map_err(|_| {
+                    PyTypeError::new_err(format!("float32 {context} expects a real scalar"))
+                }),
+            Self::Int(value) => {
+                if scalar.is_instance_of::<PyBool>() {
+                    return Err(PyTypeError::new_err(format!(
+                        "int64 {context} expects an integer scalar, not bool"
+                    )));
+                }
+                scalar
+                    .extract::<i64>()
+                    .map(|scalar| Self::Int(value.full_like(scalar)))
+                    .map_err(|_| {
+                        PyTypeError::new_err(format!("int64 {context} expects an integer scalar"))
+                    })
+            }
+            Self::Bool(value) => scalar
+                .extract::<bool>()
+                .map(|scalar| Self::Bool(value.full_like(scalar)))
+                .map_err(|_| PyTypeError::new_err(format!("bool {context} expects a bool scalar"))),
+        }
+    }
+
     pub(super) fn detach(self) -> Self {
         match self {
             Self::Float(value) => Self::Float(value.detach()),

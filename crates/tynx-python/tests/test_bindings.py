@@ -201,6 +201,62 @@ def test_tensor_gather_rejects_invalid_indices_and_shapes() -> None:
         values.gather(2, tynx.Tensor([[0], [0]], dtype="int64"))
 
 
+def test_tensor_value_min_max_reductions_follow_shape_policy() -> None:
+    values = tynx.Tensor([[1.0, 5.0, 3.0], [4.0, 2.0, 6.0]])
+
+    assert values.max().shape == (1,)
+    assert values.max().tolist() == [6.0]
+    assert values.min().tolist() == [1.0]
+    assert values.max(dim=0).tolist() == [4.0, 5.0, 6.0]
+    assert values.min(dim=-1, keepdim=True).tolist() == [[1.0], [2.0]]
+    assert values.max(dim=(0, 1), keepdim=True).shape == (1, 1)
+
+    integers = tynx.Tensor([[1, 4], [3, 2]], dtype="int64")
+    booleans = tynx.Tensor([[True, False], [False, False]], dtype="bool")
+    assert integers.min(dim=0).tolist() == [1, 2]
+    assert booleans.max(dim=0).tolist() == [True, False]
+    assert booleans.min().tolist() == [False]
+
+
+def test_tensor_value_min_max_reductions_are_differentiable() -> None:
+    values = tynx.Tensor([[1.0, 5.0, 3.0], [4.0, 2.0, 6.0]], requires_grad=True)
+
+    (values.max(dim=1) + values.min(dim=1)).sum().backward()
+
+    assert values.grad is not None
+    assert values.grad.tolist() == [[1.0, 1.0, 0.0], [0.0, 1.0, 1.0]]
+
+
+def test_tensor_elementwise_minimum_maximum_broadcast_and_gradients() -> None:
+    left = tynx.Tensor([[-2.0], [3.0]], requires_grad=True)
+    right = tynx.Tensor([[1.0, 2.0]], requires_grad=True)
+
+    maximum = tynx.maximum(left, right)
+    assert maximum.tolist() == [[1.0, 2.0], [3.0, 3.0]]
+    assert left.minimum(0).tolist() == [[-2.0], [0.0]]
+    assert tynx.minimum(left, right).tolist() == [[-2.0, -2.0], [1.0, 2.0]]
+
+    maximum.sum().backward()
+    assert left.grad is not None
+    assert left.grad.tolist() == [[0.0], [2.0]]
+    assert right.grad is not None
+    assert right.grad.tolist() == [[1.0, 1.0]]
+
+
+def test_tensor_elementwise_minimum_maximum_support_typed_values_and_errors() -> None:
+    integers = tynx.Tensor([[1], [4]], dtype="int64")
+    masks = tynx.Tensor([[True], [False]], dtype="bool")
+
+    assert integers.maximum(3).tolist() == [[3], [4]]
+    assert masks.maximum(False).tolist() == [[True], [False]]
+    assert masks.minimum(True).tolist() == [[True], [False]]
+
+    with pytest.raises(TypeError, match="matching Tensor dtypes"):
+        integers.maximum(tynx.Tensor([1.0]))
+    with pytest.raises(TypeError, match="integer scalar"):
+        integers.minimum(1.5)
+
+
 def test_tensor_eager_operators() -> None:
     left = tynx.Tensor([[1.0, 2.0], [3.0, 4.0]])
     right = tynx.Tensor([[2.0, 0.5], [1.0, 2.0]])

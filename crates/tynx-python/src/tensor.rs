@@ -2,6 +2,7 @@
 
 mod comparison;
 mod data;
+mod extrema;
 mod indexing;
 mod reduction;
 mod selection;
@@ -24,6 +25,7 @@ use tynx_train::ParameterSlot;
 use crate::{grad_mode::is_grad_enabled, to_python_error};
 use comparison::{Comparison, MaskOperation};
 use data::TensorValue;
+use extrema::Extremum;
 use reduction::ReductionSpec;
 
 /// Eager device tensor with optional floating-point autodiff state.
@@ -314,6 +316,43 @@ impl PyTensor {
         }
     }
 
+    fn elementwise_extreme(&self, other: &Bound<'_, PyAny>, extremum: Extremum) -> PyResult<Self> {
+        let tracking = is_grad_enabled();
+        let other_tensor = other.extract::<PyRef<'_, Self>>().ok();
+        let left = match self.source.value() {
+            TensorValue::Float(_) => self
+                .source
+                .operation_input(tracking, extremum.name())
+                .map(TensorValue::Float)?,
+            value => value.detach(),
+        };
+        let right = if let Some(other) = other_tensor.as_deref() {
+            match other.source.value() {
+                TensorValue::Float(_) => other
+                    .source
+                    .operation_input(tracking, extremum.name())
+                    .map(TensorValue::Float)?,
+                value => value.detach(),
+            }
+        } else {
+            self.source
+                .value()
+                .detach()
+                .scalar_like(other, extremum.name())?
+        };
+        let result = extrema::pair(left, right, extremum)?;
+        match result {
+            TensorValue::Float(inner) if tracking => {
+                let mut sources = vec![self];
+                if let Some(other) = other_tensor.as_deref() {
+                    sources.push(other);
+                }
+                Ok(Self::from_operation(inner, &sources))
+            }
+            value => Ok(Self::from_value(value.detach())),
+        }
+    }
+
     pub(crate) fn tensor_from_python(data: &Bound<'_, PyAny>) -> PyResult<DynTensor> {
         let device = Device::autodiff(tynx_core::default_device());
         TensorValue::float_from_python(data, &device)
@@ -477,6 +516,28 @@ impl PyTensor {
     #[pyo3(signature = (dim=None, keepdim=false))]
     fn mean(&self, dim: Option<&Bound<'_, PyAny>>, keepdim: bool) -> PyResult<Self> {
         self.reduce(dim, keepdim, DynTensor::mean_dims)
+    }
+
+    /// Return value-only maxima over all, one, or several dimensions.
+    #[pyo3(signature = (dim=None, keepdim=false))]
+    fn max(&self, dim: Option<&Bound<'_, PyAny>>, keepdim: bool) -> PyResult<Self> {
+        self.reduce_extreme(dim, keepdim, Extremum::Maximum)
+    }
+
+    /// Return value-only minima over all, one, or several dimensions.
+    #[pyo3(signature = (dim=None, keepdim=false))]
+    fn min(&self, dim: Option<&Bound<'_, PyAny>>, keepdim: bool) -> PyResult<Self> {
+        self.reduce_extreme(dim, keepdim, Extremum::Minimum)
+    }
+
+    /// Take the elementwise maximum with a broadcastable tensor or scalar.
+    fn maximum(&self, other: &Bound<'_, PyAny>) -> PyResult<Self> {
+        self.elementwise_extreme(other, Extremum::Maximum)
+    }
+
+    /// Take the elementwise minimum with a broadcastable tensor or scalar.
+    fn minimum(&self, other: &Bound<'_, PyAny>) -> PyResult<Self> {
+        self.elementwise_extreme(other, Extremum::Minimum)
     }
 
     /// Apply rectified linear activation element-wise.
@@ -726,6 +787,33 @@ impl PyTensor {
         let spec = ReductionSpec::from_python(dim, &input_shape, keepdim)?;
         self.unary(move |input| operation(input, &spec.dims).reshape(spec.output_shape))
     }
+
+    fn reduce_extreme(
+        &self,
+        dim: Option<&Bound<'_, PyAny>>,
+        keepdim: bool,
+        extremum: Extremum,
+    ) -> PyResult<Self> {
+        let input_shape = self.source.value().dims();
+        let spec = ReductionSpec::from_python(dim, &input_shape, keepdim)?;
+        let tracking = is_grad_enabled();
+        match self.source.value() {
+            TensorValue::Float(_) => {
+                let input = self.source.operation_input(tracking, extremum.name())?;
+                let inner = extremum
+                    .float_reduce(input, &spec.dims)
+                    .reshape(spec.output_shape)
+                    .map_err(to_python_error)?;
+                Ok(if tracking {
+                    Self::from_operation(inner, &[self])
+                } else {
+                    Self::from_inner(inner)
+                })
+            }
+            value => extrema::reduce(value.detach(), &spec.dims, spec.output_shape, extremum)
+                .map(Self::from_value),
+        }
+    }
 }
 
 fn extract_scalar_operand(value: &Bound<'_, PyAny>) -> PyResult<f64> {
@@ -742,4 +830,20 @@ pub(crate) fn where_py(
     other: &Bound<'_, PyAny>,
 ) -> PyResult<PyTensor> {
     PyTensor::where_from_python(&condition, input, other)
+}
+
+#[pyfunction(name = "maximum")]
+pub(crate) fn maximum_py(
+    input: PyRef<'_, PyTensor>,
+    other: &Bound<'_, PyAny>,
+) -> PyResult<PyTensor> {
+    input.elementwise_extreme(other, Extremum::Maximum)
+}
+
+#[pyfunction(name = "minimum")]
+pub(crate) fn minimum_py(
+    input: PyRef<'_, PyTensor>,
+    other: &Bound<'_, PyAny>,
+) -> PyResult<PyTensor> {
+    input.elementwise_extreme(other, Extremum::Minimum)
 }

@@ -1,10 +1,6 @@
 //! Typed eager conditional selection.
 
-use pyo3::{
-    exceptions::PyTypeError,
-    prelude::*,
-    types::{PyAny, PyBool},
-};
+use pyo3::{exceptions::PyTypeError, prelude::*};
 use tynx_core::{DynBool, DynInt, DynTensor};
 
 use super::data::TensorValue;
@@ -24,27 +20,7 @@ pub(super) fn scalar_like(
     template: TensorValue,
     scalar: &Bound<'_, PyAny>,
 ) -> PyResult<TensorValue> {
-    match template {
-        TensorValue::Float(value) => scalar
-            .extract::<f64>()
-            .map(|scalar| TensorValue::Float(value.full_like(scalar)))
-            .map_err(|_| PyTypeError::new_err("float32 where branch expects a real scalar")),
-        TensorValue::Int(value) => {
-            if scalar.is_instance_of::<PyBool>() {
-                return Err(PyTypeError::new_err(
-                    "int64 where branch expects an integer scalar, not bool",
-                ));
-            }
-            scalar
-                .extract::<i64>()
-                .map(|scalar| TensorValue::Int(value.full_like(scalar)))
-                .map_err(|_| PyTypeError::new_err("int64 where branch expects an integer scalar"))
-        }
-        TensorValue::Bool(value) => scalar
-            .extract::<bool>()
-            .map(|scalar| TensorValue::Bool(value.full_like(scalar)))
-            .map_err(|_| PyTypeError::new_err("bool where branch expects a bool scalar")),
-    }
+    template.scalar_like(scalar, "where branch")
 }
 
 pub(super) fn select(
