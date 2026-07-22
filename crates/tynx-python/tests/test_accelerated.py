@@ -16,6 +16,15 @@ def _accelerated_device() -> tynx.Device:
     pytest.skip(f"accelerated backend not enabled: {device}")
 
 
+def test_accelerated_boolean_construction_avoids_backend_bool_upload() -> None:
+    device = _accelerated_device()
+
+    value = tynx.Tensor([[True, False], [False, True]], dtype="bool")
+
+    tynx.synchronize(device)
+    assert value.tolist() == [[True, False], [False, True]]
+
+
 def test_accelerated_tape_survives_intermediate_drop_and_optimizer_step() -> None:
     device = _accelerated_device()
     input = tynx.Tensor([[1.0, 2.0]], requires_grad=True)

@@ -49,7 +49,7 @@ impl TensorValue {
             }
             "bool" => {
                 let (values, shape) = parse(data, "bool", |value| value.extract::<bool>())?;
-                DynBool::from_data(TensorData::new(values, shape.clone()), shape.len(), device)
+                bool_from_data(values, shape, device)
                     .map(Self::Bool)
                     .map_err(to_python_error)
             }
@@ -105,7 +105,30 @@ impl TensorValue {
 
         extract!(f32, "float32", Float, DynTensor);
         extract!(i64, "int64", Int, DynInt);
-        extract!(bool, "bool", Bool, DynBool);
+        if let Ok(array) = data.extract::<PyReadonlyArrayDyn<'_, bool>>() {
+            if let Some(requested) = dtype
+                && requested != "bool"
+            {
+                return Err(PyTypeError::new_err(format!(
+                    "NumPy array dtype bool must match requested Tensor dtype {requested}"
+                )));
+            }
+            let array = array.as_array();
+            let mut shape = array.shape().to_vec();
+            if shape.is_empty() {
+                shape.push(1);
+            }
+            if array.is_empty() {
+                return Err(PyValueError::new_err(
+                    "Tensor data cannot contain an empty NumPy array",
+                ));
+            }
+            let values = array.iter().copied().collect::<Vec<_>>();
+            return bool_from_data(values, shape, device)
+                .map(Self::Bool)
+                .map(Some)
+                .map_err(to_python_error);
+        }
         match dtype {
             Some(dtype) => Err(PyTypeError::new_err(format!(
                 "NumPy array dtype must match requested Tensor dtype {dtype}"
@@ -284,6 +307,17 @@ impl TensorValue {
             Self::Bool(value) => convert!(value, bool),
         }
     }
+}
+
+fn bool_from_data(
+    values: Vec<bool>,
+    shape: Vec<usize>,
+    device: &Device,
+) -> tynx_core::Result<DynBool> {
+    let values = values.into_iter().map(i64::from).collect::<Vec<_>>();
+    let rank = shape.len();
+    DynInt::from_data(TensorData::new(values, shape), rank, device)
+        .map(|tensor| tensor.equal_scalar(1))
 }
 
 fn parse<T>(
