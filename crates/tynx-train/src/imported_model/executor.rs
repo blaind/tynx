@@ -44,12 +44,13 @@ pub(super) fn run(
     state: &ImportedState,
     device: &Device,
     mut env: Env,
+    tracking: bool,
 ) -> Result<Env> {
     for (node_index, node) in session.graph().nodes.iter().enumerate() {
         let values = match node {
-            Node::Linear(node) => execute_linear(node, node_index, &env, state, device),
-            Node::Gemm(node) => execute_gemm(node, node_index, &env, state, device),
-            Node::MatMul(node) => execute_matmul(node, node_index, &env, state, device),
+            Node::Linear(node) => execute_linear(node, node_index, &env, state, device, tracking),
+            Node::Gemm(node) => execute_gemm(node, node_index, &env, state, device, tracking),
+            Node::MatMul(node) => execute_matmul(node, node_index, &env, state, device, tracking),
             _ => execute(node, &env, device),
         }?;
         if values.len() != node.outputs().len() {
@@ -84,9 +85,10 @@ fn execute_linear(
     env: &Env,
     state: &ImportedState,
     device: &Device,
+    tracking: bool,
 ) -> Result<Vec<Value>> {
-    let input = resolve_tensor(node, node_index, 0, env, state, device)?;
-    let mut weight = resolve_tensor(node, node_index, 1, env, state, device)?;
+    let input = resolve_tensor(node, node_index, 0, env, state, device, tracking)?;
+    let mut weight = resolve_tensor(node, node_index, 1, env, state, device, tracking)?;
     if node.config.transpose_weight {
         weight = weight.permute(vec![1, 0])?;
     }
@@ -94,7 +96,7 @@ fn execute_linear(
     if node.inputs.get(2).is_some_and(|input| !input.is_optional()) {
         output = add_bias(
             output,
-            resolve_value(node, node_index, 2, env, state, device)?,
+            resolve_value(node, node_index, 2, env, state, device, tracking)?,
             1.0,
         )?;
     }
@@ -107,9 +109,10 @@ fn execute_gemm(
     env: &Env,
     state: &ImportedState,
     device: &Device,
+    tracking: bool,
 ) -> Result<Vec<Value>> {
-    let mut left = resolve_tensor(node, node_index, 0, env, state, device)?;
-    let mut right = resolve_tensor(node, node_index, 1, env, state, device)?;
+    let mut left = resolve_tensor(node, node_index, 0, env, state, device, tracking)?;
+    let mut right = resolve_tensor(node, node_index, 1, env, state, device, tracking)?;
     if node.config.trans_a != 0 {
         left = left.permute(vec![1, 0])?;
     }
@@ -120,7 +123,7 @@ fn execute_gemm(
     if node.inputs.get(2).is_some_and(|input| !input.is_optional()) {
         output = add_bias(
             output,
-            resolve_value(node, node_index, 2, env, state, device)?,
+            resolve_value(node, node_index, 2, env, state, device, tracking)?,
             node.config.beta as f64,
         )?;
     }
@@ -133,9 +136,10 @@ fn execute_matmul(
     env: &Env,
     state: &ImportedState,
     device: &Device,
+    tracking: bool,
 ) -> Result<Vec<Value>> {
-    let left = resolve_tensor(node, node_index, 0, env, state, device)?;
-    let right = resolve_tensor(node, node_index, 1, env, state, device)?;
+    let left = resolve_tensor(node, node_index, 0, env, state, device, tracking)?;
+    let right = resolve_tensor(node, node_index, 1, env, state, device, tracking)?;
     Ok(vec![Value::Tensor(rank2_matmul(&node.name, left, right)?)])
 }
 
@@ -146,8 +150,9 @@ fn resolve_tensor<N: NodeInputs>(
     env: &Env,
     state: &ImportedState,
     device: &Device,
+    tracking: bool,
 ) -> Result<DynTensor> {
-    resolve_value(node, node_index, input_index, env, state, device)?.into_tensor()
+    resolve_value(node, node_index, input_index, env, state, device, tracking)?.into_tensor()
 }
 
 fn resolve_value<N: NodeInputs>(
@@ -157,6 +162,7 @@ fn resolve_value<N: NodeInputs>(
     env: &Env,
     state: &ImportedState,
     device: &Device,
+    tracking: bool,
 ) -> Result<Value> {
     let input = node.inputs().get(input_index).ok_or_else(|| {
         TynxError::Shape(format!(
@@ -165,7 +171,11 @@ fn resolve_value<N: NodeInputs>(
         ))
     })?;
     if let Some(slot) = state.slot_for_input(node_index, input_index, input) {
-        return Ok(Value::Tensor(slot.read()));
+        return Ok(Value::Tensor(if tracking {
+            slot.read()
+        } else {
+            slot.value()
+        }));
     }
     if let Some(value) = env.get(&input.name) {
         return Ok(value.clone());

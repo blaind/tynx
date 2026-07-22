@@ -85,7 +85,12 @@ impl ImportedModel {
 
     /// Run one eager forward with current slot values and return declared graph outputs.
     pub fn run(&self, env: Env) -> Result<Env> {
-        executor::run(&self.session, &self.state, &self.device, env)
+        self.run_with_tracking(env, true)
+    }
+
+    /// Run one eager forward, choosing whether parameters participate in autodiff.
+    pub fn run_with_tracking(&self, env: Env, tracking: bool) -> Result<Env> {
+        executor::run(&self.session, &self.state, &self.device, env, tracking)
     }
 }
 

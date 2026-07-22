@@ -9,6 +9,16 @@ use crate::{tensor::PyTensor, to_python_error};
 #[pyclass(name = "Parameter", extends = PyTensor, frozen, unsendable)]
 pub(crate) struct PyParameter;
 
+pub(crate) fn parameter_from_slot(
+    py: Python<'_>,
+    slot: ParameterSlot,
+) -> PyResult<Py<PyParameter>> {
+    Py::new(
+        py,
+        PyClassInitializer::from(PyTensor::from_parameter(slot)).add_subclass(PyParameter),
+    )
+}
+
 #[pymethods]
 impl PyParameter {
     #[new]
@@ -29,6 +39,13 @@ impl PyParameter {
 /// A non-trainable tensor with stable mutable identity.
 #[pyclass(name = "Buffer", extends = PyTensor, frozen, unsendable)]
 pub(crate) struct PyBuffer;
+
+pub(crate) fn buffer_from_slot(py: Python<'_>, slot: ParameterSlot) -> PyResult<Py<PyBuffer>> {
+    Py::new(
+        py,
+        PyClassInitializer::from(PyTensor::from_parameter(slot)).add_subclass(PyBuffer),
+    )
+}
 
 #[pymethods]
 impl PyBuffer {

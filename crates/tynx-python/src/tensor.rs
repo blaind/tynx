@@ -176,6 +176,25 @@ impl PyTensor {
         }
     }
 
+    pub(crate) fn from_imported_operation(
+        inner: DynTensor,
+        sources: &[&Self],
+        parameters: impl IntoIterator<Item = ParameterSlot>,
+    ) -> Self {
+        let mut output = Self::from_operation(inner, sources);
+        for parameter in parameters {
+            let target = GradTarget::Parameter(parameter);
+            if !output
+                .targets
+                .iter()
+                .any(|existing| existing.same_identity(&target))
+            {
+                output.targets.push(target);
+            }
+        }
+        output
+    }
+
     fn binary(
         &self,
         other: &Self,
@@ -379,6 +398,14 @@ impl PyTensor {
 
     pub(crate) fn detached_float_value(&self, operation: &str) -> PyResult<DynTensor> {
         self.source.value().detach().float(operation)
+    }
+
+    pub(crate) fn operation_float_value(
+        &self,
+        tracking: bool,
+        operation: &str,
+    ) -> PyResult<DynTensor> {
+        self.source.operation_input(tracking, operation)
     }
 }
 
