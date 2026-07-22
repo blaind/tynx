@@ -1,10 +1,14 @@
 //! Python bindings for Tynx.
 
+mod tensor;
+
 use std::path::PathBuf;
 
 use pyo3::exceptions::{PyOSError, PyValueError};
 use pyo3::prelude::*;
 use tynx_core::Session;
+
+use tensor::PyTensor;
 
 /// A parsed ONNX model.
 #[pyclass(name = "Session", frozen)]
@@ -57,7 +61,7 @@ impl PySession {
     }
 }
 
-fn to_python_error(error: tynx_core::TynxError) -> PyErr {
+pub(crate) fn to_python_error(error: tynx_core::TynxError) -> PyErr {
     PyValueError::new_err(error.to_string())
 }
 
@@ -66,5 +70,6 @@ fn to_python_error(error: tynx_core::TynxError) -> PyErr {
 fn _tynx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
     module.add_class::<PySession>()?;
+    module.add_class::<PyTensor>()?;
     Ok(())
 }
