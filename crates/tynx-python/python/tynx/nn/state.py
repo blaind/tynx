@@ -1,12 +1,14 @@
 """Narrow, deterministic state discovery for ordinary Python model objects."""
 
 from types import FunctionType, MethodType, ModuleType
-from typing import cast
+from typing import Generic, TypeVar, Union, cast
 
-from .._tynx import Parameter
+from .._tynx import Buffer, Parameter
 
 _Path = tuple[str, ...]
-_RelativeParameter = tuple[_Path, Parameter]
+_State = TypeVar("_State", Parameter, Buffer)
+_StateValue = Union[Parameter, Buffer]
+_RelativeState = tuple[_Path, _State]
 
 
 def get_parameters(obj: object) -> list[Parameter]:
@@ -24,6 +26,23 @@ def get_parameter_aliases(obj: object) -> dict[str, tuple[str, ...]]:
     """Map each canonical parameter name to its other reachable state paths."""
     canonical, aliases = _parameter_names(obj)
     return {name: aliases.get(id(parameter), ()) for name, parameter, _ in canonical}
+
+
+def get_buffers(obj: object) -> list[Buffer]:
+    """Return each reachable buffer once in stable canonical-name order."""
+    return [buffer for _, buffer in named_buffers(obj)]
+
+
+def named_buffers(obj: object) -> list[tuple[str, Buffer]]:
+    """Return canonical names and unique buffers discovered without dynamic attribute access."""
+    canonical, _ = _state_names(obj, Buffer)
+    return [(name, buffer) for name, buffer, _ in canonical]
+
+
+def get_buffer_aliases(obj: object) -> dict[str, tuple[str, ...]]:
+    """Map each canonical buffer name to its other reachable state paths."""
+    canonical, aliases = _state_names(obj, Buffer)
+    return {name: aliases.get(id(buffer), ()) for name, buffer, _ in canonical}
 
 
 def train(obj: object, mode: bool = True) -> object:
@@ -46,32 +65,41 @@ def eval(obj: object) -> object:
 def _parameter_names(
     obj: object,
 ) -> tuple[list[tuple[str, Parameter, int]], dict[int, tuple[str, ...]]]:
-    leaves = _Walker().walk(obj)
-    paths_by_identity: dict[int, set[str]] = {}
-    parameters: dict[int, Parameter] = {}
-    for path, parameter in leaves:
-        identity = id(parameter)
-        parameters[identity] = parameter
-        paths_by_identity.setdefault(identity, set()).add(_format_path(path, parameter))
+    return _state_names(obj, Parameter)
 
-    canonical: list[tuple[str, Parameter, int]] = []
+
+def _state_names(
+    obj: object, state_type: type[_State]
+) -> tuple[list[tuple[str, _State, int]], dict[int, tuple[str, ...]]]:
+    leaves = _Walker(state_type).walk(obj)
+    paths_by_identity: dict[int, set[str]] = {}
+    states: dict[int, _State] = {}
+    for path, state in leaves:
+        identity = id(state)
+        states[identity] = state
+        paths_by_identity.setdefault(identity, set()).add(_format_path(path, state))
+
+    canonical: list[tuple[str, _State, int]] = []
     aliases: dict[int, tuple[str, ...]] = {}
     for identity, paths in paths_by_identity.items():
         ordered = sorted(paths)
-        canonical.append((ordered[0], parameters[identity], identity))
+        canonical.append((ordered[0], states[identity], identity))
         aliases[identity] = tuple(ordered[1:])
     canonical.sort(key=lambda entry: entry[0])
     return canonical, aliases
 
 
-class _Walker:
-    def __init__(self) -> None:
+class _Walker(Generic[_State]):
+    def __init__(self, state_type: type[_State]) -> None:
+        self._state_type: type[_State] = state_type
         self._active: set[int] = set()
-        self._memo: dict[int, list[_RelativeParameter]] = {}
+        self._memo: dict[int, list[_RelativeState[_State]]] = {}
 
-    def walk(self, value: object) -> list[_RelativeParameter]:
-        if isinstance(value, Parameter):
+    def walk(self, value: object) -> list[_RelativeState[_State]]:
+        if isinstance(value, self._state_type):
             return [((), value)]
+        if isinstance(value, (Parameter, Buffer)):
+            return []
         if _is_terminal(value):
             return []
 
@@ -90,7 +118,7 @@ class _Walker:
         self._memo[identity] = discovered
         return discovered
 
-    def _walk_container_or_object(self, value: object) -> list[_RelativeParameter]:
+    def _walk_container_or_object(self, value: object) -> list[_RelativeState[_State]]:
         if type(value) is list:
             items = [(str(index), item) for index, item in enumerate(cast(list[object], value))]
             return self._walk_items(items)
@@ -121,11 +149,13 @@ class _Walker:
         names = [_validate_attribute_name(name) for name in attributes]
         return self._walk_items([(name, attributes[name]) for name in sorted(names)])
 
-    def _walk_items(self, items: list[tuple[str, object]]) -> list[_RelativeParameter]:
-        discovered: list[_RelativeParameter] = []
+    def _walk_items(self, items: list[tuple[str, object]]) -> list[_RelativeState[_State]]:
+        discovered: list[_RelativeState[_State]] = []
         for segment, child in items:
-            for relative, parameter in self.walk(child):
-                discovered.append(((segment, *relative), parameter))
+            for child_state in self.walk(child):
+                relative: _Path = child_state[0]
+                state: _State = child_state[1]
+                discovered.append(((segment, *relative), state))
         return discovered
 
 
@@ -172,11 +202,11 @@ def _validate_path_segment(segment: str, kind: str) -> str:
     return segment
 
 
-def _format_path(path: _Path, parameter: Parameter) -> str:
+def _format_path(path: _Path, state: _StateValue) -> str:
     if path:
         return ".".join(path)
-    if parameter.name:
-        return parameter.name
+    if state.name:
+        return state.name
     return "<root>"
 
 
@@ -191,7 +221,7 @@ def _walk_objects(root: object) -> list[object]:
             continue
         visited.add(identity)
         discovered.append(value)
-        if isinstance(value, Parameter) or _is_terminal(value):
+        if isinstance(value, (Parameter, Buffer)) or _is_terminal(value):
             continue
         if type(value) is list:
             pending.extend(reversed(cast(list[object], value)))
@@ -226,8 +256,11 @@ def _walk_objects(root: object) -> list[object]:
 
 __all__ = [
     "eval",
+    "get_buffer_aliases",
+    "get_buffers",
     "get_parameter_aliases",
     "get_parameters",
+    "named_buffers",
     "named_parameters",
     "train",
 ]

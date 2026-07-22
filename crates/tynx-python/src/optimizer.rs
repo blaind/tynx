@@ -124,6 +124,11 @@ pub(crate) fn collect_parameters(
                 "{optimizer_name} parameters must contain only Parameter objects"
             ))
         })?;
+        if !slot.contract().trainable() {
+            return Err(PyTypeError::new_err(format!(
+                "{optimizer_name} parameters must contain only Parameter objects"
+            )));
+        }
         if !slots.iter().any(|existing| existing.id() == slot.id()) {
             slots.push(slot);
         }

@@ -2,6 +2,7 @@
 
 from . import nn, optim
 from ._tynx import (
+    Buffer,
     Parameter,
     Session,
     Tensor,
@@ -14,6 +15,7 @@ from ._tynx import (
 )
 
 __all__ = [
+    "Buffer",
     "Parameter",
     "Session",
     "Tensor",

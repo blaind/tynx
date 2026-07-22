@@ -113,6 +113,11 @@ class Parameter(Tensor):
     @property
     def name(self) -> str | None: ...
 
+class Buffer(Tensor):
+    def __init__(self, data: TensorData, *, name: str | None = None) -> None: ...
+    @property
+    def name(self) -> str | None: ...
+
 class SGD:
     def __init__(
         self,

@@ -1,6 +1,6 @@
 """Base class for Tynx-authored layers."""
 
-from ..._tynx import Parameter, Tensor
+from ..._tynx import Buffer, Parameter, Tensor
 
 
 class Module:
@@ -26,6 +26,16 @@ class Module:
         from ..state import named_parameters
 
         return named_parameters(self)
+
+    def buffers(self) -> list[Buffer]:
+        from ..state import get_buffers
+
+        return get_buffers(self)
+
+    def named_buffers(self) -> list[tuple[str, Buffer]]:
+        from ..state import named_buffers
+
+        return named_buffers(self)
 
     def train(self, mode: bool = True) -> "Module":
         from ..state import train

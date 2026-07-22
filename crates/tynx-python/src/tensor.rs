@@ -145,9 +145,14 @@ impl PyTensor {
     }
 
     pub(crate) fn from_parameter(slot: ParameterSlot) -> Self {
+        let targets = if slot.contract().trainable() {
+            vec![GradTarget::Parameter(slot.clone())]
+        } else {
+            Vec::new()
+        };
         Self {
             source: TensorSource::Parameter(slot.clone()),
-            targets: vec![GradTarget::Parameter(slot)],
+            targets,
             leaf: None,
         }
     }

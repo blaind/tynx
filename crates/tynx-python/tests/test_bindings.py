@@ -689,6 +689,40 @@ def test_layer_norm_validates_configuration_shape_and_dtype() -> None:
         tynx.nn.LayerNorm(2)(tynx.Tensor([[1, 2]], dtype="int64"))
 
 
+def test_buffer_is_stable_non_trainable_state_and_not_an_optimizer_parameter() -> None:
+    buffer = tynx.Buffer([1.0, 2.0], name="running_mean")
+
+    assert isinstance(buffer, tynx.Tensor)
+    assert buffer.name == "running_mean"
+    assert buffer.requires_grad is False
+    assert buffer.grad is None
+    assert (buffer * 2).tolist() == pytest.approx([2.0, 4.0])
+    assert (buffer * 2).requires_grad is False
+    with pytest.raises(TypeError, match="only Parameter objects"):
+        tynx.optim.SGD([buffer], lr=0.1)  # type: ignore[list-item]
+
+
+def test_buffer_discovery_is_separate_cycle_safe_and_alias_aware() -> None:
+    class Stateful(tynx.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            shared = tynx.Buffer([0.0], name="ignored_nested_name")
+            self.right = shared
+            self.left = shared
+            self.weight = tynx.Parameter([1.0])
+            self.cycle = self
+
+        def forward(self, input: tynx.Tensor) -> tynx.Tensor:
+            return input * self.weight + self.left
+
+    module = Stateful()
+
+    assert [name for name, _ in module.named_parameters()] == ["weight"]
+    assert [name for name, _ in module.named_buffers()] == ["left"]
+    assert module.buffers() == [module.left]
+    assert tynx.nn.state.get_buffer_aliases(module) == {"left": ("right",)}
+
+
 def test_tensor_eager_operators() -> None:
     left = tynx.Tensor([[1.0, 2.0], [3.0, 4.0]])
     right = tynx.Tensor([[2.0, 0.5], [1.0, 2.0]])

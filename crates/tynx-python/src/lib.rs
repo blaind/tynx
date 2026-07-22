@@ -15,7 +15,7 @@ use tynx_core::Session;
 use grad_mode::{PyNoGrad, is_grad_enabled_py, no_grad};
 use gradient::{clip_grad_norm_py, clip_grad_value_py};
 use optimizer::{PyAdam, PyAdamW, PySgd};
-use parameter::PyParameter;
+use parameter::{PyBuffer, PyParameter};
 use tensor::{PyTensor, maximum_py, minimum_py, where_py};
 
 /// A parsed ONNX model.
@@ -80,6 +80,7 @@ fn _tynx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PySession>()?;
     module.add_class::<PyTensor>()?;
     module.add_class::<PyParameter>()?;
+    module.add_class::<PyBuffer>()?;
     module.add_class::<PyNoGrad>()?;
     module.add_class::<PySgd>()?;
     module.add_class::<PyAdam>()?;
