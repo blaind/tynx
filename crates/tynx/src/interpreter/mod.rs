@@ -148,6 +148,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
             normalization::instance_normalization(node, env, device)
         }
         Node::IsInf(node) => classification::is_inf(node, env, device),
+        Node::IsNaN(node) => classification::is_nan(node, env, device),
         Node::LeakyRelu(node) => unary::leaky_relu(node, env, device),
         Node::LayerNormalization(node) => normalization::layer_normalization(node, env, device),
         Node::Less(node) => comparison::less(node, env, device),
@@ -250,8 +251,8 @@ fn operator_kind(node: &Node) -> String {
 #[cfg(test)]
 mod tests {
     use onnx_ir::{
-        BoolStore, DType, Node,
-        node::{identity::IdentityNodeBuilder, is_nan::IsNaNNodeBuilder},
+        DType, Node,
+        node::{identity::IdentityNodeBuilder, unsupported::StringNormalizerNode},
     };
 
     use super::*;
@@ -278,15 +279,17 @@ mod tests {
 
     #[test]
     fn unsupported_errors_name_the_operator() {
-        let node = Node::IsNaN(
-            IsNaNNodeBuilder::new("")
-                .input_tensor("x", 1, DType::F32)
-                .output_tensor("y", 1, DType::Bool(BoolStore::Native))
-                .build(),
-        );
+        let node = Node::StringNormalizer(StringNormalizerNode {
+            name: String::new(),
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+        });
 
         let error = execute(&node, &Env::new(), &Device::default()).unwrap_err();
 
-        assert_eq!(error, TynxError::UnsupportedOp("IsNaN".to_string()));
+        assert_eq!(
+            error,
+            TynxError::UnsupportedOp("StringNormalizer".to_string())
+        );
     }
 }

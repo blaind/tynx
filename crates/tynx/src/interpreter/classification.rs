@@ -1,7 +1,7 @@
 //! Element-wise ONNX numeric classification operators.
 
 use burn::tensor::Device;
-use onnx_ir::node::is_inf::IsInfNode;
+use onnx_ir::node::{is_inf::IsInfNode, is_nan::IsNaNNode};
 
 use super::{Env, resolve};
 use crate::{Result, Scalar, TynxError, Value};
@@ -26,12 +26,29 @@ pub(super) fn is_inf(node: &IsInfNode, env: &Env, device: &Device) -> Result<Vec
     Ok(vec![output])
 }
 
+pub(super) fn is_nan(node: &IsNaNNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
+    let input = resolve::first(env, &node.name, &node.inputs, device)?;
+    let output = match input {
+        Value::Tensor(tensor) => Value::Bool(tensor.is_nan()),
+        Value::Scalar(Scalar::F64(value)) => Value::Scalar(Scalar::Bool(value.is_nan())),
+        other => {
+            return Err(TynxError::TypeMismatch(format!(
+                "IsNaN expects a floating-point tensor, got {other:?}"
+            )));
+        }
+    };
+    Ok(vec![output])
+}
+
 #[cfg(test)]
 mod tests {
     use burn::tensor::{BoolStore, TensorData};
     use onnx_ir::{
         DType,
-        node::is_inf::{IsInfConfig, IsInfNodeBuilder},
+        node::{
+            is_inf::{IsInfConfig, IsInfNodeBuilder},
+            is_nan::IsNaNNodeBuilder,
+        },
     };
 
     use super::*;
@@ -69,5 +86,36 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(output, [false, false, true, false]);
+    }
+
+    #[test]
+    fn detects_nan_without_classifying_infinities() {
+        let node = IsNaNNodeBuilder::new("is_nan")
+            .input_tensor("x", 1, DType::F32)
+            .output_tensor("y", 1, DType::Bool(BoolStore::Native))
+            .build();
+        let device = Device::default();
+        let mut env = Env::new();
+        env.insert(
+            "x".into(),
+            Value::from_tensor_data(
+                TensorData::new(vec![f32::NAN, f32::INFINITY, 0.0], [3]),
+                1,
+                &device,
+            )
+            .unwrap(),
+        );
+
+        let output = is_nan(&node, &env, &device)
+            .unwrap()
+            .pop()
+            .unwrap()
+            .into_bool()
+            .unwrap()
+            .into_data()
+            .iter::<bool>()
+            .collect::<Vec<_>>();
+
+        assert_eq!(output, [true, false, false]);
     }
 }

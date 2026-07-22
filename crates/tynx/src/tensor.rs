@@ -1300,6 +1300,18 @@ impl DynTensor {
         }
     }
 
+    /// Test each element for NaN.
+    pub fn is_nan(self) -> DynBool {
+        match self {
+            Self::R1(tensor) => DynBool::R1(tensor.is_nan()),
+            Self::R2(tensor) => DynBool::R2(tensor.is_nan()),
+            Self::R3(tensor) => DynBool::R3(tensor.is_nan()),
+            Self::R4(tensor) => DynBool::R4(tensor.is_nan()),
+            Self::R5(tensor) => DynBool::R5(tensor.is_nan()),
+            Self::R6(tensor) => DynBool::R6(tensor.is_nan()),
+        }
+    }
+
     /// Apply the softplus function element-wise.
     pub fn softplus(self) -> Self {
         map_float!(self, |tensor| activation::softplus(tensor, 1.0))
