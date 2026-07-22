@@ -106,8 +106,9 @@ impl ImportedModel {
     }
 
     /// Run one eager forward, choosing whether parameters participate in autodiff.
-    pub fn run_with_tracking(&self, env: Env, tracking: bool) -> Result<Env> {
+    pub fn run_with_tracking(&self, mut env: Env, tracking: bool) -> Result<Env> {
         validate_inputs(&self.session, &self.device, &env)?;
+        self.session.internalize_inputs(&mut env)?;
         executor::run(&self.session, &self.state, &self.device, env, tracking)
     }
 }
