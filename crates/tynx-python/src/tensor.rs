@@ -542,6 +542,18 @@ impl PyTensor {
         self.reduce_extreme(dim, keepdim, Extremum::Minimum)
     }
 
+    /// Return indices of the first maximum over all values or one dimension.
+    #[pyo3(signature = (dim=None, keepdim=false))]
+    fn argmax(&self, dim: Option<&Bound<'_, PyAny>>, keepdim: bool) -> PyResult<Self> {
+        self.reduce_arg_extreme(dim, keepdim, true)
+    }
+
+    /// Return indices of the first minimum over all values or one dimension.
+    #[pyo3(signature = (dim=None, keepdim=false))]
+    fn argmin(&self, dim: Option<&Bound<'_, PyAny>>, keepdim: bool) -> PyResult<Self> {
+        self.reduce_arg_extreme(dim, keepdim, false)
+    }
+
     /// Take the elementwise maximum with a broadcastable tensor or scalar.
     fn maximum(&self, other: &Bound<'_, PyAny>) -> PyResult<Self> {
         self.elementwise_extreme(other, Extremum::Maximum)
@@ -832,6 +844,44 @@ impl PyTensor {
             value => extrema::reduce(value.detach(), &spec.dims, spec.output_shape, extremum)
                 .map(Self::from_value),
         }
+    }
+
+    fn reduce_arg_extreme(
+        &self,
+        dim: Option<&Bound<'_, PyAny>>,
+        keepdim: bool,
+        maximum: bool,
+    ) -> PyResult<Self> {
+        let input_shape = self.source.value().dims();
+        let operation = if maximum { "argmax" } else { "argmin" };
+        let (value, axis, output_shape) = match dim {
+            Some(dim) => {
+                let axis = shape::axis(dim, input_shape.len(), false, operation)?;
+                let mut output_shape = input_shape.clone();
+                if keepdim {
+                    output_shape[axis] = 1;
+                } else {
+                    output_shape.remove(axis);
+                    if output_shape.is_empty() {
+                        output_shape.push(1);
+                    }
+                }
+                (self.source.value().detach(), axis, output_shape)
+            }
+            None => {
+                let output_shape = if keepdim {
+                    vec![1; input_shape.len()]
+                } else {
+                    vec![1]
+                };
+                (
+                    self.source.value().detach().reshape(vec![self.numel()])?,
+                    0,
+                    output_shape,
+                )
+            }
+        };
+        extrema::arg(value, axis, output_shape, maximum).map(Self::from_value)
     }
 }
 

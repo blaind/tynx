@@ -98,3 +98,24 @@ pub(super) fn reduce(
         .map_err(to_python_error),
     }
 }
+
+pub(super) fn arg(
+    value: TensorValue,
+    dim: usize,
+    output_shape: Vec<usize>,
+    maximum: bool,
+) -> PyResult<TensorValue> {
+    let indices = match value {
+        TensorValue::Float(value) => value.arg_extreme(dim, maximum, false),
+        TensorValue::Int(value) => value.arg_extreme(dim, maximum, false),
+        TensorValue::Bool(_) => {
+            return Err(PyTypeError::new_err(
+                "argmax and argmin do not support bool Tensors",
+            ));
+        }
+    };
+    indices
+        .reshape(output_shape)
+        .map(TensorValue::Int)
+        .map_err(to_python_error)
+}
