@@ -12,7 +12,7 @@ use pyo3::prelude::*;
 use tynx_core::Session;
 
 use grad_mode::{PyNoGrad, is_grad_enabled_py, no_grad};
-use optimizer::PySgd;
+use optimizer::{PyAdam, PyAdamW, PySgd};
 use parameter::PyParameter;
 use tensor::{PyTensor, maximum_py, minimum_py, where_py};
 
@@ -80,6 +80,8 @@ fn _tynx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyParameter>()?;
     module.add_class::<PyNoGrad>()?;
     module.add_class::<PySgd>()?;
+    module.add_class::<PyAdam>()?;
+    module.add_class::<PyAdamW>()?;
     module.add_function(wrap_pyfunction!(no_grad, module)?)?;
     module.add_function(wrap_pyfunction!(is_grad_enabled_py, module)?)?;
     module.add_function(wrap_pyfunction!(where_py, module)?)?;

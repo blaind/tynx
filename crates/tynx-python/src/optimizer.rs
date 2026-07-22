@@ -1,5 +1,7 @@
 //! CPython optimizer projections over stable Rust parameter slots.
 
+mod adam;
+
 use pyo3::{
     exceptions::{PyTypeError, PyValueError},
     prelude::*,
@@ -8,6 +10,8 @@ use pyo3::{
 use tynx_train::{ParameterSlot, Sgd, SgdConfig};
 
 use crate::{tensor::PyTensor, to_python_error};
+
+pub(crate) use adam::{PyAdam, PyAdamW};
 
 /// Stochastic gradient descent over an explicit, stable parameter list.
 #[pyclass(name = "SGD", unsendable)]
@@ -28,7 +32,7 @@ impl PySgd {
         weight_decay: f64,
         nesterov: bool,
     ) -> PyResult<Self> {
-        let parameters = collect_parameters(parameters)?;
+        let parameters = collect_parameters(parameters, "SGD")?;
         let config = SgdConfig::new(lr)
             .with_momentum(momentum)
             .with_dampening(dampening)
@@ -40,9 +44,7 @@ impl PySgd {
 
     /// Clear every managed parameter's persistent gradient.
     fn zero_grad(&self) {
-        for parameter in &self.parameters {
-            parameter.zero_grad();
-        }
+        zero_grad(&self.parameters);
     }
 
     /// Apply one serialized off-tape update without clearing gradients.
@@ -100,25 +102,42 @@ impl PySgd {
     }
 }
 
-fn collect_parameters(parameters: &Bound<'_, PyAny>) -> PyResult<Vec<ParameterSlot>> {
+fn collect_parameters(
+    parameters: &Bound<'_, PyAny>,
+    optimizer_name: &str,
+) -> PyResult<Vec<ParameterSlot>> {
     let iterator = parameters.try_iter().map_err(|_| {
-        PyTypeError::new_err("SGD parameters must be an iterable of Parameter objects")
+        PyTypeError::new_err(format!(
+            "{optimizer_name} parameters must be an iterable of Parameter objects"
+        ))
     })?;
     let mut slots: Vec<ParameterSlot> = Vec::new();
     for item in iterator {
         let item = item?;
         let tensor = item.extract::<PyRef<'_, PyTensor>>().map_err(|_| {
-            PyTypeError::new_err("SGD parameters must contain only Parameter objects")
+            PyTypeError::new_err(format!(
+                "{optimizer_name} parameters must contain only Parameter objects"
+            ))
         })?;
         let slot = tensor.parameter_slot().ok_or_else(|| {
-            PyTypeError::new_err("SGD parameters must contain only Parameter objects")
+            PyTypeError::new_err(format!(
+                "{optimizer_name} parameters must contain only Parameter objects"
+            ))
         })?;
         if !slots.iter().any(|existing| existing.id() == slot.id()) {
             slots.push(slot);
         }
     }
     if slots.is_empty() {
-        return Err(PyValueError::new_err("SGD requires at least one Parameter"));
+        return Err(PyValueError::new_err(format!(
+            "{optimizer_name} requires at least one Parameter"
+        )));
     }
     Ok(slots)
+}
+
+fn zero_grad(parameters: &[ParameterSlot]) {
+    for parameter in parameters {
+        parameter.zero_grad();
+    }
 }

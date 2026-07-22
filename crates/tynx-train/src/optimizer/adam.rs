@@ -1,10 +1,10 @@
 //! Adam-family optimizers.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use tynx_core::{DynTensor, Result, TynxError};
 
-use crate::{ParamId, ParameterStore};
+use crate::{ParamId, ParameterSlot, ParameterStore};
 
 /// Configuration shared by Adam's adaptive-moment update.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -187,11 +187,15 @@ impl AdamEngine {
         self.state.get(&id).map(|state| state.step)
     }
 
-    fn step(&mut self, parameters: &ParameterStore, mode: WeightDecayMode) -> Result<usize> {
+    fn step_parameters<'a>(
+        &mut self,
+        parameters: impl IntoIterator<Item = &'a ParameterSlot>,
+        mode: WeightDecayMode,
+    ) -> Result<usize> {
         let mut next_state = self.state.clone();
         let mut updates = Vec::new();
 
-        for parameter in parameters.trainable() {
+        for parameter in parameters {
             let Some(gradient) = parameter.grad() else {
                 continue;
             };
@@ -326,7 +330,17 @@ impl Adam {
 
     /// Update every unique trainable slot that currently has a gradient.
     pub fn step(&mut self, parameters: &ParameterStore) -> Result<usize> {
-        self.engine.step(parameters, WeightDecayMode::Coupled)
+        self.engine
+            .step_parameters(parameters.trainable(), WeightDecayMode::Coupled)
+    }
+
+    /// Update a runtime list of parameter slots without requiring persisted state names.
+    ///
+    /// Repeated/tied identities are updated once in first-occurrence order. Frozen slots and slots
+    /// without gradients are skipped, matching [`Self::step`].
+    pub fn step_slots(&mut self, parameters: &[ParameterSlot]) -> Result<usize> {
+        self.engine
+            .step_parameters(unique_trainable(parameters), WeightDecayMode::Coupled)
     }
 }
 
@@ -373,8 +387,26 @@ impl AdamW {
 
     /// Update every unique trainable slot that currently has a gradient.
     pub fn step(&mut self, parameters: &ParameterStore) -> Result<usize> {
-        self.engine.step(parameters, WeightDecayMode::Decoupled)
+        self.engine
+            .step_parameters(parameters.trainable(), WeightDecayMode::Decoupled)
     }
+
+    /// Update a runtime list of parameter slots without requiring persisted state names.
+    ///
+    /// Repeated/tied identities are updated once in first-occurrence order. Frozen slots and slots
+    /// without gradients are skipped, matching [`Self::step`].
+    pub fn step_slots(&mut self, parameters: &[ParameterSlot]) -> Result<usize> {
+        self.engine
+            .step_parameters(unique_trainable(parameters), WeightDecayMode::Decoupled)
+    }
+}
+
+fn unique_trainable(parameters: &[ParameterSlot]) -> Vec<&ParameterSlot> {
+    let mut seen = HashSet::new();
+    parameters
+        .iter()
+        .filter(|parameter| parameter.contract().trainable() && seen.insert(parameter.id()))
+        .collect()
 }
 
 fn zeros_like(tensor: &DynTensor) -> DynTensor {
@@ -475,6 +507,27 @@ mod tests {
         assert_eq!(adam.state_len(), 1);
         assert!(parameter.grad().is_some());
         assert_eq!(parameter.structure_generation(), 0);
+    }
+
+    #[test]
+    fn slot_list_updates_tied_identity_once_without_requiring_a_name() {
+        let device = Device::autodiff(Device::default());
+        let parameter = ParameterSlot::new(None, tensor(vec![2.0], &[1], &device), true).unwrap();
+        let store = {
+            let mut store = ParameterStore::new();
+            store.insert("weight", parameter.clone()).unwrap();
+            store
+        };
+        set_gradient(&parameter, &store, 2.0);
+        let mut adam = Adam::new(0.1).unwrap();
+
+        assert_eq!(
+            adam.step_slots(&[parameter.clone(), parameter.clone()])
+                .unwrap(),
+            1
+        );
+        assert!((scalar_value(&parameter) - 1.9).abs() < 1.0e-6);
+        assert_eq!(adam.state_len(), 1);
     }
 
     #[test]

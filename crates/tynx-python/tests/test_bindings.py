@@ -320,6 +320,94 @@ def test_sgd_trains_an_authored_python_linear_model() -> None:
     assert bias.item() == pytest.approx(1.0, abs=1e-4)
 
 
+def test_adam_updates_tied_parameters_and_preserves_gradients() -> None:
+    parameter = tynx.Parameter([2.0])
+    optimizer = tynx.optim.Adam([parameter, parameter], lr=0.1)
+
+    (parameter * 3).backward()
+    optimizer.step()
+
+    assert parameter.tolist() == pytest.approx([1.9])
+    assert parameter.grad is not None
+    assert parameter.grad.tolist() == pytest.approx([3.0])
+    assert optimizer.parameter_count == 1
+    assert optimizer.state_size == 1
+    optimizer.zero_grad()
+    assert parameter.grad is None
+
+
+def test_adam_configuration_state_and_mutable_learning_rate() -> None:
+    parameter = tynx.Parameter([2.0])
+    optimizer = tynx.optim.Adam(
+        [parameter],
+        lr=0.1,
+        betas=(0.8, 0.95),
+        eps=1e-7,
+        weight_decay=0.02,
+        amsgrad=True,
+    )
+
+    (parameter * 2).backward()
+    optimizer.step()
+    optimizer.zero_grad()
+    (parameter * 2).backward()
+    optimizer.learning_rate = 0.2
+    optimizer.step()
+
+    assert optimizer.lr == pytest.approx(0.2)
+    assert optimizer.betas == pytest.approx((0.8, 0.95))
+    assert optimizer.eps == pytest.approx(1e-7)
+    assert optimizer.weight_decay == pytest.approx(0.02)
+    assert optimizer.amsgrad is True
+    assert optimizer.state_size == 1
+    assert "amsgrad=true" in repr(optimizer).lower()
+
+
+def test_adam_and_adamw_use_coupled_and_decoupled_weight_decay() -> None:
+    adam_parameter = tynx.Parameter([2.0])
+    adamw_parameter = tynx.Parameter([2.0])
+    adam = tynx.optim.Adam([adam_parameter], lr=0.1, betas=(0.0, 0.0), eps=0.0, weight_decay=0.5)
+    adamw = tynx.optim.AdamW([adamw_parameter], lr=0.1, betas=(0.0, 0.0), eps=0.0, weight_decay=0.5)
+
+    adam_parameter.backward()
+    adamw_parameter.backward()
+    adam.step()
+    adamw.step()
+
+    assert adam_parameter.tolist() == pytest.approx([1.9])
+    assert adamw_parameter.tolist() == pytest.approx([1.8])
+    assert tynx.optim.AdamW([tynx.Parameter([1.0])]).weight_decay == pytest.approx(0.01)
+
+
+def test_adam_rejects_invalid_parameters_and_configuration() -> None:
+    with pytest.raises(ValueError, match="at least one Parameter"):
+        tynx.optim.Adam([])
+    with pytest.raises(TypeError, match="only Parameter objects"):
+        tynx.optim.Adam([tynx.Tensor([1.0])])  # type: ignore[list-item]
+    with pytest.raises(ValueError, match="beta1"):
+        tynx.optim.Adam([tynx.Parameter([1.0])], betas=(1.0, 0.999))
+    with pytest.raises(ValueError, match="epsilon"):
+        tynx.optim.AdamW([tynx.Parameter([1.0])], eps=-1.0)
+
+
+def test_adam_trains_an_authored_python_linear_model() -> None:
+    weight = tynx.Parameter([0.0], name="weight")
+    bias = tynx.Parameter([0.0], name="bias")
+    optimizer = tynx.optim.Adam([weight, bias], lr=0.05)
+    inputs = tynx.Tensor([-2.0, -1.0, 0.0, 1.0, 2.0])
+    targets = tynx.Tensor([-3.0, -1.0, 1.0, 3.0, 5.0])
+
+    for _ in range(300):
+        optimizer.zero_grad()
+        prediction = inputs * weight + bias
+        error = prediction - targets
+        (error * error).mean().backward()
+        optimizer.step()
+
+    assert weight.item() == pytest.approx(2.0, abs=1e-3)
+    assert bias.item() == pytest.approx(1.0, abs=1e-3)
+
+
 def test_tensor_eager_operators() -> None:
     left = tynx.Tensor([[1.0, 2.0], [3.0, 4.0]])
     right = tynx.Tensor([[2.0, 0.5], [1.0, 2.0]])
