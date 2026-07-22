@@ -20,6 +20,7 @@ mod eye_like;
 mod gather;
 mod grid_sample;
 mod hardmax;
+mod imputer;
 mod integer;
 mod logical;
 mod matrix;
@@ -173,6 +174,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::HannWindow(node) => window::hann_window(node, env, device),
         Node::Identity(node) => Ok(vec![resolve::first(env, &node.name, &node.inputs, device)?]),
         Node::If(node) => control_flow::if_node(node, env, device),
+        Node::Imputer(node) => imputer::imputer(node, env, device),
         Node::InstanceNormalization(node) => {
             normalization::instance_normalization(node, env, device)
         }
