@@ -7,7 +7,8 @@
 //! from developing separate semantics.
 
 use burn::tensor::{
-    Bool, DType, Device, Distribution, IndexingUpdateOp, Int, Slice, Tensor, TensorData, activation,
+    Bool, DType, Device, Distribution, IndexingUpdateOp, Int, Slice, Tensor, TensorData,
+    activation, module::conv2d as burn_conv2d, ops::ConvOptions,
 };
 
 use crate::error::{Result, TynxError};
@@ -814,6 +815,102 @@ impl_concat!(DynInt);
 impl_concat!(DynBool);
 
 impl DynTensor {
+    /// Apply an NCHW two-dimensional convolution with symmetric padding.
+    pub fn conv2d(
+        self,
+        weight: Self,
+        bias: Option<Self>,
+        stride: [usize; 2],
+        padding: [usize; 2],
+        dilation: [usize; 2],
+        groups: usize,
+    ) -> Result<Self> {
+        let input_shape = self.dims();
+        let weight_shape = weight.dims();
+        if input_shape.len() != 4 || weight_shape.len() != 4 {
+            return Err(TynxError::Shape(format!(
+                "conv2d requires rank-4 NCHW input and weight, got {input_shape:?} and {weight_shape:?}"
+            )));
+        }
+        if groups == 0 {
+            return Err(TynxError::Shape(
+                "conv2d groups must be a positive integer".to_string(),
+            ));
+        }
+        if stride.contains(&0) || dilation.contains(&0) {
+            return Err(TynxError::Shape(
+                "conv2d stride and dilation must contain positive integers".to_string(),
+            ));
+        }
+        let input_channels = input_shape[1];
+        let output_channels = weight_shape[0];
+        if !input_channels.is_multiple_of(groups) || !output_channels.is_multiple_of(groups) {
+            return Err(TynxError::Shape(format!(
+                "conv2d input channels ({input_channels}) and output channels ({output_channels}) must be divisible by groups ({groups})"
+            )));
+        }
+        if weight_shape[1] != input_channels / groups {
+            return Err(TynxError::Shape(format!(
+                "conv2d expected weight input channels {}, got shape {weight_shape:?}",
+                input_channels / groups
+            )));
+        }
+        for axis in 0..2 {
+            let kernel = weight_shape[axis + 2];
+            if kernel == 0 {
+                return Err(TynxError::Shape(
+                    "conv2d kernel dimensions must be positive".to_string(),
+                ));
+            }
+            let effective_kernel = dilation[axis]
+                .checked_mul(kernel - 1)
+                .and_then(|value| value.checked_add(1))
+                .ok_or_else(|| TynxError::Shape("conv2d kernel extent overflowed".to_string()))?;
+            let padded_input = padding[axis]
+                .checked_mul(2)
+                .and_then(|value| input_shape[axis + 2].checked_add(value))
+                .ok_or_else(|| TynxError::Shape("conv2d padded extent overflowed".to_string()))?;
+            if padded_input < effective_kernel {
+                return Err(TynxError::Shape(format!(
+                    "conv2d kernel extent {effective_kernel} exceeds padded input extent {padded_input} at spatial axis {axis}"
+                )));
+            }
+        }
+        let input_dtype = self.dtype();
+        if input_dtype != weight.dtype() {
+            return Err(TynxError::Shape(format!(
+                "conv2d input and weight dtypes must match, got {:?} and {:?}",
+                input_dtype,
+                weight.dtype()
+            )));
+        }
+
+        let bias = match bias {
+            Some(Self::R1(bias))
+                if bias.dims()[0] == output_channels && bias.dtype() == input_dtype =>
+            {
+                Some(bias)
+            }
+            Some(bias) => {
+                return Err(TynxError::Shape(format!(
+                    "conv2d bias must have shape [{output_channels}] and dtype {input_dtype:?}, got {:?} and {:?}",
+                    bias.dims(),
+                    bias.dtype()
+                )));
+            }
+            None => None,
+        };
+        match (self, weight) {
+            (Self::R4(input), Self::R4(weight)) => Ok(Self::R4(burn_conv2d(
+                input,
+                weight,
+                bias,
+                ConvOptions::new(stride, padding, dilation, groups),
+            ))),
+            _ => unreachable!("conv2d ranks were validated before dispatch"),
+        }
+    }
+
     /// Create a random floating-point tensor with an explicit shape and dtype.
     pub fn random(
         dims: &[usize],

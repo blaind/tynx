@@ -1,10 +1,34 @@
 """Composable eager neural-network functions."""
 
-from typing import Literal
+from typing import Literal, Optional, Union
 
-from .._tynx import Tensor, maximum
+from .._tynx import Tensor, _conv2d, maximum
 
 Reduction = Literal["none", "mean", "sum"]
+IntOrPair = Union[int, tuple[int, int]]
+
+
+def conv2d(
+    input: Tensor,
+    weight: Tensor,
+    bias: Optional[Tensor] = None,
+    stride: IntOrPair = 1,
+    padding: IntOrPair = 0,
+    dilation: IntOrPair = 1,
+    groups: int = 1,
+) -> Tensor:
+    """Apply a two-dimensional convolution to an NCHW input."""
+    if type(groups) is not int or groups <= 0:
+        raise ValueError(f"groups must be a positive integer, got {groups!r}")
+    return _conv2d(
+        input,
+        weight,
+        bias,
+        _pair(stride, "stride", positive=True),
+        _pair(padding, "padding", positive=False),
+        _pair(dilation, "dilation", positive=True),
+        groups,
+    )
 
 
 def mse_loss(input: Tensor, target: Tensor, reduction: Reduction = "mean") -> Tensor:
@@ -60,4 +84,17 @@ def _reduce(input: Tensor, reduction: Reduction) -> Tensor:
     raise ValueError(f"reduction must be 'none', 'mean', or 'sum', got {reduction!r}")
 
 
-__all__ = ["binary_cross_entropy_with_logits", "cross_entropy", "mse_loss"]
+def _pair(value: IntOrPair, name: str, *, positive: bool) -> tuple[int, int]:
+    pair = (value, value) if type(value) is int else value
+    minimum = 1 if positive else 0
+    if (
+        type(pair) is not tuple
+        or len(pair) != 2
+        or any(type(item) is not int or item < minimum for item in pair)
+    ):
+        qualifier = "positive" if positive else "non-negative"
+        raise ValueError(f"{name} must be an int or pair of {qualifier} integers, got {value!r}")
+    return pair
+
+
+__all__ = ["binary_cross_entropy_with_logits", "conv2d", "cross_entropy", "mse_loss"]

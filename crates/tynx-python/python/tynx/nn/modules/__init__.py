@@ -2,6 +2,7 @@
 
 from .activation import ReLU
 from .container import Sequential
+from .convolution import Conv2d
 from .dropout import Dropout
 from .linear import Linear
 from .module import Layer, Module
@@ -11,6 +12,7 @@ __all__ = [
     "BatchNorm",
     "BatchNorm1d",
     "BatchNorm2d",
+    "Conv2d",
     "Dropout",
     "Layer",
     "LayerNorm",

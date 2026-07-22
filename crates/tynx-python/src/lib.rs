@@ -3,6 +3,7 @@
 mod grad_mode;
 mod gradient;
 mod imported_model;
+mod nn;
 mod optimizer;
 mod parameter;
 mod random;
@@ -17,6 +18,7 @@ use tynx_core::Session;
 use grad_mode::{PyNoGrad, is_grad_enabled_py, no_grad};
 use gradient::{clip_grad_norm_py, clip_grad_value_py};
 use imported_model::{PyImportedModel, PyTrainabilityReport};
+use nn::conv2d_py;
 use optimizer::{PyAdam, PyAdamW, PySgd};
 use parameter::{PyBuffer, PyParameter};
 use random::{categorical_sample_py, dropout_py, manual_seed_py, normal_sample_py};
@@ -102,5 +104,6 @@ fn _tynx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(normal_sample_py, module)?)?;
     module.add_function(wrap_pyfunction!(categorical_sample_py, module)?)?;
     module.add_function(wrap_pyfunction!(dropout_py, module)?)?;
+    module.add_function(wrap_pyfunction!(conv2d_py, module)?)?;
     Ok(())
 }
