@@ -21,6 +21,8 @@ def test_compile_replays_linear_relu_without_python_dispatch() -> None:
     assert calls == 1
     assert compiled.compile_count == 1
     assert compiled.graph_count == 1
+    assert compiled.replay_count == 1
+    assert compiled.node_counts == (6,)
 
 
 def test_compile_replay_preserves_input_and_parameter_gradients() -> None:
@@ -98,6 +100,9 @@ def test_unsupported_operation_falls_back_for_whole_function() -> None:
     assert calls == 2
     assert compiled.compile_count == 0
     assert compiled.fallback_count == 2
+    assert compiled.last_fallback_reason is not None
+    compiled.clear_cache()
+    assert compiled.last_fallback_reason is None
 
 
 def test_fullgraph_rejects_unsupported_operation_visibly() -> None:

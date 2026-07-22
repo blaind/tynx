@@ -32,17 +32,25 @@ class CompiledFunction(Generic[R]):
         self._warned = False
         self.compile_count = 0
         self.fallback_count = 0
+        self.replay_count = 0
+        self.last_fallback_reason: Optional[str] = None
 
     @property
     def graph_count(self) -> int:
         """Number of exact-signature native graphs in the cache."""
         return len(self._graphs)
 
+    @property
+    def node_counts(self) -> tuple[int, ...]:
+        """Recorded IR node count for each cached graph."""
+        return tuple(graph.node_count for _, graph in self._graphs)
+
     def clear_cache(self) -> None:
         """Discard captured graphs and retry capture on the next compatible call."""
         self._graphs.clear()
         self._fallback = False
         self._warned = False
+        self.last_fallback_reason = None
 
     def __call__(self, *args: object, **kwargs: object) -> R:
         if self._fallback:
@@ -63,6 +71,7 @@ class CompiledFunction(Generic[R]):
         tensor_args, static_key = prepared
         for cached_static_key, graph in self._graphs:
             if cached_static_key == static_key and graph.matches(*tensor_args):
+                self.replay_count += 1
                 return cast(R, graph(*tensor_args))
 
         session = _CaptureSession(fullgraph=self._fullgraph)
@@ -114,6 +123,7 @@ class CompiledFunction(Generic[R]):
 
     def _disable(self, reason: str) -> None:
         self._fallback = True
+        self.last_fallback_reason = reason
         if not self._warned:
             warnings.warn(
                 f"tynx.compile fell back to eager execution for the whole function: {reason}",
