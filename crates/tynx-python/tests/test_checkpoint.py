@@ -92,3 +92,25 @@ def test_checkpoint_rejects_unknown_versions_before_mutation(tmp_path: Path) -> 
 
     for name, value in model.state_dict().items():
         assert value.tolist() == before[name].tolist()
+
+
+def test_checkpoint_rejects_models_and_payloads_with_no_state(tmp_path: Path) -> None:
+    optimizer = tynx.optim.SGD([("weight", tynx.Parameter([1.0]))], lr=0.1)
+    checkpoint = tmp_path / "empty.tynx"
+
+    with pytest.raises(ValueError, match="model has no parameters or buffers"):
+        tynx.save_checkpoint(checkpoint, object(), optimizer)
+
+    checkpoint.write_text(
+        json.dumps(
+            {
+                "format": "tynx.training",
+                "version": 1,
+                "model": {},
+                "optimizer": optimizer.state_dict(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="model state is empty"):
+        tynx.load_checkpoint(checkpoint, object(), optimizer)

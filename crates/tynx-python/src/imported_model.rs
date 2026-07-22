@@ -424,6 +424,30 @@ impl PyImportedModel {
             .collect()
     }
 
+    fn state_dict(slf: PyRef<'_, Self>, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        Ok(py
+            .import("tynx.nn.state")?
+            .getattr("get_state_dict")?
+            .call1((slf,))?
+            .unbind())
+    }
+
+    #[pyo3(signature = (state_dict, strict=true))]
+    fn load_state_dict(
+        slf: PyRef<'_, Self>,
+        py: Python<'_>,
+        state_dict: &Bound<'_, PyAny>,
+        strict: bool,
+    ) -> PyResult<Py<PyAny>> {
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("strict", strict)?;
+        Ok(py
+            .import("tynx.nn.state")?
+            .getattr("load_state_dict")?
+            .call((slf, state_dict), Some(&kwargs))?
+            .unbind())
+    }
+
     fn trainability_report(&self) -> PyTrainabilityReport {
         self.inner.trainability_report().clone().into()
     }

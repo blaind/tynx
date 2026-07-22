@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from types import FunctionType, MethodType, ModuleType
 from typing import Generic, TypeVar, Union, cast
 
-from .._tynx import Buffer, Parameter, Tensor
+from .._tynx import Buffer, ImportedModel, Parameter, Tensor
 
 _Path = tuple[str, ...]
 _State = TypeVar("_State", Parameter, Buffer)
@@ -143,6 +143,14 @@ def _parameter_names(
 
 
 def _named_state(obj: object) -> dict[str, _StateValue]:
+    if isinstance(obj, ImportedModel):
+        imported_state: dict[str, _StateValue] = dict(obj.named_parameters())
+        for name, buffer in obj.named_buffers():
+            if name in imported_state:
+                raise ValueError(f"parameter and buffer share the canonical state name {name!r}")
+            imported_state[name] = buffer
+        return dict(sorted(imported_state.items()))
+
     combined: dict[str, _StateValue] = {}
     for name, state in named_parameters(obj):
         if name in combined:
