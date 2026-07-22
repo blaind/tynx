@@ -18,11 +18,8 @@ impl PyDevice {
     }
 
     pub(crate) fn sync(&self) -> PyResult<()> {
-        let synchronized = self.inner.sync();
-        raise_pending_device_error()?;
-        synchronized.map_err(|error| {
-            PyRuntimeError::new_err(format!("device synchronization failed: {error}"))
-        })
+        tynx_core::synchronize(&self.inner)
+            .map_err(|error| PyRuntimeError::new_err(error.to_string()))
     }
 }
 

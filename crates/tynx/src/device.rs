@@ -2,6 +2,8 @@
 
 use std::sync::Mutex;
 
+use crate::error::{Result, TynxError};
+
 static LAST_DEVICE_ERROR: Mutex<Option<String>> = Mutex::new(None);
 
 #[cfg(any(
@@ -30,6 +32,15 @@ pub fn take_device_error() -> Option<String> {
     LAST_DEVICE_ERROR.lock().ok()?.take()
 }
 
+/// Wait for queued work and report any pending asynchronous device error.
+pub fn synchronize(device: &burn::tensor::Device) -> Result<()> {
+    let synchronized = device.sync();
+    if let Some(error) = take_device_error() {
+        return Err(TynxError::AsynchronousDevice(error));
+    }
+    synchronized.map_err(|error| TynxError::DeviceSynchronization(error.to_string()))
+}
+
 #[cfg(all(
     any(feature = "wgpu", feature = "vulkan"),
     feature = "flex",
@@ -41,6 +52,8 @@ mod probe {
     use super::record_device_error;
 
     static DEFAULT_DEVICE_USABLE: OnceLock<bool> = OnceLock::new();
+    #[cfg(all(test, feature = "vulkan"))]
+    static CONFIGURED_SETUP: OnceLock<burn::backend::wgpu::WgpuSetup> = OnceLock::new();
 
     pub(super) fn default_device_usable() -> bool {
         *DEFAULT_DEVICE_USABLE.get_or_init(|| {
@@ -75,7 +88,17 @@ mod probe {
                 record_device_error(error.to_string());
                 log::error!("asynchronous wgpu device error: {error}");
             }));
+
+            #[cfg(all(test, feature = "vulkan"))]
+            let _ = CONFIGURED_SETUP.set(setup);
         });
+    }
+
+    #[cfg(all(test, feature = "vulkan"))]
+    pub(super) fn configured_setup() -> &'static burn::backend::wgpu::WgpuSetup {
+        CONFIGURED_SETUP
+            .get()
+            .expect("default_device must initialize the CubeCL wgpu setup first")
     }
 
     /// Ask wgpu for the adapter the GPU device server would request, without entering the
@@ -124,7 +147,8 @@ pub fn default_device() -> burn::tensor::Device {
 
 #[cfg(test)]
 mod tests {
-    use super::{default_device, record_device_error, take_device_error};
+    use super::{default_device, record_device_error, synchronize, take_device_error};
+    use crate::TynxError;
 
     #[test]
     fn default_device_never_panics() {
@@ -142,7 +166,70 @@ mod tests {
         record_device_error("Out of Memory".to_string());
         record_device_error("cascading validation error".to_string());
 
-        assert_eq!(take_device_error().as_deref(), Some("Out of Memory"));
+        assert_eq!(
+            synchronize(&default_device()),
+            Err(TynxError::AsynchronousDevice("Out of Memory".to_string()))
+        );
+        assert_eq!(take_device_error(), None);
+    }
+
+    #[cfg(all(feature = "vulkan", not(target_family = "wasm")))]
+    #[test]
+    #[ignore = "requires a dedicated Vulkan GPU and deliberately exhausts its memory"]
+    fn real_vulkan_oom_is_reported_and_the_device_recovers() {
+        const ALLOCATION_BYTES: u64 = 256 * 1024 * 1024;
+        const MAX_ALLOCATIONS: usize = 512;
+
+        assert!(
+            super::probe::default_device_usable(),
+            "the OOM acceptance test requires a usable Vulkan GPU"
+        );
+        let burn_device = default_device();
+        let setup = super::probe::configured_setup();
+        let adapter = setup.adapter.get_info();
+        assert_eq!(
+            adapter.device_type,
+            wgpu::DeviceType::DiscreteGpu,
+            "refusing to exhaust memory on non-discrete adapter {:?}",
+            adapter.name
+        );
+
+        let _ = take_device_error();
+        let allocation_size = ALLOCATION_BYTES.min(setup.device.limits().max_buffer_size);
+        let mut buffers = Vec::new();
+        for _ in 0..MAX_ALLOCATIONS {
+            buffers.push(setup.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("tynx forced OOM acceptance allocation"),
+                size: allocation_size,
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            }));
+            setup.device.poll(wgpu::PollType::Poll).unwrap();
+            if super::LAST_DEVICE_ERROR
+                .lock()
+                .expect("device error mutex must not be poisoned")
+                .is_some()
+            {
+                break;
+            }
+        }
+
+        assert_eq!(
+            synchronize(&burn_device),
+            Err(TynxError::AsynchronousDevice("Out of Memory".to_string()))
+        );
+
+        drop(buffers);
+        setup
+            .device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .unwrap();
+
+        let tensor = burn::tensor::Tensor::<1>::from_data(
+            burn::tensor::TensorData::new(vec![2.0_f32], [1]),
+            (&burn_device, burn::tensor::DType::F32),
+        );
+        assert_eq!(tensor.into_data().to_vec::<f32>().unwrap(), vec![2.0]);
         assert_eq!(take_device_error(), None);
     }
 }
