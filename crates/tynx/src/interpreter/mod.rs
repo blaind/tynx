@@ -31,6 +31,7 @@ mod shape;
 mod slice;
 mod softmax;
 mod spatial;
+mod spatial_layout;
 mod split;
 mod trilu;
 mod unary;
@@ -99,6 +100,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Cosh(node) => unary::cosh(node, env, device),
         Node::CumSum(node) => cumsum::cumsum(node, env, device),
         Node::DequantizeLinear(node) => quantization::dequantize_linear(node, env, device),
+        Node::DepthToSpace(node) => spatial_layout::depth_to_space(node, env, device),
         Node::Div(node) => binary::div(node, env, device),
         Node::Dropout(node) => dropout::dropout(node, env, device),
         Node::Elu(node) => unary::elu(node, env, device),
@@ -182,6 +184,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Softplus(node) => unary::softplus(node, env, device),
         Node::Softmax(node) => softmax::softmax(node, env, device),
         Node::Softsign(node) => unary::softsign(node, env, device),
+        Node::SpaceToDepth(node) => spatial_layout::space_to_depth(node, env, device),
         Node::Split(node) => split::split(node, env, device),
         Node::Sqrt(node) => unary::sqrt(node, env, device),
         Node::Squeeze(node) => shape::squeeze(node, env, device),
