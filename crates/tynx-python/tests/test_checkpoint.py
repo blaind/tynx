@@ -78,6 +78,103 @@ def test_checkpoint_supports_optimizer_constructed_from_parameters(tmp_path: Pat
         assert value.tolist() == expected[name].tolist()
 
 
+def test_checkpoint_resumes_scheduler_with_model_and_optimizer(tmp_path: Path) -> None:
+    model = _initialized_model()
+    optimizer = tynx.optim.Adam(model.named_parameters(), lr=0.08)
+    scheduler = tynx.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=0.5)
+    _train_step(model, optimizer)
+    scheduler.step()
+    checkpoint = tmp_path / "scheduled.tynx"
+
+    tynx.save_checkpoint(checkpoint, model, optimizer, scheduler=scheduler)
+    manifest = json.loads(checkpoint.read_text(encoding="utf-8"))
+    assert manifest["scheduler"]["scheduler"] == "StepLR"
+
+    _train_step(model, optimizer)
+    scheduler.step()
+    expected = model.state_dict()
+
+    resumed_model = _initialized_model()
+    resumed_optimizer = tynx.optim.Adam(resumed_model.named_parameters(), lr=0.9)
+    resumed_scheduler = tynx.optim.lr_scheduler.StepLR(resumed_optimizer, step_size=9, gamma=0.9)
+    tynx.load_checkpoint(
+        checkpoint,
+        resumed_model,
+        resumed_optimizer,
+        scheduler=resumed_scheduler,
+    )
+
+    assert resumed_scheduler.last_epoch == 1
+    assert resumed_scheduler.step_size == 1
+    assert resumed_scheduler.gamma == pytest.approx(0.5)
+    assert resumed_optimizer.lr == pytest.approx(0.04)
+    _train_step(resumed_model, resumed_optimizer)
+    resumed_scheduler.step()
+    for name, value in resumed_model.state_dict().items():
+        assert value.tolist() == expected[name].tolist()
+
+
+def test_checkpoint_scheduler_is_optional_and_backward_compatible(tmp_path: Path) -> None:
+    model = _initialized_model()
+    optimizer = tynx.optim.SGD(model.named_parameters(), lr=0.1)
+    checkpoint = tmp_path / "legacy.tynx"
+    tynx.save_checkpoint(checkpoint, model, optimizer)
+    payload = json.loads(checkpoint.read_text(encoding="utf-8"))
+    payload.pop("scheduler")
+    checkpoint.write_text(json.dumps(payload), encoding="utf-8")
+
+    tynx.load_checkpoint(checkpoint, model, optimizer)
+    scheduler = tynx.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.5)
+    with pytest.raises(ValueError, match="does not contain scheduler state"):
+        tynx.load_checkpoint(checkpoint, model, optimizer, scheduler=scheduler)
+
+
+def test_checkpoint_rejects_scheduler_for_another_optimizer(tmp_path: Path) -> None:
+    model = _initialized_model()
+    optimizer = tynx.optim.SGD(model.named_parameters(), lr=0.1)
+    other = tynx.optim.SGD([tynx.Parameter([1.0])], lr=0.2)
+    scheduler = tynx.optim.lr_scheduler.StepLR(other, step_size=1)
+
+    with pytest.raises(ValueError, match="must belong"):
+        tynx.save_checkpoint(
+            tmp_path / "wrong-scheduler.tynx",
+            model,
+            optimizer,
+            scheduler=scheduler,
+        )
+
+
+def test_checkpoint_scheduler_rejection_rolls_back_optimizer(tmp_path: Path) -> None:
+    source = _initialized_model()
+    source_optimizer = tynx.optim.SGD(source.named_parameters(), lr=0.1)
+    source_scheduler = tynx.optim.lr_scheduler.StepLR(source_optimizer, step_size=1)
+    checkpoint = tmp_path / "scheduler-mismatch.tynx"
+    tynx.save_checkpoint(
+        checkpoint,
+        source,
+        source_optimizer,
+        scheduler=source_scheduler,
+    )
+
+    destination = _initialized_model()
+    destination.weight.copy_(tynx.Tensor([[9.0]]))
+    destination_optimizer = tynx.optim.SGD(destination.named_parameters(), lr=0.7)
+    destination_scheduler = tynx.optim.lr_scheduler.ExponentialLR(destination_optimizer, gamma=0.8)
+
+    with pytest.raises(ValueError, match="cannot load StepLR state into ExponentialLR"):
+        tynx.load_checkpoint(
+            checkpoint,
+            destination,
+            destination_optimizer,
+            scheduler=destination_scheduler,
+        )
+
+    assert destination.weight.item() == pytest.approx(9.0)
+    assert destination_optimizer.lr == pytest.approx(0.7)
+    assert destination_scheduler.last_epoch == 0
+    assert destination_scheduler.gamma == pytest.approx(0.8)
+
+
 def test_checkpoint_optimizer_rejection_does_not_publish_model_state(tmp_path: Path) -> None:
     source = _initialized_model()
     source_optimizer = tynx.optim.Adam(source.named_parameters(), lr=0.03)

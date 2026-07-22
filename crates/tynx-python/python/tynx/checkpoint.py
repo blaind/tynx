@@ -34,24 +34,53 @@ class _Optimizer(Protocol):
     def load_state_dict(self, state_dict: dict[str, object]) -> None: ...
 
 
-@overload
-def save_checkpoint(path: _Path, model: object, optimizer: Optional[_Optimizer] = None) -> None: ...
+class _Scheduler(Protocol):
+    @property
+    def optimizer(self) -> object: ...
+
+    def state_dict(self) -> dict[str, object]: ...
+
+    def load_state_dict(self, state_dict: dict[str, object]) -> None: ...
 
 
 @overload
-def save_checkpoint(path: object, model: _Path, optimizer: None = None) -> None: ...
+def save_checkpoint(
+    path: _Path,
+    model: object,
+    optimizer: Optional[_Optimizer] = None,
+    *,
+    scheduler: Optional[_Scheduler] = None,
+) -> None: ...
 
 
 @overload
-def save_checkpoint(path: object, model: _Optimizer, optimizer: _Path) -> None: ...
+def save_checkpoint(
+    path: object,
+    model: _Path,
+    optimizer: None = None,
+    *,
+    scheduler: None = None,
+) -> None: ...
+
+
+@overload
+def save_checkpoint(
+    path: object,
+    model: _Optimizer,
+    optimizer: _Path,
+    *,
+    scheduler: Optional[_Scheduler] = None,
+) -> None: ...
 
 
 def save_checkpoint(
     path: object,
     model: object,
     optimizer: object = None,
+    *,
+    scheduler: Optional[_Scheduler] = None,
 ) -> None:
-    """Atomically save model state and optional optimizer state.
+    """Atomically save model state and optional optimizer/scheduler state.
 
     Both ``save_checkpoint(path, model, optimizer)`` and the PyTorch-shaped
     ``save_checkpoint(model, optimizer, path)`` order are accepted. For weights-only
@@ -59,6 +88,7 @@ def save_checkpoint(
     ``save_checkpoint(model, path)``.
     """
     target, source_model, source_optimizer = _normalize_save_arguments(path, model, optimizer)
+    _validate_scheduler(source_optimizer, scheduler)
     model_state = get_state_dict(source_model)
     if not model_state:
         raise ValueError("cannot save checkpoint: model has no parameters or buffers")
@@ -67,6 +97,7 @@ def save_checkpoint(
         "version": _CHECKPOINT_VERSION,
         "model": _encode(dict(model_state)),
         "optimizer": _encode(None if source_optimizer is None else source_optimizer.state_dict()),
+        "scheduler": _encode(None if scheduler is None else scheduler.state_dict()),
     }
     serialized = json.dumps(payload, allow_nan=True, separators=(",", ":"), sort_keys=True)
     descriptor, temporary_name = tempfile.mkstemp(
@@ -92,28 +123,42 @@ def load_checkpoint(
     model: object,
     optimizer: Optional[_Optimizer] = None,
     strict: bool = True,
+    *,
+    scheduler: Optional[_Scheduler] = None,
 ) -> LoadStateResult:
-    """Restore a combined checkpoint without publishing partially validated state."""
+    """Restore combined state without publishing a partially validated component."""
     payload = _read_payload(path)
     model_state = _decode_state_dictionary(_required(payload, "model"), "model")
     if not model_state:
         raise ValueError("cannot load checkpoint: model state is empty")
     encoded_optimizer = _required(payload, "optimizer")
     optimizer_state = None if optimizer is None else _decode_optimizer_dictionary(encoded_optimizer)
+    _validate_scheduler(optimizer, scheduler)
+    encoded_scheduler = payload.get("scheduler")
+    scheduler_state = (
+        None if scheduler is None else _decode_component_dictionary(encoded_scheduler, "scheduler")
+    )
 
     current, prepared, result = _prepare_state_dict_load(model, model_state, strict)
     previous_model = get_state_dict(model)
     previous_optimizer = None if optimizer is None else optimizer.state_dict()
-    if optimizer is not None:
-        assert optimizer_state is not None
-        optimizer.load_state_dict(optimizer_state)
+    previous_scheduler = None if scheduler is None else scheduler.state_dict()
     try:
+        if optimizer is not None:
+            assert optimizer_state is not None
+            optimizer.load_state_dict(optimizer_state)
+        if scheduler is not None:
+            assert scheduler_state is not None
+            scheduler.load_state_dict(scheduler_state)
         _apply_prepared_state(current, prepared)
     except BaseException:
         load_state_dict(model, previous_model)
         if optimizer is not None:
             assert previous_optimizer is not None
             optimizer.load_state_dict(previous_optimizer)
+        if scheduler is not None:
+            assert previous_scheduler is not None
+            scheduler.load_state_dict(previous_scheduler)
         raise
     return result
 
@@ -148,6 +193,19 @@ def _normalize_save_arguments(
         if not callable(state_dict):
             raise TypeError("save_checkpoint optimizer must provide state_dict()")
     return path, source_model, cast(Optional[_Optimizer], source_optimizer)
+
+
+def _validate_scheduler(optimizer: Optional[_Optimizer], scheduler: Optional[_Scheduler]) -> None:
+    if scheduler is None:
+        return
+    if optimizer is None:
+        raise ValueError("checkpointing a scheduler requires its optimizer")
+    if not callable(getattr(scheduler, "state_dict", None)) or not callable(
+        getattr(scheduler, "load_state_dict", None)
+    ):
+        raise TypeError("checkpoint scheduler must provide state_dict() and load_state_dict()")
+    if getattr(scheduler, "optimizer", None) is not optimizer:
+        raise ValueError("checkpoint scheduler must belong to the supplied optimizer")
 
 
 def _read_payload(path: _Path) -> dict[str, _Encoded]:
@@ -244,11 +302,15 @@ def _decode_state_dictionary(value: _Encoded, field: str) -> dict[str, Tensor]:
 
 
 def _decode_optimizer_dictionary(value: _Encoded) -> dict[str, object]:
+    return _decode_component_dictionary(value, "optimizer")
+
+
+def _decode_component_dictionary(value: Optional[_Encoded], field: str) -> dict[str, object]:
     if value is None:
-        raise ValueError("checkpoint does not contain optimizer state")
+        raise ValueError(f"checkpoint does not contain {field} state")
     decoded = _decode(value, True)
     if not isinstance(decoded, dict):
-        raise ValueError("checkpoint field 'optimizer' must be a dictionary")
+        raise ValueError(f"checkpoint field {field!r} must be a dictionary")
     return cast(dict[str, object], decoded)
 
 
