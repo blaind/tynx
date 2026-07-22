@@ -50,6 +50,16 @@ backend, is enabled by default and also works on `wasm32-unknown-unknown`. GPU e
 available behind feature flags: `wgpu` (Vulkan / Metal / DX12) and `vulkan` (wgpu with the
 SPIR-V fast path).
 
+## Conformance
+
+Tynx runs the official ONNX backend test suite (the node tests vendored by Burn-ONNX) as a pinned
+conformance registry: the status of every case is recorded in the repository, and any drift from
+the recorded results fails CI.
+
+Beyond conformance, CI enforces clippy with warnings denied, a line-coverage floor via
+cargo-llvm-cov, and license and dependency-source checks via cargo-deny. WebAssembly builds are
+tested headless in Chrome on both CPU and WebGPU. The workspace forbids `unsafe` code entirely.
+
 ## Relationship to Burn
 
 Tynx is built on Burn and complements [burn-onnx](https://github.com/tracel-ai/burn-onnx):
