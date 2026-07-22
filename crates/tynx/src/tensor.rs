@@ -2700,12 +2700,48 @@ impl DynInt {
 
     /// Take the maximum along dimensions while retaining singleton dimensions.
     pub fn reduce_max_dims(self, dims: &[usize]) -> Self {
-        map_int!(self, |tensor| tensor.max_dims(dims))
+        self.reduce_extreme_dims_pairwise(dims, true)
     }
 
     /// Take the minimum along dimensions while retaining singleton dimensions.
     pub fn reduce_min_dims(self, dims: &[usize]) -> Self {
-        map_int!(self, |tensor| tensor.min_dims(dims))
+        self.reduce_extreme_dims_pairwise(dims, false)
+    }
+
+    fn reduce_extreme_dims_pairwise(mut self, dims: &[usize], maximum: bool) -> Self {
+        // CubeCL's WGPU i64 reduction shader cannot represent the minimum accumulator. Pairwise
+        // elementwise extrema are exact for all i64 values and need only logarithmically many
+        // dispatches, while keeping reduced dimensions as singletons.
+        for &dim in dims {
+            let mut extent = self.dims()[dim];
+            while extent > 1 {
+                let pairs = extent / 2;
+                let mut left_slices = vec![Slice::full(); self.rank()];
+                left_slices[dim] = Slice::new(0, Some(pairs as isize), 1);
+                let mut right_slices = vec![Slice::full(); self.rank()];
+                right_slices[dim] = Slice::new(pairs as isize, Some((pairs * 2) as isize), 1);
+
+                let left = self.clone().slice(&left_slices);
+                let right = self.clone().slice(&right_slices);
+                let mut reduced = if maximum {
+                    left.max_broadcast(right)
+                } else {
+                    left.min_broadcast(right)
+                }
+                .expect("paired extrema slices have identical shapes and devices");
+
+                if !extent.is_multiple_of(2) {
+                    let mut tail_slices = vec![Slice::full(); self.rank()];
+                    tail_slices[dim] = Slice::new((extent - 1) as isize, Some(extent as isize), 1);
+                    let tail = self.slice(&tail_slices);
+                    reduced = Self::concat(vec![reduced, tail], dim)
+                        .expect("paired extrema output and tail are concatenation-compatible");
+                }
+                self = reduced;
+                extent = pairs + usize::from(!extent.is_multiple_of(2));
+            }
+        }
+        self
     }
 
     /// Take the element-wise maximum with multidirectional broadcasting.
