@@ -58,6 +58,25 @@ def test_combined_checkpoint_resumes_model_and_adam_exactly(tmp_path: Path) -> N
         assert value.tolist() == expected[name].tolist()
 
 
+def test_checkpoint_supports_optimizer_constructed_from_parameters(tmp_path: Path) -> None:
+    model = _initialized_model()
+    optimizer = tynx.optim.Adam(model.parameters(), lr=0.03)
+    _train_step(model, optimizer)
+    checkpoint = tmp_path / "positional-optimizer.tynx"
+
+    tynx.save_checkpoint(checkpoint, model, optimizer)
+    _train_step(model, optimizer)
+    expected = model.state_dict()
+
+    resumed_model = _initialized_model()
+    resumed_optimizer = tynx.optim.Adam(resumed_model.parameters(), lr=0.9)
+    tynx.load_checkpoint(checkpoint, resumed_model, resumed_optimizer)
+    _train_step(resumed_model, resumed_optimizer)
+
+    for name, value in resumed_model.state_dict().items():
+        assert value.tolist() == expected[name].tolist()
+
+
 def test_checkpoint_optimizer_rejection_does_not_publish_model_state(tmp_path: Path) -> None:
     source = _initialized_model()
     source_optimizer = tynx.optim.Adam(source.named_parameters(), lr=0.03)

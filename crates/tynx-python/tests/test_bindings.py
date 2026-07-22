@@ -592,11 +592,12 @@ def test_named_adam_state_dict_resumes_exactly_on_a_fresh_model() -> None:
         assert value.tolist() == expected[name].tolist()
 
 
-def test_optimizer_state_dict_requires_names_and_rejects_incompatible_payloads() -> None:
+def test_optimizer_state_dict_requires_stable_names_and_rejects_incompatible_payloads() -> None:
     parameter = tynx.Parameter([2.0])
     unnamed = tynx.optim.SGD([parameter], lr=0.1, momentum=0.9)
     with pytest.raises(ValueError, match="named_parameters"):
         unnamed.state_dict()
+
     with pytest.raises(TypeError, match="cannot mix"):
         tynx.optim.SGD([parameter, ("weight", parameter)], lr=0.1)
 

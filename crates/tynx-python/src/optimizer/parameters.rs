@@ -1,5 +1,7 @@
 //! Python optimizer parameter normalization.
 
+use std::collections::HashSet;
+
 use pyo3::{
     exceptions::{PyTypeError, PyValueError},
     prelude::*,
@@ -74,7 +76,25 @@ pub(crate) fn collect_parameters(
         }
         Some(store)
     } else {
-        None
+        let inferred = slots
+            .iter()
+            .map(ParameterSlot::name)
+            .collect::<Option<Vec<_>>>();
+        match inferred {
+            Some(names)
+                if names.iter().all(|name| !name.is_empty())
+                    && names.iter().collect::<HashSet<_>>().len() == names.len() =>
+            {
+                let mut store = ParameterStore::new();
+                for (name, parameter) in names.into_iter().zip(&slots) {
+                    store
+                        .insert(name, parameter.clone())
+                        .map_err(to_python_error)?;
+                }
+                Some(store)
+            }
+            _ => None,
+        }
     };
     Ok(CollectedParameters { slots, named })
 }
