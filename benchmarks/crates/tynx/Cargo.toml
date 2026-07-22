@@ -9,10 +9,13 @@ publish.workspace = true
 default = ["flex"]
 flex = ["burn/flex", "tynx/flex"]
 mobilenet = ["tynx-bench-protocol/mobilenet"]
+multithread = ["dep:burn-flex", "burn-flex/rayon", "dep:rayon"]
 wgpu = ["burn/autotune", "burn/fusion", "burn/webgpu", "tynx-bench-protocol/wgpu-device"]
 
 [dependencies]
 burn.workspace = true
+burn-flex = { workspace = true, optional = true }
+rayon = { workspace = true, optional = true }
 tynx = { path = "../../../crates/tynx", default-features = false }
 tynx-bench-protocol.workspace = true
 

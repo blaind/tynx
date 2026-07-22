@@ -405,8 +405,10 @@ name = "burn-aot-bench"
 version = "0.1.0"
 dependencies = [
  "burn",
+ "burn-flex",
  "burn-onnx",
  "burn-store",
+ "rayon",
  "tynx-bench-protocol",
 ]
 
@@ -588,6 +590,7 @@ dependencies = [
  "once_cell",
  "portable-atomic",
  "portable-atomic-util",
+ "rayon",
 ]
 
 [[package]]
@@ -2370,6 +2373,7 @@ dependencies = [
  "paste",
  "pulp",
  "raw-cpuid",
+ "rayon",
  "seq-macro",
  "sysctl",
 ]
@@ -2388,6 +2392,7 @@ dependencies = [
  "num-traits",
  "paste",
  "raw-cpuid",
+ "rayon",
  "seq-macro",
 ]
 
@@ -5546,6 +5551,8 @@ name = "tynx-bench"
 version = "0.1.0"
 dependencies = [
  "burn",
+ "burn-flex",
+ "rayon",
  "tynx",
  "tynx-bench-protocol",
 ]

@@ -3,17 +3,26 @@ use std::time::Instant;
 use burn::tensor::{Device, TensorData};
 use tynx::{Env, Session, Value};
 use tynx_bench_protocol::{
-    BenchResult, Case, Report, load_cases, measure_prepared, model_bytes, print_reports,
+    BenchResult, Case, Report, Threading, load_cases, measure_prepared, model_bytes, print_reports,
     require_release,
 };
 
 fn main() -> BenchResult<()> {
     require_release()?;
     let cases = load_cases()?;
+    let threading = cpu_threading()?;
     let (backend, device, device_name) = device();
     let reports = cases
         .iter()
-        .map(|case| run_case(case, backend, &device, device_name.clone()))
+        .map(|case| {
+            run_case(
+                case,
+                backend,
+                &device,
+                device_name.clone(),
+                threading.as_ref(),
+            )
+        })
         .collect::<BenchResult<Vec<_>>>()?;
     print_reports(&reports)
 }
@@ -23,6 +32,7 @@ fn run_case(
     backend: &str,
     device: &Device,
     device_name: Option<String>,
+    threading: Option<&Threading>,
 ) -> BenchResult<Report> {
     let bytes = model_bytes(case)?;
 
@@ -43,7 +53,7 @@ fn run_case(
     }
     let output_name = session.outputs()[0].name.clone();
 
-    measure_prepared(
+    let report = measure_prepared(
         "tynx",
         backend,
         device_name,
@@ -77,7 +87,37 @@ fn run_case(
                 .into_data();
             Ok(output.convert::<f32>().to_vec::<f32>()?)
         },
-    )
+    )?;
+    Ok(match threading {
+        Some(threading) => report.with_threading(threading.clone()),
+        None => report,
+    })
+}
+
+#[cfg(feature = "wgpu")]
+fn cpu_threading() -> BenchResult<Option<Threading>> {
+    Ok(None)
+}
+
+#[cfg(all(not(feature = "wgpu"), feature = "multithread"))]
+fn cpu_threading() -> BenchResult<Option<Threading>> {
+    let request = tynx_bench_protocol::thread_request()?;
+    if let tynx_bench_protocol::ThreadRequest::Fixed(threads) = request {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build_global()?;
+    }
+    let actual = rayon::current_num_threads();
+    Ok(Some(request.report("rayon", Some(actual))))
+}
+
+#[cfg(all(not(feature = "wgpu"), not(feature = "multithread")))]
+fn cpu_threading() -> BenchResult<Option<Threading>> {
+    let request = tynx_bench_protocol::thread_request()?;
+    if request.fixed().is_some_and(|threads| threads != 1) {
+        return Err("multi-thread CPU benchmarks require the 'multithread' feature".into());
+    }
+    Ok(Some(request.report("serial", Some(1))))
 }
 
 #[cfg(feature = "wgpu")]

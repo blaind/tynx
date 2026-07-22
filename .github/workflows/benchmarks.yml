@@ -42,21 +42,32 @@ jobs:
           mkdir -p benchmarks/results
           lscpu > benchmarks/results/system.txt
           rustc --version --verbose >> benchmarks/results/system.txt
-      - name: Benchmark Tynx CPU
-        run: cargo run --manifest-path benchmarks/Cargo.toml --locked --release -p tynx-bench --features mobilenet > benchmarks/results/tynx-cpu.json
-      - name: Benchmark burn-onnx AOT CPU
-        run: cargo run --manifest-path benchmarks/Cargo.toml --locked --release -p burn-aot-bench --features mobilenet > benchmarks/results/burn-aot-cpu.json
-      - name: Benchmark ONNX Runtime CPU
-        run: cargo run --manifest-path benchmarks/Cargo.toml --locked --release -p ort-bench --features mobilenet > benchmarks/results/ort-cpu.json
+      - name: Benchmark Tynx CPU (single thread)
+        run: TYNX_BENCH_THREADS=1 cargo run --manifest-path benchmarks/Cargo.toml --locked --release -p tynx-bench --features mobilenet,multithread > benchmarks/results/tynx-cpu-single.json
+      - name: Benchmark Tynx CPU (all cores)
+        run: TYNX_BENCH_THREADS=auto cargo run --manifest-path benchmarks/Cargo.toml --locked --release -p tynx-bench --features mobilenet,multithread > benchmarks/results/tynx-cpu-auto.json
+      - name: Benchmark burn-onnx AOT CPU (single thread)
+        run: TYNX_BENCH_THREADS=1 cargo run --manifest-path benchmarks/Cargo.toml --locked --release -p burn-aot-bench --features mobilenet,multithread > benchmarks/results/burn-aot-cpu-single.json
+      - name: Benchmark burn-onnx AOT CPU (all cores)
+        run: TYNX_BENCH_THREADS=auto cargo run --manifest-path benchmarks/Cargo.toml --locked --release -p burn-aot-bench --features mobilenet,multithread > benchmarks/results/burn-aot-cpu-auto.json
+      - name: Benchmark ONNX Runtime CPU (single thread)
+        run: TYNX_BENCH_THREADS=1 cargo run --manifest-path benchmarks/Cargo.toml --locked --release -p ort-bench --features mobilenet > benchmarks/results/ort-cpu-single.json
+      - name: Benchmark ONNX Runtime CPU (all cores)
+        run: TYNX_BENCH_THREADS=auto cargo run --manifest-path benchmarks/Cargo.toml --locked --release -p ort-bench --features mobilenet > benchmarks/results/ort-cpu-auto.json
       - name: Add benchmark summary
         if: always() && hashFiles('benchmarks/results/*.json') != ''
         run: |
           echo '## CPU benchmarks' >> "$GITHUB_STEP_SUMMARY"
-          echo '| Case | Engine | Batch | Median (ms) | p95 (ms) | Items/s | Estimated GFLOP/s |' >> "$GITHUB_STEP_SUMMARY"
-          echo '| --- | --- | ---: | ---: | ---: | ---: | ---: |' >> "$GITHUB_STEP_SUMMARY"
+          echo '| Case | Engine | Threads | Batch | Median (ms) | p95 (ms) | Items/s | Estimated GFLOP/s |' >> "$GITHUB_STEP_SUMMARY"
+          echo '| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |' >> "$GITHUB_STEP_SUMMARY"
           jq -s -r '
-            add | sort_by(.case, .engine)[] |
-            "| \(.case) | \(.engine) | \(.batch_size // "-") | \(.median_ms * 1000000 | round / 1000000) | \(.p95_ms * 1000000 | round / 1000000) | \(if .throughput_items_per_second == null then "-" else (.throughput_items_per_second * 100 | round / 100) end) | \(if .estimated_gflops == null then "-" else (.estimated_gflops * 100 | round / 100) end) |"
+            def threads:
+              if .threading == null then "-"
+              elif .threading.mode == "auto" then "auto (actual: \(.threading.actual // "runtime"))"
+              else "\(.threading.requested) (actual: \(.threading.actual // "runtime"))"
+              end;
+            add | sort_by(.case, .engine, .threading.mode)[] |
+            "| \(.case) | \(.engine) | \(threads) | \(.batch_size // "-") | \(.median_ms * 1000000 | round / 1000000) | \(.p95_ms * 1000000 | round / 1000000) | \(if .throughput_items_per_second == null then "-" else (.throughput_items_per_second * 100 | round / 100) end) | \(if .estimated_gflops == null then "-" else (.estimated_gflops * 100 | round / 100) end) |"
           ' benchmarks/results/*.json >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v7
         if: always()
