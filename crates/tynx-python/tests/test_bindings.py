@@ -37,6 +37,31 @@ def test_tensor_eager_operators() -> None:
     assert (-left).tolist() == [[-1.0, -2.0], [-3.0, -4.0]]
 
 
+def test_tensor_scalar_and_reverse_operators() -> None:
+    value = tynx.Tensor([2.0, 4.0])
+
+    assert (value + 2).tolist() == pytest.approx([4.0, 6.0])
+    assert (2 + value).tolist() == pytest.approx([4.0, 6.0])
+    assert (value - 1.5).tolist() == pytest.approx([0.5, 2.5])
+    assert (10 - value).tolist() == pytest.approx([8.0, 6.0])
+    assert (value * 3).tolist() == pytest.approx([6.0, 12.0])
+    assert (3 * value).tolist() == pytest.approx([6.0, 12.0])
+    assert (value / 2).tolist() == pytest.approx([1.0, 2.0])
+    assert (8 / value).tolist() == pytest.approx([4.0, 2.0])
+
+    with pytest.raises(TypeError, match="Tensor or a real number"):
+        value + "invalid"  # type: ignore[operator]
+
+
+def test_tensor_reverse_scalar_operators_are_differentiable() -> None:
+    value = tynx.Tensor([2.0], requires_grad=True)
+
+    (3 - value * 2 + 8 / value).backward()
+
+    assert value.grad is not None
+    assert value.grad.tolist() == pytest.approx([-4.0])
+
+
 def test_tensor_rejects_ragged_or_empty_data() -> None:
     with pytest.raises(ValueError, match="ragged"):
         tynx.Tensor([[1.0], [2.0, 3.0]])
@@ -187,6 +212,10 @@ def test_parameter_accumulates_and_zeros_gradients() -> None:
 
     parameter.zero_grad()
     assert parameter.grad is None
+
+    (parameter * 3).backward()
+    assert parameter.grad is not None
+    assert parameter.grad.tolist() == pytest.approx([3.0])
 
 
 def test_missing_model_raises_os_error(tmp_path: Path) -> None:

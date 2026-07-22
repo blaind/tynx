@@ -9,7 +9,7 @@ use std::{
 };
 
 use pyo3::{
-    exceptions::PyValueError,
+    exceptions::{PyTypeError, PyValueError},
     prelude::*,
     types::{PyAny, PyList, PyListMethods, PyTuple, PyTupleMethods},
 };
@@ -168,6 +168,19 @@ impl PyTensor {
         } else {
             Self::from_inner(inner)
         })
+    }
+
+    fn arithmetic(
+        &self,
+        other: &Bound<'_, PyAny>,
+        tensor_operation: impl FnOnce(DynTensor, DynTensor) -> tynx_core::Result<DynTensor>,
+        scalar_operation: impl FnOnce(DynTensor, f64) -> DynTensor,
+    ) -> PyResult<Self> {
+        if let Ok(other) = other.extract::<PyRef<'_, Self>>() {
+            return self.binary(&other, tensor_operation);
+        }
+        let scalar = extract_scalar_operand(other)?;
+        self.unary(|input| Ok(scalar_operation(input, scalar)))
     }
 
     fn unary(
@@ -364,20 +377,38 @@ impl PyTensor {
         self.reduce(dim, keepdim, DynTensor::mean_dims)
     }
 
-    fn __add__(&self, other: PyRef<'_, Self>) -> PyResult<Self> {
-        self.binary(&other, DynTensor::add_broadcast)
+    fn __add__(&self, other: &Bound<'_, PyAny>) -> PyResult<Self> {
+        self.arithmetic(other, DynTensor::add_broadcast, DynTensor::add_scalar)
     }
 
-    fn __sub__(&self, other: PyRef<'_, Self>) -> PyResult<Self> {
-        self.binary(&other, DynTensor::sub_broadcast)
+    fn __radd__(&self, other: &Bound<'_, PyAny>) -> PyResult<Self> {
+        self.arithmetic(other, DynTensor::add_broadcast, DynTensor::add_scalar)
     }
 
-    fn __mul__(&self, other: PyRef<'_, Self>) -> PyResult<Self> {
-        self.binary(&other, DynTensor::mul_broadcast)
+    fn __sub__(&self, other: &Bound<'_, PyAny>) -> PyResult<Self> {
+        self.arithmetic(other, DynTensor::sub_broadcast, DynTensor::sub_scalar)
     }
 
-    fn __truediv__(&self, other: PyRef<'_, Self>) -> PyResult<Self> {
-        self.binary(&other, DynTensor::div_broadcast)
+    fn __rsub__(&self, other: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let scalar = extract_scalar_operand(other)?;
+        self.unary(|input| Ok(input.negated().add_scalar(scalar)))
+    }
+
+    fn __mul__(&self, other: &Bound<'_, PyAny>) -> PyResult<Self> {
+        self.arithmetic(other, DynTensor::mul_broadcast, DynTensor::mul_scalar)
+    }
+
+    fn __rmul__(&self, other: &Bound<'_, PyAny>) -> PyResult<Self> {
+        self.arithmetic(other, DynTensor::mul_broadcast, DynTensor::mul_scalar)
+    }
+
+    fn __truediv__(&self, other: &Bound<'_, PyAny>) -> PyResult<Self> {
+        self.arithmetic(other, DynTensor::div_broadcast, DynTensor::div_scalar)
+    }
+
+    fn __rtruediv__(&self, other: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let scalar = extract_scalar_operand(other)?;
+        self.unary(|input| Ok(input.reciprocal().mul_scalar(scalar)))
     }
 
     fn __matmul__(&self, other: PyRef<'_, Self>) -> PyResult<Self> {
@@ -408,6 +439,12 @@ impl PyTensor {
         let spec = ReductionSpec::from_python(dim, &input_shape, keepdim)?;
         self.unary(move |input| operation(input, &spec.dims).reshape(spec.output_shape))
     }
+}
+
+fn extract_scalar_operand(value: &Bound<'_, PyAny>) -> PyResult<f64> {
+    value.extract::<f64>().map_err(|_| {
+        PyTypeError::new_err("Tensor arithmetic expects another Tensor or a real number")
+    })
 }
 
 fn parse_value(value: &Bound<'_, PyAny>, values: &mut Vec<f32>) -> PyResult<Vec<usize>> {
