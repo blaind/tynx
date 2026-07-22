@@ -7,9 +7,11 @@
 
 pub mod autograd;
 pub mod loss;
+pub mod optimizer;
 pub mod parameter;
 pub mod store;
 
 pub use autograd::{BackwardResult, backward};
+pub use optimizer::{Sgd, SgdConfig};
 pub use parameter::{ParamId, ParameterContract, ParameterSlot};
 pub use store::ParameterStore;
