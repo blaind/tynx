@@ -306,6 +306,100 @@ impl_metadata!(DynTensor);
 impl_metadata!(DynInt);
 impl_metadata!(DynBool);
 
+macro_rules! impl_concat {
+    ($kind:ident) => {
+        impl $kind {
+            /// Concatenate tensors of the same rank along one dimension.
+            pub fn concat(tensors: Vec<Self>, dim: usize) -> Result<Self> {
+                let Some(first) = tensors.first() else {
+                    return Err(TynxError::Shape(
+                        "concatenation requires at least one tensor".to_string(),
+                    ));
+                };
+                let rank = first.rank();
+                if dim >= rank {
+                    return Err(TynxError::Shape(format!(
+                        "concatenation axis {dim} is out of range for rank {rank}"
+                    )));
+                }
+                if tensors.iter().any(|tensor| tensor.rank() != rank) {
+                    return Err(TynxError::Shape(
+                        "concatenation requires tensors with equal ranks".to_string(),
+                    ));
+                }
+
+                Ok(match rank {
+                    1 => Self::R1(Tensor::cat(
+                        tensors
+                            .into_iter()
+                            .map(|tensor| match tensor {
+                                Self::R1(tensor) => tensor,
+                                _ => unreachable!("tensor ranks were validated"),
+                            })
+                            .collect(),
+                        dim,
+                    )),
+                    2 => Self::R2(Tensor::cat(
+                        tensors
+                            .into_iter()
+                            .map(|tensor| match tensor {
+                                Self::R2(tensor) => tensor,
+                                _ => unreachable!("tensor ranks were validated"),
+                            })
+                            .collect(),
+                        dim,
+                    )),
+                    3 => Self::R3(Tensor::cat(
+                        tensors
+                            .into_iter()
+                            .map(|tensor| match tensor {
+                                Self::R3(tensor) => tensor,
+                                _ => unreachable!("tensor ranks were validated"),
+                            })
+                            .collect(),
+                        dim,
+                    )),
+                    4 => Self::R4(Tensor::cat(
+                        tensors
+                            .into_iter()
+                            .map(|tensor| match tensor {
+                                Self::R4(tensor) => tensor,
+                                _ => unreachable!("tensor ranks were validated"),
+                            })
+                            .collect(),
+                        dim,
+                    )),
+                    5 => Self::R5(Tensor::cat(
+                        tensors
+                            .into_iter()
+                            .map(|tensor| match tensor {
+                                Self::R5(tensor) => tensor,
+                                _ => unreachable!("tensor ranks were validated"),
+                            })
+                            .collect(),
+                        dim,
+                    )),
+                    6 => Self::R6(Tensor::cat(
+                        tensors
+                            .into_iter()
+                            .map(|tensor| match tensor {
+                                Self::R6(tensor) => tensor,
+                                _ => unreachable!("tensor ranks were validated"),
+                            })
+                            .collect(),
+                        dim,
+                    )),
+                    _ => return Err(TynxError::RankOverflow(rank)),
+                })
+            }
+        }
+    };
+}
+
+impl_concat!(DynTensor);
+impl_concat!(DynInt);
+impl_concat!(DynBool);
+
 impl DynTensor {
     /// Create a floating-point tensor filled with one value and an explicit dtype.
     pub fn full(dims: &[usize], value: f64, device: &Device, dtype: DType) -> Result<Self> {

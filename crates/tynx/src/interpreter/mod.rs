@@ -4,6 +4,7 @@ mod binary;
 mod cast;
 mod clip;
 mod comparison;
+mod concat;
 mod convolution;
 mod extrema;
 mod logical;
@@ -64,6 +65,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Ceil(node) => unary::ceil(node, env, device),
         Node::Celu(node) => unary::celu(node, env, device),
         Node::Clip(node) => clip::clip(node, env, device),
+        Node::Concat(node) => concat::concat(node, env, device),
         Node::Conv1d(node) => convolution::conv1d(node, env, device),
         Node::Conv2d(node) => convolution::conv2d(node, env, device),
         Node::Conv3d(node) => convolution::conv3d(node, env, device),

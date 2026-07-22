@@ -28,7 +28,7 @@ fn cast_input(
     Ok(vec![cast_value(input, target, device)?])
 }
 
-fn cast_value(input: Value, target: DType, device: &Device) -> Result<Value> {
+pub(super) fn cast_value(input: Value, target: DType, device: &Device) -> Result<Value> {
     if target.is_float() {
         return Ok(match input {
             Value::Tensor(tensor) => Value::Tensor(tensor.cast(target)),
