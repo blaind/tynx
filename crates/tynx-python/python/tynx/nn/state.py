@@ -66,6 +66,17 @@ def load_state_dict(
     strict: bool = True,
 ) -> LoadStateResult:
     """Load compatible snapshots into existing state identities by canonical name."""
+    current, prepared, result = _prepare_state_dict_load(obj, state_dict, strict)
+    _apply_prepared_state(current, prepared)
+    return result
+
+
+def _prepare_state_dict_load(
+    obj: object,
+    state_dict: Mapping[str, Tensor],
+    strict: bool,
+) -> tuple[dict[str, _StateValue], dict[str, Tensor], LoadStateResult]:
+    """Validate a state load and detach every source before publishing any value."""
     if type(strict) is not bool:
         raise TypeError(f"strict must be a bool, got {type(strict).__qualname__}")
     current = _named_state(obj)
@@ -97,9 +108,15 @@ def load_state_dict(
                 f"expected shape {target.shape} and dtype {target.dtype}"
             )
         prepared[name] = source.detach()
+    return current, prepared, result
+
+
+def _apply_prepared_state(
+    current: Mapping[str, _StateValue], prepared: Mapping[str, Tensor]
+) -> None:
+    """Publish a state load that has already passed `_prepare_state_dict_load`."""
     for name, source in prepared.items():
         current[name].copy_(source)
-    return result
 
 
 def train(obj: object, mode: bool = True) -> object:

@@ -13,6 +13,7 @@ from ._tynx import (
     no_grad,
     where,
 )
+from .checkpoint import load_checkpoint, save_checkpoint
 
 __all__ = [
     "Buffer",
@@ -21,10 +22,12 @@ __all__ = [
     "Tensor",
     "__version__",
     "is_grad_enabled",
+    "load_checkpoint",
     "maximum",
     "minimum",
     "nn",
     "no_grad",
     "optim",
+    "save_checkpoint",
     "where",
 ]

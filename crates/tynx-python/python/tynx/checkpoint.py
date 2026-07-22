@@ -1,0 +1,206 @@
+"""Versioned, resumable model-and-optimizer checkpoints."""
+
+import json
+import os
+import tempfile
+from collections.abc import Mapping
+from contextlib import suppress
+from os import PathLike
+from pathlib import Path
+from typing import TYPE_CHECKING, Protocol, Union, cast
+
+from typing_extensions import TypeAlias
+
+from ._tynx import Tensor
+from .nn.state import (
+    LoadStateResult,
+    _apply_prepared_state,
+    _prepare_state_dict_load,
+    get_state_dict,
+    load_state_dict,
+)
+
+_CHECKPOINT_FORMAT = "tynx.training"
+_CHECKPOINT_VERSION = 1
+_Path: TypeAlias = Union[str, PathLike[str]]
+_JsonScalar: TypeAlias = Union[None, bool, int, float, str]
+_Encoded: TypeAlias = Union[_JsonScalar, list["_Encoded"], dict[str, "_Encoded"]]
+
+if TYPE_CHECKING:
+    from ._tynx import TensorData, TensorDType
+
+
+class _Optimizer(Protocol):
+    def state_dict(self) -> dict[str, object]: ...
+
+    def load_state_dict(self, state_dict: dict[str, object]) -> None: ...
+
+
+def save_checkpoint(path: _Path, model: object, optimizer: _Optimizer) -> None:
+    """Atomically save detached model and optimizer state under stable names."""
+    payload: dict[str, _Encoded] = {
+        "format": _CHECKPOINT_FORMAT,
+        "version": _CHECKPOINT_VERSION,
+        "model": _encode(dict(get_state_dict(model))),
+        "optimizer": _encode(optimizer.state_dict()),
+    }
+    target = Path(path)
+    serialized = json.dumps(payload, allow_nan=True, separators=(",", ":"), sort_keys=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=target.parent,
+        prefix=f".{target.name}.",
+        suffix=".tmp",
+        text=True,
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as temporary:
+            temporary.write(serialized)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        os.replace(temporary_name, target)
+    except BaseException:
+        with suppress(FileNotFoundError):
+            os.unlink(temporary_name)
+        raise
+
+
+def load_checkpoint(
+    path: _Path,
+    model: object,
+    optimizer: _Optimizer,
+    strict: bool = True,
+) -> LoadStateResult:
+    """Restore a combined checkpoint without publishing partially validated state."""
+    payload = _read_payload(path)
+    model_state = _decode_state_dictionary(_required(payload, "model"), "model")
+    optimizer_state = _decode_optimizer_dictionary(_required(payload, "optimizer"))
+
+    current, prepared, result = _prepare_state_dict_load(model, model_state, strict)
+    previous_optimizer = optimizer.state_dict()
+    previous_model = get_state_dict(model)
+    optimizer.load_state_dict(optimizer_state)
+    try:
+        _apply_prepared_state(current, prepared)
+    except BaseException:
+        load_state_dict(model, previous_model)
+        optimizer.load_state_dict(previous_optimizer)
+        raise
+    return result
+
+
+def _read_payload(path: _Path) -> dict[str, _Encoded]:
+    try:
+        with Path(path).open(encoding="utf-8") as checkpoint:
+            value = json.load(checkpoint)
+    except json.JSONDecodeError as error:
+        raise ValueError(f"invalid Tynx checkpoint JSON: {error}") from error
+    if not isinstance(value, dict):
+        raise ValueError("Tynx checkpoint root must be a dictionary")
+    payload = cast(dict[str, _Encoded], value)
+    if payload.get("format") != _CHECKPOINT_FORMAT:
+        raise ValueError("file is not a Tynx training checkpoint")
+    version = payload.get("version")
+    if version != _CHECKPOINT_VERSION:
+        raise ValueError(
+            f"unsupported Tynx checkpoint version {version!r}; expected {_CHECKPOINT_VERSION}"
+        )
+    return payload
+
+
+def _encode(value: object) -> _Encoded:
+    if value is None or type(value) in (bool, int, float, str):
+        return cast(_JsonScalar, value)
+    if isinstance(value, Tensor):
+        return {
+            "__type__": "tensor",
+            "data": _encode(value.tolist()),
+            "dtype": value.dtype,
+            "shape": [int(dimension) for dimension in value.shape],
+        }
+    if type(value) is tuple:
+        return {
+            "__type__": "tuple",
+            "items": [_encode(item) for item in cast(tuple[object, ...], value)],
+        }
+    if type(value) is list:
+        return [_encode(item) for item in cast(list[object], value)]
+    if type(value) is dict:
+        encoded: dict[str, _Encoded] = {}
+        for key, item in cast(dict[object, object], value).items():
+            if not isinstance(key, str):
+                raise TypeError(
+                    f"checkpoint dictionaries require string keys, got {type(key).__qualname__}"
+                )
+            encoded[key] = _encode(item)
+        return encoded
+    raise TypeError(f"checkpoint cannot serialize {type(value).__qualname__}")
+
+
+def _decode(value: _Encoded, autodiff_float: bool) -> object:
+    if not isinstance(value, (dict, list)):
+        return value
+    if isinstance(value, list):
+        return [_decode(item, autodiff_float) for item in value]
+    marker = value.get("__type__")
+    if marker == "tensor":
+        dtype = value.get("dtype")
+        shape = value.get("shape")
+        if not isinstance(dtype, str) or not _is_shape(shape):
+            raise ValueError("invalid tensor metadata in Tynx checkpoint")
+        data = cast("TensorData", _decode(_required(value, "data"), autodiff_float))
+        tensor = Tensor(
+            data,
+            dtype=cast("TensorDType", dtype),
+            requires_grad=autodiff_float and dtype == "float32",
+        ).detach()
+        expected_shape = tuple(cast(list[int], shape))
+        if tensor.shape != expected_shape:
+            raise ValueError(
+                f"checkpoint tensor data has shape {tensor.shape}, expected {expected_shape}"
+            )
+        return tensor
+    if marker == "tuple":
+        items = _required(value, "items")
+        if not isinstance(items, list):
+            raise ValueError("checkpoint tuple items must be a list")
+        return tuple(_decode(item, autodiff_float) for item in items)
+    if marker is not None:
+        raise ValueError(f"unknown checkpoint value type {marker!r}")
+    return {key: _decode(item, autodiff_float) for key, item in value.items()}
+
+
+def _decode_state_dictionary(value: _Encoded, field: str) -> dict[str, Tensor]:
+    decoded = _decode(value, True)
+    if not isinstance(decoded, dict):
+        raise ValueError(f"checkpoint field {field!r} must be a dictionary")
+    result: dict[str, Tensor] = {}
+    for name, tensor in decoded.items():
+        if not isinstance(name, str) or not isinstance(tensor, Tensor):
+            raise ValueError(f"checkpoint field {field!r} must map names to Tynx Tensors")
+        result[name] = tensor
+    return result
+
+
+def _decode_optimizer_dictionary(value: _Encoded) -> dict[str, object]:
+    decoded = _decode(value, True)
+    if not isinstance(decoded, dict):
+        raise ValueError("checkpoint field 'optimizer' must be a dictionary")
+    return cast(dict[str, object], decoded)
+
+
+def _required(dictionary: Mapping[str, _Encoded], key: str) -> _Encoded:
+    try:
+        return dictionary[key]
+    except KeyError as error:
+        raise ValueError(f"checkpoint is missing field {key!r}") from error
+
+
+def _is_shape(value: object) -> bool:
+    return (
+        isinstance(value, list)
+        and bool(value)
+        and all(type(item) is int and item > 0 for item in value)
+    )
+
+
+__all__ = ["load_checkpoint", "save_checkpoint"]

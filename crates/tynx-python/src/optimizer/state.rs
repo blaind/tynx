@@ -32,7 +32,10 @@ pub(super) fn sgd_to_python(py: Python<'_>, state: &SgdStateDict) -> PyResult<Py
         let entry = PyDict::new(py);
         entry.set_item(
             "momentum_buffer",
-            Py::new(py, PyTensor::from_inner(parameter_state.momentum_buffer()))?,
+            Py::new(
+                py,
+                PyTensor::from_inner(parameter_state.momentum_buffer().to_autodiff()),
+            )?,
         )?;
         entries.set_item(name, entry)?;
     }
@@ -87,16 +90,22 @@ pub(super) fn adam_to_python(py: Python<'_>, state: &AdamStateDict) -> PyResult<
         entry.set_item("step", parameter_state.step())?;
         entry.set_item(
             "exp_avg",
-            Py::new(py, PyTensor::from_inner(parameter_state.first_moment()))?,
+            Py::new(
+                py,
+                PyTensor::from_inner(parameter_state.first_moment().to_autodiff()),
+            )?,
         )?;
         entry.set_item(
             "exp_avg_sq",
-            Py::new(py, PyTensor::from_inner(parameter_state.second_moment()))?,
+            Py::new(
+                py,
+                PyTensor::from_inner(parameter_state.second_moment().to_autodiff()),
+            )?,
         )?;
         if let Some(maximum) = parameter_state.max_second_moment() {
             entry.set_item(
                 "max_exp_avg_sq",
-                Py::new(py, PyTensor::from_inner(maximum))?,
+                Py::new(py, PyTensor::from_inner(maximum.to_autodiff()))?,
             )?;
         }
         entries.set_item(name, entry)?;
@@ -212,7 +221,9 @@ fn required_tensor(dictionary: &Bound<'_, PyDict>, key: &str) -> PyResult<tynx_c
     let tensor = value.extract::<PyRef<'_, PyTensor>>().map_err(|_| {
         PyTypeError::new_err(format!("state_dict field {key:?} must be a Tynx Tensor"))
     })?;
-    tensor.detached_float_value("optimizer state")
+    tensor
+        .detached_float_value("optimizer state")
+        .map(tynx_core::DynTensor::inner)
 }
 
 fn required<'py>(dictionary: &Bound<'py, PyDict>, key: &str) -> PyResult<Bound<'py, PyAny>> {
