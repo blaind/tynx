@@ -6,7 +6,7 @@ This standalone Rust workspace compares the same ONNX model and input across:
 - ONNX Runtime
 - burn-onnx ahead-of-time generated Rust
 
-The registry starts with six workloads:
+The registry starts with seven workloads:
 
 | Case | Purpose |
 | --- | --- |
@@ -16,9 +16,12 @@ The registry starts with six workloads:
 | `matmul-512x512` | Medium dynamic-shape scaling point |
 | `matmul-1024x1024` | Large dynamic-shape scaling point |
 | `matmul-add-relu-256x256` | Small multi-op graph with broadcast input |
+| `tiny-cnn-32` | Compact image classifier with embedded parameters |
 
-These cases cover harness correctness and basic scaling. Larger representative models are still
-needed before drawing system-level performance conclusions.
+The tiny CNN runs Conv, ReLU, MaxPool, global average pooling, Gemm, and Softmax over a 32x32 RGB
+input. Its deterministic parameters and reference probabilities make it a repeatable structural
+workload, not an accuracy benchmark. Larger representative models are still needed before drawing
+system-level performance conclusions.
 
 ## CPU
 
@@ -30,9 +33,10 @@ cargo run --manifest-path benchmarks/Cargo.toml --locked --release -p burn-aot-b
 
 ORT downloads its official CPU binary for the default configuration.
 
-Select a case by setting `TYNX_BENCH_CASE` for any runner. The manual GitHub workflow runs every
-registered case, adds a comparison table to the job summary, and uploads its JSON reports. Leave
-the workflow iteration inputs blank to use the per-case defaults.
+Each runner executes every registered case by default and emits one JSON report array. Set
+`TYNX_BENCH_CASE` to limit a run to one case. The manual GitHub workflow invokes each engine once,
+adds a comparison table to the job summary, and uploads its JSON reports. Leave the workflow
+iteration inputs blank to use the per-case defaults.
 
 ## GPU
 
@@ -66,9 +70,10 @@ Every runner:
 5. Validates the first and final output against the registry.
 6. Writes the same JSON result schema to standard output.
 
-MatMul cases also report estimated GFLOP/s using the conventional `2 * M * N * K` operation count.
-The timing includes host input construction and host output materialization, so the value measures
-end-to-end inference rather than kernel-only throughput.
+MatMul cases report estimated GFLOP/s using the conventional `2 * M * N * K` operation count. The
+tiny CNN uses two operations per Conv and Gemm multiply-accumulate. Other operators are excluded
+from its estimate. Timing includes host input construction and host output materialization, so the
+value measures end-to-end inference rather than kernel-only throughput.
 
 Override the selected case and sample counts with:
 
