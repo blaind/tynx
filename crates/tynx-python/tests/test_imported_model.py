@@ -1,9 +1,17 @@
 """Callable imported ONNX training models."""
 
 from pathlib import Path
+from typing import Protocol, cast
 
 import pytest
 import tynx
+
+
+class _TrainableModel(Protocol):
+    def __call__(self, input: tynx.Tensor) -> tynx.Tensor: ...
+
+    def named_parameters(self) -> list[tuple[str, tynx.Parameter]]: ...
+
 
 _GEMM_MODEL = bytes.fromhex(
     "08084202100d3a8c010a200a01780a067765696768740a04626961731201791a0468656164"
@@ -131,3 +139,30 @@ def test_imported_model_binds_multiple_named_inputs_and_returns_named_outputs(
         model(first, unknown=second)
     with pytest.raises(TypeError, match="multiple values"):
         model(first, **{model.inputs[0]: second, model.inputs[1]: second})
+
+
+def test_one_python_loop_trains_authored_and_imported_models(tmp_path: Path) -> None:
+    authored = tynx.nn.Linear(1, 1)
+    authored.weight.copy_(tynx.Tensor([[0.0]]))
+    assert authored.bias is not None
+    authored.bias.copy_(tynx.Tensor([0.0]))
+    imported = _load_model(tmp_path)
+    for _, parameter in imported.named_parameters():
+        parameter.copy_(tynx.Tensor([[0.0]]) if parameter.ndim == 2 else tynx.Tensor([0.0]))
+
+    inputs = tynx.Tensor([[-1.0], [2.0]])
+    targets = tynx.Tensor([[-5.0], [4.0]])
+
+    def train(model: _TrainableModel) -> tynx.Tensor:
+        optimizer = tynx.optim.Adam(model.named_parameters(), lr=0.05)
+        for _ in range(300):
+            optimizer.zero_grad()
+            loss = tynx.nn.functional.mse_loss(model(inputs), targets)
+            loss.backward()
+            optimizer.step()
+        return model(inputs)
+
+    assert train(authored).flatten().tolist() == pytest.approx([-5.0, 4.0], abs=1e-3)
+    assert train(cast(_TrainableModel, imported)).flatten().tolist() == pytest.approx(
+        [-5.0, 4.0], abs=1e-3
+    )
