@@ -1,5 +1,7 @@
 //! Eager CPython tensor projection over the binding-neutral Rust tensor facade.
 
+mod reduction;
+
 use std::{
     cell::RefCell,
     panic::{AssertUnwindSafe, catch_unwind},
@@ -15,6 +17,7 @@ use tynx_core::{Device, DynTensor, Gradients, TensorData};
 use tynx_train::ParameterSlot;
 
 use crate::{grad_mode::is_grad_enabled, to_python_error};
+use reduction::ReductionSpec;
 
 /// Eager floating-point tensor.
 ///
@@ -349,10 +352,16 @@ impl PyTensor {
         Ok(())
     }
 
-    /// Reduce all dimensions to the v1 one-element `(1,)` tensor shape.
-    fn mean(&self) -> PyResult<Self> {
-        let dims = (0..self.source.value().rank()).collect::<Vec<_>>();
-        self.unary(|input| input.mean_dims(&dims).reshape(vec![1]))
+    /// Sum values over all, one, or several dimensions.
+    #[pyo3(signature = (dim=None, keepdim=false))]
+    fn sum(&self, dim: Option<&Bound<'_, PyAny>>, keepdim: bool) -> PyResult<Self> {
+        self.reduce(dim, keepdim, DynTensor::sum_dims)
+    }
+
+    /// Average values over all, one, or several dimensions.
+    #[pyo3(signature = (dim=None, keepdim=false))]
+    fn mean(&self, dim: Option<&Bound<'_, PyAny>>, keepdim: bool) -> PyResult<Self> {
+        self.reduce(dim, keepdim, DynTensor::mean_dims)
     }
 
     fn __add__(&self, other: PyRef<'_, Self>) -> PyResult<Self> {
@@ -385,6 +394,19 @@ impl PyTensor {
             self.source.value().dims().as_slice(),
             self.requires_grad()
         )
+    }
+}
+
+impl PyTensor {
+    fn reduce(
+        &self,
+        dim: Option<&Bound<'_, PyAny>>,
+        keepdim: bool,
+        operation: impl FnOnce(DynTensor, &[usize]) -> DynTensor,
+    ) -> PyResult<Self> {
+        let input_shape = self.source.value().dims();
+        let spec = ReductionSpec::from_python(dim, &input_shape, keepdim)?;
+        self.unary(move |input| operation(input, &spec.dims).reshape(spec.output_shape))
     }
 }
 

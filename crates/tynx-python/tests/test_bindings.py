@@ -73,6 +73,46 @@ def test_tensor_backward_accumulates_leaf_gradients() -> None:
     assert value.grad is None
 
 
+def test_tensor_reductions_follow_dim_and_keepdim_shapes() -> None:
+    value = tynx.Tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+
+    assert value.sum().shape == (1,)
+    assert value.sum().item() == pytest.approx(21.0)
+    assert value.sum(0).shape == (3,)
+    assert value.sum(0).tolist() == pytest.approx([5.0, 7.0, 9.0])
+    assert value.mean(-1).shape == (2,)
+    assert value.mean(-1).tolist() == pytest.approx([2.0, 5.0])
+    assert value.mean((0, -1)).shape == (1,)
+    assert value.mean((0, -1)).item() == pytest.approx(3.5)
+    assert value.sum((0, 1), keepdim=True).shape == (1, 1)
+    assert value.sum(1, keepdim=True).shape == (2, 1)
+    assert value.sum(1, keepdim=True).tolist() == [[6.0], [15.0]]
+    assert value.mean(None, keepdim=True).shape == (1, 1)
+    assert value.sum(()).item() == pytest.approx(21.0)
+
+
+def test_tensor_reduction_gradients_survive_axis_squeezing() -> None:
+    value = tynx.Tensor([[1.0, 2.0], [3.0, 4.0]], requires_grad=True)
+
+    value.mean(0).sum().backward()
+
+    assert value.grad is not None
+    assert value.grad.tolist() == [[0.5, 0.5], [0.5, 0.5]]
+
+
+def test_tensor_reductions_reject_invalid_dims() -> None:
+    value = tynx.Tensor([[1.0, 2.0], [3.0, 4.0]])
+
+    with pytest.raises(ValueError, match="out of range"):
+        value.sum(2)
+    with pytest.raises(ValueError, match="more than once"):
+        value.mean((0, -2))
+    with pytest.raises(TypeError, match="tuple must contain only integers"):
+        value.sum((0, "bad"))  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="int, a tuple"):
+        value.sum(True)
+
+
 def test_tensor_detach_stops_gradient_tracking() -> None:
     value = tynx.Tensor([2.0], requires_grad=True)
     detached = (value * value).detach()
