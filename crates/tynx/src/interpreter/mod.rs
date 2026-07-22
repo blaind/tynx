@@ -28,6 +28,7 @@ mod pooling;
 mod pow;
 mod quantization;
 mod range_op;
+mod recurrent;
 mod reduction;
 mod resize;
 mod resolve;
@@ -132,6 +133,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Greater(node) => comparison::greater(node, env, device),
         Node::GreaterOrEqual(node) => comparison::greater_or_equal(node, env, device),
         Node::GridSample(node) => grid_sample::grid_sample(node, env, device),
+        Node::Gru(node) => recurrent::gru(node, env, device),
         Node::HardSigmoid(node) => unary::hard_sigmoid(node, env, device),
         Node::Hardmax(node) => hardmax::hardmax(node, env, device),
         Node::HardSwish(node) => unary::hard_swish(node, env, device),
@@ -150,6 +152,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Log(node) => unary::log(node, env, device),
         Node::LogSoftmax(node) => softmax::log_softmax(node, env, device),
         Node::Loop(node) => control_flow::loop_node(node, env, device),
+        Node::Lstm(node) => recurrent::lstm(node, env, device),
         Node::LpNormalization(node) => normalization::lp_normalization(node, env, device),
         Node::LpPool1d(node) => pooling::lp_pool1d(node, env, device),
         Node::LpPool2d(node) => pooling::lp_pool2d(node, env, device),
@@ -194,6 +197,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Reshape(node) => shape::reshape(node, env, device),
         Node::Resize(node) => resize::resize(node, env, device),
         Node::Relu(node) => unary::relu(node, env, device),
+        Node::Rnn(node) => recurrent::rnn(node, env, device),
         Node::Round(node) => unary::round(node, env, device),
         Node::Selu(node) => unary::selu(node, env, device),
         Node::ScatterElements(node) => scatter::scatter_elements(node, env, device),
