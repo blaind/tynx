@@ -7,5 +7,7 @@
 
 pub mod loss;
 pub mod parameter;
+pub mod store;
 
 pub use parameter::{ParamId, ParameterContract, ParameterSlot};
+pub use store::ParameterStore;
