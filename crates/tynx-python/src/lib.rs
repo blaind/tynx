@@ -28,9 +28,10 @@ use optimizer::{PyAdam, PyAdamW, PySgd};
 use parameter::{PyBuffer, PyParameter};
 use random::{categorical_sample_py, dropout_py, manual_seed_py, normal_sample_py};
 use tensor::{
-    PyTensor, arange_py, cat_py, chunk_py, empty_like_py, empty_py, full_like_py, full_py,
-    maximum_py, minimum_py, ones_like_py, ones_py, rand_like_py, rand_py, randint_py,
-    randn_like_py, randn_py, split_py, stack_py, where_py, zeros_like_py, zeros_py,
+    PyTensor, arange_py, argsort_py, cat_py, chunk_py, empty_like_py, empty_py, full_like_py,
+    full_py, index_select_py, maximum_py, minimum_py, nonzero_py, ones_like_py, ones_py,
+    rand_like_py, rand_py, randint_py, randn_like_py, randn_py, sort_py, split_py, stack_py,
+    topk_py, where_py, zeros_like_py, zeros_py,
 };
 
 /// Return the process-default execution device.
@@ -278,5 +279,10 @@ fn _tynx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(stack_py, module)?)?;
     module.add_function(wrap_pyfunction!(split_py, module)?)?;
     module.add_function(wrap_pyfunction!(chunk_py, module)?)?;
+    module.add_function(wrap_pyfunction!(sort_py, module)?)?;
+    module.add_function(wrap_pyfunction!(argsort_py, module)?)?;
+    module.add_function(wrap_pyfunction!(topk_py, module)?)?;
+    module.add_function(wrap_pyfunction!(nonzero_py, module)?)?;
+    module.add_function(wrap_pyfunction!(index_select_py, module)?)?;
     Ok(())
 }

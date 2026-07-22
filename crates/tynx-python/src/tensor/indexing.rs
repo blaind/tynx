@@ -15,6 +15,12 @@ pub(super) struct BasicIndex {
     pub(super) output_shape: Vec<usize>,
 }
 
+enum IndexItem<'py> {
+    Full,
+    NewAxis,
+    Value(Bound<'py, PyAny>),
+}
+
 pub(super) fn basic_index(key: &Bound<'_, PyAny>, shape: &[usize]) -> PyResult<BasicIndex> {
     let items = if let Ok(tuple) = key.cast::<PyTuple>() {
         tuple.iter().collect::<Vec<_>>()
@@ -30,31 +36,50 @@ pub(super) fn basic_index(key: &Bound<'_, PyAny>, shape: &[usize]) -> PyResult<B
             "an index can only have a single ellipsis",
         ));
     }
-    let explicit = items.len() - ellipses;
-    if explicit > shape.len() {
+    let consuming = items
+        .iter()
+        .filter(|item| !item.is_instance_of::<PyEllipsis>() && !item.is_none())
+        .count();
+    if consuming > shape.len() {
         return Err(PyIndexError::new_err(format!(
             "too many indices for tensor of dimension {}",
             shape.len()
         )));
     }
 
-    let mut expanded = Vec::with_capacity(shape.len());
+    let mut expanded = Vec::with_capacity(shape.len() + items.len());
     for item in items {
         if item.is_instance_of::<PyEllipsis>() {
-            expanded.extend((0..shape.len() - explicit).map(|_| None));
+            expanded.extend((0..shape.len() - consuming).map(|_| IndexItem::Full));
+        } else if item.is_none() {
+            expanded.push(IndexItem::NewAxis);
         } else {
-            expanded.push(Some(item));
+            expanded.push(IndexItem::Value(item));
         }
     }
-    expanded.extend((expanded.len()..shape.len()).map(|_| None));
+    let consumed = expanded
+        .iter()
+        .filter(|item| matches!(item, IndexItem::Full | IndexItem::Value(_)))
+        .count();
+    expanded.extend((consumed..shape.len()).map(|_| IndexItem::Full));
 
     let mut slices = Vec::with_capacity(shape.len());
-    let mut output_shape = Vec::with_capacity(shape.len());
-    for (axis, (item, &size)) in expanded.into_iter().zip(shape).enumerate() {
-        let Some(item) = item else {
+    let mut output_shape = Vec::with_capacity(expanded.len());
+    let mut axis = 0;
+    for item in expanded {
+        if matches!(&item, IndexItem::NewAxis) {
+            output_shape.push(1);
+            continue;
+        }
+        let size = shape[axis];
+        if matches!(&item, IndexItem::Full) {
             slices.push(Slice::full());
             output_shape.push(size);
+            axis += 1;
             continue;
+        }
+        let IndexItem::Value(item) = item else {
+            unreachable!("new axes and full slices were handled above")
         };
         if item.is_instance_of::<PyBool>() {
             return Err(PyTypeError::new_err(
@@ -75,6 +100,7 @@ pub(super) fn basic_index(key: &Bound<'_, PyAny>, shape: &[usize]) -> PyResult<B
                 )));
             }
             slices.push(Slice::new(index, Some(index + 1), 1));
+            axis += 1;
             continue;
         }
         if let Ok(slice) = item.cast::<PySlice>() {
@@ -93,11 +119,19 @@ pub(super) fn basic_index(key: &Bound<'_, PyAny>, shape: &[usize]) -> PyResult<B
             };
             slices.push(burn_slice);
             output_shape.push(normalized.slicelength);
+            axis += 1;
             continue;
         }
         return Err(PyTypeError::new_err(
-            "indices must be integers, slices, tuples of those forms, or ellipsis",
+            "indices must be integers, slices, None, tuples of those forms, or ellipsis",
         ));
+    }
+    if output_shape.len() > tynx_core::MAX_RANK {
+        return Err(PyIndexError::new_err(format!(
+            "indexing result rank {} exceeds the maximum supported rank {}",
+            output_shape.len(),
+            tynx_core::MAX_RANK
+        )));
     }
     if output_shape.is_empty() {
         output_shape.push(1);

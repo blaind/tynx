@@ -17,12 +17,12 @@ use std::{
 };
 
 use pyo3::{
-    exceptions::{PyNotImplementedError, PyRuntimeError, PyTypeError, PyValueError},
+    exceptions::{PyIndexError, PyNotImplementedError, PyRuntimeError, PyTypeError, PyValueError},
     prelude::*,
-    types::{PyAny, PyTuple},
+    types::{PyAny, PyBool, PyList, PyTuple},
 };
 use tynx_capture::{BinaryOp, UnaryOp};
-use tynx_core::{Device, DynInt, DynTensor, Gradients, Value};
+use tynx_core::{Device, DynInt, DynTensor, Gradients, Slice, TensorData, Value};
 use tynx_train::ParameterSlot;
 
 use crate::{
@@ -771,8 +771,48 @@ impl PyTensor {
         self.source.value().dims()[0]
     }
 
-    /// Select values using integers, ordinary slices, tuples, and ellipsis.
+    /// Select values using basic indices or a one-dimensional first-axis advanced index.
     fn __getitem__(&self, key: &Bound<'_, PyAny>) -> PyResult<Self> {
+        if let Ok(index) = key.extract::<PyRef<'_, Self>>() {
+            return self.advanced_getitem(&index);
+        }
+        if let Ok(indices) = key.cast::<PyList>() {
+            self.capture_unsupported("Tensor.__getitem__ advanced indexing")?;
+            let value = self.source.value();
+            let size = value.dims()[0];
+            let size_signed = isize::try_from(size)
+                .map_err(|_| PyIndexError::new_err("tensor dimension exceeds index limits"))?;
+            let mut values = Vec::with_capacity(indices.len());
+            for item in indices.iter() {
+                if item.is_instance_of::<PyBool>() {
+                    return Err(PyTypeError::new_err(
+                        "advanced index lists must contain only integers",
+                    ));
+                }
+                let original = item.extract::<isize>().map_err(|_| {
+                    PyTypeError::new_err("advanced index lists must contain only integers")
+                })?;
+                let normalized = if original < 0 {
+                    size_signed + original
+                } else {
+                    original
+                };
+                if !(0..size_signed).contains(&normalized) {
+                    return Err(PyIndexError::new_err(format!(
+                        "index {original} is out of bounds for dimension 0 with size {size}"
+                    )));
+                }
+                values.push(normalized as i64);
+            }
+            let count = values.len();
+            let index = if count == 0 {
+                DynInt::empty(&[0], &value.device(), tynx_core::DType::I64)
+            } else {
+                DynInt::from_data(TensorData::new(values, [count]), 1, &value.device())
+            }
+            .map_err(to_python_error)?;
+            return self.select_indices(0, index, "Tensor.__getitem__");
+        }
         self.capture_unsupported("Tensor.__getitem__ indexing")?;
         let value = self.source.value();
         let spec = indexing::basic_index(key, &value.dims())?;
@@ -1085,6 +1125,87 @@ impl PyTensor {
         self.reduce_arg_extreme(dim, keepdim, false)
     }
 
+    /// Sort values along one dimension and return values plus source indices.
+    #[pyo3(signature = (dim=-1, descending=false, stable=false))]
+    fn sort(&self, dim: isize, descending: bool, stable: bool) -> PyResult<(Self, Self)> {
+        if stable {
+            return Err(PyNotImplementedError::new_err(
+                "sort(stable=True) is not supported by the current backends",
+            ));
+        }
+        let dim = shape::axis_value(dim, self.ndim(), false, "sort")?;
+        self.ordered(dim, descending, None)
+    }
+
+    /// Return indices that sort values along one dimension.
+    #[pyo3(signature = (dim=-1, descending=false, stable=false))]
+    fn argsort(&self, dim: isize, descending: bool, stable: bool) -> PyResult<Self> {
+        if stable {
+            return Err(PyNotImplementedError::new_err(
+                "argsort(stable=True) is not supported by the current backends",
+            ));
+        }
+        let dim = shape::axis_value(dim, self.ndim(), false, "argsort")?;
+        self.ordered(dim, descending, None)
+            .map(|(_, indices)| indices)
+    }
+
+    /// Return the `k` largest or smallest values and their source indices.
+    #[pyo3(signature = (k, dim=None, largest=true, sorted=true))]
+    fn topk(
+        &self,
+        k: usize,
+        dim: Option<isize>,
+        largest: bool,
+        sorted: bool,
+    ) -> PyResult<(Self, Self)> {
+        let dim = shape::axis_value(dim.unwrap_or(-1), self.ndim(), false, "topk")?;
+        let size = self.source.value().dims()[dim];
+        if k > size {
+            return Err(PyValueError::new_err(format!(
+                "topk k={k} exceeds dimension {dim} with size {size}"
+            )));
+        }
+        let _ = sorted;
+        self.ordered(dim, largest, Some(k))
+    }
+
+    /// Return coordinates of nonzero values, optionally grouped by dimension.
+    #[pyo3(signature = (*, as_tuple=false))]
+    fn nonzero(&self, py: Python<'_>, as_tuple: bool) -> PyResult<Py<PyAny>> {
+        self.capture_unsupported("Tensor.nonzero() dynamic-shape query")?;
+        let coordinates = match self.source.value().detach() {
+            TensorValue::Float(value) => value.equal_scalar(0.0).logical_not().nonzero(),
+            TensorValue::Int(value) => value.equal_scalar(0).logical_not().nonzero(),
+            TensorValue::Bool(value) => value.nonzero(),
+        };
+        let dimensions = coordinates.dims();
+        let rank = dimensions[0];
+        let count = dimensions[1];
+        if !as_tuple {
+            let output = coordinates.permute(vec![1, 0]).map_err(to_python_error)?;
+            return Ok(Py::new(py, Self::from_int_inner(output))?.into_any());
+        }
+        let mut outputs = Vec::with_capacity(rank);
+        for axis in 0..rank {
+            let output = if count == 0 {
+                DynInt::empty(&[0], &coordinates.device(), tynx_core::DType::I64)
+                    .map_err(to_python_error)?
+            } else {
+                coordinates
+                    .clone()
+                    .slice(&[
+                        Slice::new(axis as isize, Some(axis as isize + 1), 1),
+                        Slice::full(),
+                    ])
+                    .reshape(vec![count])
+                    .map_err(to_python_error)?
+            };
+            outputs.push(Py::new(py, Self::from_int_inner(output))?);
+        }
+        Ok(PyTuple::new(py, outputs)?.unbind().into_any())
+    }
+
     /// Take the elementwise maximum with a broadcastable tensor or scalar.
     fn maximum(&self, other: &Bound<'_, PyAny>) -> PyResult<Self> {
         self.elementwise_extreme(other, Extremum::Maximum)
@@ -1294,6 +1415,27 @@ impl PyTensor {
     fn gather(&self, dim: &Bound<'_, PyAny>, index: PyRef<'_, Self>) -> PyResult<Self> {
         let dim = shape::axis(dim, self.ndim(), false, "gather")?;
         self.gather_impl(dim, &index)
+    }
+
+    /// Select whole slices along one dimension using a one-dimensional int64 tensor.
+    fn index_select(&self, dim: isize, index: PyRef<'_, Self>) -> PyResult<Self> {
+        let dim = shape::axis_value(dim, self.ndim(), false, "index_select")?;
+        let index = match index.source.value() {
+            TensorValue::Int(index) if index.rank() == 1 => index,
+            TensorValue::Int(index) => {
+                return Err(PyValueError::new_err(format!(
+                    "index_select index must be one-dimensional, got rank {}",
+                    index.rank()
+                )));
+            }
+            other => {
+                return Err(PyTypeError::new_err(format!(
+                    "index_select index must be an int64 Tensor, got {}",
+                    other.dtype_name()
+                )));
+            }
+        };
+        self.select_indices(dim, index, "Tensor.index_select")
     }
 
     fn __add__(&self, other: &Bound<'_, PyAny>) -> PyResult<Self> {
@@ -1534,6 +1676,111 @@ impl PyTensor {
 }
 
 impl PyTensor {
+    fn advanced_getitem(&self, index: &Self) -> PyResult<Self> {
+        self.capture_unsupported("Tensor.__getitem__ advanced indexing")?;
+        let size = self.source.value().dims()[0];
+        let index = match index.source.value() {
+            TensorValue::Int(index) if index.rank() == 1 => {
+                if size == 0 && index.dims()[0] == 0 {
+                    index
+                } else {
+                    index.normalize_indices(size).map_err(to_python_error)?
+                }
+            }
+            TensorValue::Int(index) => {
+                return Err(PyIndexError::new_err(format!(
+                    "only one-dimensional integer tensor indices are supported, got rank {}",
+                    index.rank()
+                )));
+            }
+            TensorValue::Bool(mask) if mask.rank() == 1 && mask.dims()[0] == size => {
+                let coordinates = mask.nonzero();
+                let count = coordinates.dims()[1];
+                if count == 0 {
+                    DynInt::empty(&[0], &coordinates.device(), tynx_core::DType::I64)
+                        .map_err(to_python_error)?
+                } else {
+                    coordinates.reshape(vec![count]).map_err(to_python_error)?
+                }
+            }
+            TensorValue::Bool(mask) if mask.rank() != 1 => {
+                return Err(PyIndexError::new_err(format!(
+                    "only one-dimensional boolean tensor indices are supported, got rank {}",
+                    mask.rank()
+                )));
+            }
+            TensorValue::Bool(mask) => {
+                return Err(PyIndexError::new_err(format!(
+                    "boolean index length {} does not match first dimension size {size}",
+                    mask.dims()[0]
+                )));
+            }
+            other => {
+                return Err(PyIndexError::new_err(format!(
+                    "advanced tensor indices must have int64 or bool dtype, got {}",
+                    other.dtype_name()
+                )));
+            }
+        };
+        self.select_indices(0, index, "Tensor.__getitem__")
+    }
+
+    fn select_indices(&self, dim: usize, index: DynInt, operation: &str) -> PyResult<Self> {
+        self.capture_unsupported(operation)?;
+        let tracking = is_grad_enabled();
+        match self.source.value() {
+            TensorValue::Float(_) => {
+                let output = self
+                    .operation_input(tracking, operation)?
+                    .select(dim, index)
+                    .map_err(to_python_error)?;
+                if tracking {
+                    Ok(Self::from_operation(output, &[self]))
+                } else {
+                    Ok(Self::from_inner(output))
+                }
+            }
+            TensorValue::Int(value) => value
+                .select(dim, index)
+                .map(Self::from_int_inner)
+                .map_err(to_python_error),
+            TensorValue::Bool(value) => value
+                .select(dim, index)
+                .map(|value| Self::from_value(TensorValue::Bool(value)))
+                .map_err(to_python_error),
+        }
+    }
+
+    fn ordered(&self, dim: usize, descending: bool, k: Option<usize>) -> PyResult<(Self, Self)> {
+        self.capture_unsupported("Tensor ordering")?;
+        let tracking = is_grad_enabled();
+        match self.source.value() {
+            TensorValue::Float(_) => {
+                let input = self.operation_input(tracking, "Tensor ordering")?;
+                let (values, indices) = match k {
+                    Some(k) => input.topk_ordered(k, dim, descending),
+                    None => input.sort_with_indices(dim, descending),
+                };
+                let values = if tracking {
+                    Self::from_operation(values, &[self])
+                } else {
+                    Self::from_inner(values)
+                };
+                Ok((values, Self::from_int_inner(indices)))
+            }
+            TensorValue::Int(input) => {
+                let (values, indices) = match k {
+                    Some(k) => input.topk_ordered(k, dim, descending),
+                    None => input.sort_with_indices(dim, descending),
+                };
+                Ok((Self::from_int_inner(values), Self::from_int_inner(indices)))
+            }
+            TensorValue::Bool(_) => Err(PyTypeError::new_err(
+                "sort, argsort, and topk do not support bool Tensors",
+            )),
+        }
+    }
+
     fn reshape_value(&self, output: Vec<usize>) -> PyResult<Self> {
         match self.source.value() {
             TensorValue::Float(_) => self
@@ -1695,4 +1942,53 @@ pub(crate) fn minimum_py(
     other: &Bound<'_, PyAny>,
 ) -> PyResult<PyTensor> {
     input.elementwise_extreme(other, Extremum::Minimum)
+}
+
+#[pyfunction(name = "sort", signature = (input, dim=-1, descending=false, stable=false))]
+pub(crate) fn sort_py(
+    input: PyRef<'_, PyTensor>,
+    dim: isize,
+    descending: bool,
+    stable: bool,
+) -> PyResult<(PyTensor, PyTensor)> {
+    input.sort(dim, descending, stable)
+}
+
+#[pyfunction(name = "argsort", signature = (input, dim=-1, descending=false, stable=false))]
+pub(crate) fn argsort_py(
+    input: PyRef<'_, PyTensor>,
+    dim: isize,
+    descending: bool,
+    stable: bool,
+) -> PyResult<PyTensor> {
+    input.argsort(dim, descending, stable)
+}
+
+#[pyfunction(name = "topk", signature = (input, k, dim=None, largest=true, sorted=true))]
+pub(crate) fn topk_py(
+    input: PyRef<'_, PyTensor>,
+    k: usize,
+    dim: Option<isize>,
+    largest: bool,
+    sorted: bool,
+) -> PyResult<(PyTensor, PyTensor)> {
+    input.topk(k, dim, largest, sorted)
+}
+
+#[pyfunction(name = "nonzero", signature = (input, *, as_tuple=false))]
+pub(crate) fn nonzero_py(
+    py: Python<'_>,
+    input: PyRef<'_, PyTensor>,
+    as_tuple: bool,
+) -> PyResult<Py<PyAny>> {
+    input.nonzero(py, as_tuple)
+}
+
+#[pyfunction(name = "index_select")]
+pub(crate) fn index_select_py(
+    input: PyRef<'_, PyTensor>,
+    dim: isize,
+    index: PyRef<'_, PyTensor>,
+) -> PyResult<PyTensor> {
+    input.index_select(dim, index)
 }

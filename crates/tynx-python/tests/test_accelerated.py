@@ -102,8 +102,9 @@ def test_accelerated_cross_backend_operations_raise_python_exceptions() -> None:
         gpu.to(tynx.Device("cpu"))
     with pytest.raises(NotImplementedError, match="cannot move tensors between backends"):
         cpu.to(device)
-    with tynx.no_grad(), pytest.raises(
-        NotImplementedError, match="cannot move tensors between backends"
+    with (
+        tynx.no_grad(),
+        pytest.raises(NotImplementedError, match="cannot move tensors between backends"),
     ):
         gpu.to(tynx.Device("cpu"))
 
@@ -189,6 +190,26 @@ def test_accelerated_tensor_composition_preserves_gradients() -> None:
     assert repeated.shape == (4, 6)
     assert value.grad is not None
     assert value.grad.flatten().tolist() == pytest.approx([12.0, 12.0, 12.0, 12.0])
+
+
+def test_accelerated_ordering_and_advanced_indexing_preserve_gradients() -> None:
+    device = _accelerated_device()
+    value = tynx.Parameter([[3.0, 1.0, 2.0], [6.0, 4.0, 5.0]])
+
+    ordered, indices = value.sort(dim=1)
+    largest, largest_indices = value.topk(2, dim=1)
+    selected = value[tynx.Tensor([1, 0, 1], dtype="int64")]
+    masked = value[tynx.Tensor([True, False], dtype="bool")]
+    (ordered.sum() + largest.sum() + selected.sum() + masked.sum()).backward()
+
+    tynx.synchronize(device)
+    assert ordered.tolist() == [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]
+    assert indices.tolist() == [[1, 2, 0], [1, 2, 0]]
+    assert largest.tolist() == [[3.0, 2.0], [6.0, 5.0]]
+    assert largest_indices.tolist() == [[0, 2], [0, 2]]
+    assert masked.tolist() == [[3.0, 1.0, 2.0]]
+    assert value.grad is not None
+    assert value.grad.tolist() == [[4.0, 3.0, 4.0], [4.0, 3.0, 4.0]]
 
 
 def test_accelerated_captured_imported_ppo_step_reuses_updated_weights(tmp_path: Path) -> None:

@@ -1453,6 +1453,45 @@ impl DynTensor {
         })
     }
 
+    /// Sort values and return their source indices along one dimension.
+    pub fn sort_with_indices(self, dim: usize, descending: bool) -> (Self, DynInt) {
+        macro_rules! sort {
+            ($tensor:expr, $rank:ident) => {{
+                let (values, indices) = if descending {
+                    $tensor.sort_descending_with_indices(dim)
+                } else {
+                    $tensor.sort_with_indices(dim)
+                };
+                (Self::$rank(values), DynInt::$rank(indices.cast(DType::I64)))
+            }};
+        }
+        match self {
+            Self::R1(tensor) => sort!(tensor, R1),
+            Self::R2(tensor) => sort!(tensor, R2),
+            Self::R3(tensor) => sort!(tensor, R3),
+            Self::R4(tensor) => sort!(tensor, R4),
+            Self::R5(tensor) => sort!(tensor, R5),
+            Self::R6(tensor) => sort!(tensor, R6),
+        }
+    }
+
+    /// Return the indices that sort values along one dimension.
+    pub fn argsort(self, dim: usize, descending: bool) -> DynInt {
+        self.sort_with_indices(dim, descending).1
+    }
+
+    /// Return the first `k` sorted values and indices along one dimension.
+    pub fn topk_ordered(self, k: usize, dim: usize, largest: bool) -> (Self, DynInt) {
+        if largest {
+            return self.topk(k, dim);
+        }
+        let rank = self.rank();
+        let (values, indices) = self.sort_with_indices(dim, false);
+        let mut slices = vec![Slice::full(); rank];
+        slices[dim] = Slice::new(0, Some(k as isize), 1);
+        (values.slice(&slices), indices.slice(&slices))
+    }
+
     /// Return the largest values and their indices along one dimension.
     pub fn topk(self, k: usize, dim: usize) -> (Self, DynInt) {
         match self {
@@ -2392,6 +2431,45 @@ impl DynInt {
         })
     }
 
+    /// Sort values and return their source indices along one dimension.
+    pub fn sort_with_indices(self, dim: usize, descending: bool) -> (Self, DynInt) {
+        macro_rules! sort {
+            ($tensor:expr, $rank:ident) => {{
+                let (values, indices) = if descending {
+                    $tensor.sort_descending_with_indices(dim)
+                } else {
+                    $tensor.sort_with_indices(dim)
+                };
+                (Self::$rank(values), Self::$rank(indices.cast(DType::I64)))
+            }};
+        }
+        match self {
+            Self::R1(tensor) => sort!(tensor, R1),
+            Self::R2(tensor) => sort!(tensor, R2),
+            Self::R3(tensor) => sort!(tensor, R3),
+            Self::R4(tensor) => sort!(tensor, R4),
+            Self::R5(tensor) => sort!(tensor, R5),
+            Self::R6(tensor) => sort!(tensor, R6),
+        }
+    }
+
+    /// Return the indices that sort values along one dimension.
+    pub fn argsort(self, dim: usize, descending: bool) -> DynInt {
+        self.sort_with_indices(dim, descending).1
+    }
+
+    /// Return the first `k` sorted values and indices along one dimension.
+    pub fn topk_ordered(self, k: usize, dim: usize, largest: bool) -> (Self, DynInt) {
+        if largest {
+            return self.topk(k, dim);
+        }
+        let rank = self.rank();
+        let (values, indices) = self.sort_with_indices(dim, false);
+        let mut slices = vec![Slice::full(); rank];
+        slices[dim] = Slice::new(0, Some(k as isize), 1);
+        (values.slice(&slices), indices.slice(&slices))
+    }
+
     /// Return the largest values and their indices along one dimension.
     pub fn topk(self, k: usize, dim: usize) -> (Self, DynInt) {
         match self {
@@ -2924,14 +3002,14 @@ impl DynBool {
     /// Return coordinates of all true elements in row-major order.
     pub fn nonzero(self) -> DynInt {
         let coordinates = match self {
-            Self::R1(tensor) => tensor.nonzero(),
-            Self::R2(tensor) => tensor.nonzero(),
-            Self::R3(tensor) => tensor.nonzero(),
-            Self::R4(tensor) => tensor.nonzero(),
-            Self::R5(tensor) => tensor.nonzero(),
-            Self::R6(tensor) => tensor.nonzero(),
+            Self::R1(tensor) => tensor.argwhere(),
+            Self::R2(tensor) => tensor.argwhere(),
+            Self::R3(tensor) => tensor.argwhere(),
+            Self::R4(tensor) => tensor.argwhere(),
+            Self::R5(tensor) => tensor.argwhere(),
+            Self::R6(tensor) => tensor.argwhere(),
         };
-        DynInt::R2(Tensor::stack(coordinates, 0).cast(DType::I64))
+        DynInt::R2(coordinates.transpose().cast(DType::I64))
     }
 
     /// Reshape the tensor while preserving its elements and dtype.
