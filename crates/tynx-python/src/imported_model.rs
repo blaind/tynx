@@ -1,19 +1,21 @@
 //! CPython projection of the slot-backed imported training model.
 
-use std::{collections::HashMap, path::PathBuf};
+use std::{collections::HashMap, path::PathBuf, rc::Rc};
 
 use pyo3::{
     exceptions::{PyOSError, PyTypeError},
     prelude::*,
     types::{PyDict, PyList, PyTuple},
 };
-use tynx_core::{Device, Env, Session, Value};
+use tynx_capture::CapturedOperation;
+use tynx_core::{Device, Env, Result, Session, Value};
 use tynx_train::{
     BackwardCapability, ImportedModel, InitializerNameOverrides, TrainabilityOverrides,
     TrainabilityReport,
 };
 
 use crate::{
+    capture::record_operation,
     grad_mode::is_grad_enabled,
     parameter::{PyBuffer, PyParameter, buffer_from_slot, parameter_from_slot},
     tensor::PyTensor,
@@ -23,7 +25,40 @@ use crate::{
 /// A callable ONNX model backed by stable trainable parameter slots.
 #[pyclass(name = "ImportedModel", frozen, unsendable)]
 pub(crate) struct PyImportedModel {
-    inner: Box<ImportedModel>,
+    inner: Rc<ImportedModel>,
+}
+
+#[derive(Debug)]
+struct CapturedImportedModel {
+    inner: Rc<ImportedModel>,
+    inputs: Vec<String>,
+    outputs: Vec<String>,
+}
+
+impl CapturedOperation for CapturedImportedModel {
+    fn run(&self, inputs: &[Value], tracking: bool) -> Result<Vec<Value>> {
+        let mut env = Env::new();
+        for (name, value) in self.inputs.iter().zip(inputs) {
+            env.insert(name.clone(), value.clone());
+        }
+        let mut result = self.inner.run_with_tracking(env, tracking)?;
+        self.outputs
+            .iter()
+            .map(|name| {
+                result
+                    .remove(name)
+                    .ok_or_else(|| tynx_core::TynxError::MissingValue(name.clone()))
+            })
+            .collect()
+    }
+
+    fn output_count(&self) -> usize {
+        self.outputs.len()
+    }
+
+    fn state_slots(&self) -> Vec<tynx_train::ParameterSlot> {
+        self.inner.parameters().iter().cloned().collect()
+    }
 }
 
 /// Structured result of conservative imported-model training analysis.
@@ -216,7 +251,7 @@ impl PyImportedModel {
         )
         .map_err(to_python_error)?;
         Ok(Self {
-            inner: Box::new(inner),
+            inner: Rc::new(inner),
         })
     }
 
@@ -297,7 +332,15 @@ impl PyImportedModel {
                     .expect("missing imported inputs were rejected above")
             })
             .collect::<Vec<_>>();
-        let mut wrap_output = |name: &str| -> PyResult<Py<PyTensor>> {
+        let traces = record_operation(
+            &sources,
+            Rc::new(CapturedImportedModel {
+                inner: self.inner.clone(),
+                inputs: inputs.iter().map(|input| input.name.clone()).collect(),
+                outputs: outputs.iter().map(|output| output.name.clone()).collect(),
+            }),
+        )?;
+        let mut wrap_output = |index: usize, name: &str| -> PyResult<Py<PyTensor>> {
             let output = result
                 .remove(name)
                 .expect("ImportedModel returns every declared output")
@@ -312,15 +355,19 @@ impl PyImportedModel {
             } else {
                 PyTensor::from_inner(output.detach())
             };
+            let tensor = match traces.as_ref().and_then(|traces| traces.get(index)) {
+                Some(trace) => tensor.with_trace(trace.clone()),
+                None => tensor,
+            };
             Py::new(py, tensor)
         };
 
         if outputs.len() == 1 {
-            return Ok(wrap_output(&outputs[0].name)?.into_any());
+            return Ok(wrap_output(0, &outputs[0].name)?.into_any());
         }
         let named = PyDict::new(py);
-        for output in outputs {
-            named.set_item(&output.name, wrap_output(&output.name)?)?;
+        for (index, output) in outputs.iter().enumerate() {
+            named.set_item(&output.name, wrap_output(index, &output.name)?)?;
         }
         Ok(named.unbind().into_any())
     }
