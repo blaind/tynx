@@ -52,6 +52,19 @@ def test_random_factories_share_advancing_seeded_native_rng() -> None:
     assert tynx.randn_like(tynx.Tensor([[0.0, 0.0]])).shape == (1, 2)
 
 
+def test_manual_seed_controls_explicit_cpu_random_stream() -> None:
+    cpu = tynx.Device("cpu")
+
+    tynx.manual_seed(23)
+    first = tynx.rand((16,), device=cpu)
+    advanced = tynx.rand((16,), device=cpu)
+    tynx.manual_seed(23)
+    repeated = tynx.rand((16,), device=cpu)
+
+    assert first.tolist() == repeated.tolist()
+    assert first.tolist() != advanced.tolist()
+
+
 def test_randint_bounds_and_arange_signed_steps() -> None:
     tynx.manual_seed(7)
     values = tynx.randint(-2, 3, (4, 8))

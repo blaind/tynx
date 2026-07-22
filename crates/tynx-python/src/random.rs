@@ -9,6 +9,7 @@ use crate::{grad_mode::is_grad_enabled, tensor::PyTensor, to_python_error};
 #[pyfunction(name = "manual_seed")]
 pub(crate) fn manual_seed_py(seed: u64) {
     Device::autodiff(tynx_core::default_device()).seed(seed);
+    Device::autodiff(Device::flex()).seed(seed);
 }
 
 #[pyfunction(name = "_normal_sample")]
