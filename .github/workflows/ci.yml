@@ -121,6 +121,40 @@ jobs:
         run: |
           "$VIRTUAL_ENV/bin/python" -m pytest -n auto --maxprocesses 4
 
+  python-vulkan:
+    runs-on: ubuntu-latest
+    env:
+      CUBECL_WGPU_DEFAULT_DEVICE: Cpu
+      TYNX_REQUIRE_ACCELERATED: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: python-vulkan
+      - name: Install Vulkan software adapter
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes mesa-vulkan-drivers
+      - name: Create Python environment
+        run: python -m venv .venv
+      - name: Build Vulkan Python bindings
+        working-directory: crates/tynx-python
+        env:
+          VIRTUAL_ENV: ${{ github.workspace }}/.venv
+        run: |
+          "$VIRTUAL_ENV/bin/python" -m pip install "maturin>=1.9,<2"
+          "$VIRTUAL_ENV/bin/maturin" develop --locked --features vulkan --group test
+      - name: Run accelerated synchronization and lifetime tests
+        working-directory: crates/tynx-python
+        env:
+          VIRTUAL_ENV: ${{ github.workspace }}/.venv
+        run: |
+          "$VIRTUAL_ENV/bin/python" -m pytest tests/test_accelerated.py
+
   python-lint:
     runs-on: ubuntu-latest
     steps:

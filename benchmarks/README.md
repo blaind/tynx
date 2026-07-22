@@ -103,9 +103,31 @@ boundaries so loss and gradient magnitudes remain stationary.
 Every result includes parse, preparation, cold-step, warmup, steady-step, throughput, estimated
 training GFLOP/s, cache policy, synchronization policy, model SHA-256, parameter SHA-256, exact
 trainable/frozen/gradient sets, and a five-step loss trajectory. Compare the two JSON outputs with
-`jq -s -e -f benchmarks/check-training-trajectory.jq tynx.json burn-aot.json`; this requires matching
-CPU parameter hashes and loss trajectories. Training benchmarks are intentionally not wired into
-CI yet, and performance results have no latency gate.
+`python3 benchmarks/check-training-trajectory.py --mode cpu tynx.json burn-aot.json`; this requires
+matching CPU parameter hashes and loss trajectories. Training benchmarks are intentionally not
+wired into CI yet, and performance results have no latency gate.
+
+For WGPU, build each runner without its default CPU backend and select the `wgpu` feature:
+
+```sh
+TYNX_BENCH_CASE=mlp-784-512-10-b64 \
+cargo run --manifest-path benchmarks/Cargo.toml --locked --release \
+  -p tynx-training-bench --no-default-features --features wgpu > tynx-gpu.json
+
+TYNX_BENCH_CASE=mlp-784-512-10-b64 \
+cargo run --manifest-path benchmarks/Cargo.toml --locked --release \
+  -p burn-aot-training-bench --no-default-features --features wgpu > burn-aot-gpu.json
+
+python3 benchmarks/check-training-trajectory.py --mode gpu \
+  tynx-gpu.json burn-aot-gpu.json
+```
+
+GPU comparison keeps parameter and gradient sets exact but uses numerical tolerances for the loss
+trajectory and parameter aggregates. Record whether the process and autotune caches are cold or
+warm with `TYNX_BENCH_PROCESS_CACHE` and `TYNX_BENCH_AUTOTUNE_CACHE`; those variables label the
+result and do not clear a backend cache. `TYNX_BENCH_SYNC_POLICY=final_only` is a diagnostic mode
+for measuring the effect of explicit synchronization, not a claim that backward remains entirely
+asynchronous.
 
 ## MobileNetV2
 
