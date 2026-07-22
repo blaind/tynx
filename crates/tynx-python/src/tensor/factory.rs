@@ -8,7 +8,10 @@ use pyo3::{
 use tynx_core::{DType, Device, Distribution, DynBool, DynInt, DynTensor, MAX_RANK};
 
 use super::{PyTensor, data::TensorValue};
-use crate::{device::PyDevice, to_python_error};
+use crate::{
+    device::{PyDevice, ensure_autodiff},
+    to_python_error,
+};
 
 fn validate_shape(shape: Vec<usize>) -> PyResult<Vec<usize>> {
     if shape.is_empty() {
@@ -29,7 +32,7 @@ fn select_device(device: Option<PyRef<'_, PyDevice>>) -> Device {
     let device = device
         .map(|device| device.inner.as_ref().clone())
         .unwrap_or_else(tynx_core::default_device);
-    Device::autodiff(device)
+    ensure_autodiff(device)
 }
 
 fn finish(value: TensorValue, requires_grad: bool) -> PyResult<PyTensor> {
@@ -270,8 +273,8 @@ fn like_spec(
     let shape = value.dims();
     let dtype = dtype.unwrap_or(value.dtype_name()).to_string();
     let device = device.map_or_else(
-        || Device::autodiff(value.device()),
-        |device| Device::autodiff(device.inner.as_ref().clone()),
+        || ensure_autodiff(value.device()),
+        |device| ensure_autodiff(device.inner.as_ref().clone()),
     );
     (shape, dtype, device)
 }

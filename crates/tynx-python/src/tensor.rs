@@ -28,7 +28,7 @@ use crate::{
     capture::{
         TraceValue, record_backward, record_binary, record_gather, record_unary, record_unsupported,
     },
-    device::{PyDevice, raise_pending_device_error},
+    device::{PyDevice, ensure_autodiff, raise_pending_device_error},
     grad_mode::is_grad_enabled,
     to_python_error,
 };
@@ -715,21 +715,27 @@ impl PyTensor {
 impl PyTensor {
     /// Construct a typed tensor from a scalar or rectangular nested list/tuple.
     #[new]
-    #[pyo3(signature = (data, *, dtype=None, requires_grad=false))]
-    fn new(data: &Bound<'_, PyAny>, dtype: Option<&str>, requires_grad: bool) -> PyResult<Self> {
-        let device = Device::autodiff(tynx_core::default_device());
+    #[pyo3(signature = (data, *, dtype=None, device=None, requires_grad=false))]
+    fn new(
+        data: &Bound<'_, PyAny>,
+        dtype: Option<&str>,
+        device: Option<PyRef<'_, PyDevice>>,
+        requires_grad: bool,
+    ) -> PyResult<Self> {
         let value = if let Ok(tensor) = data.extract::<PyRef<'_, Self>>() {
             let value = tensor.source.value().detach();
-            if let Some(dtype) = dtype
-                && dtype != value.dtype_name()
-            {
-                return Err(PyTypeError::new_err(format!(
-                    "copying a Tensor with dtype={dtype:?} requires source dtype {}, because constructor casts are not supported",
-                    value.dtype_name()
-                )));
-            }
+            let target =
+                device.map_or_else(|| value.device(), |device| device.inner.as_ref().clone());
+            let target_dtype = dtype.unwrap_or(value.dtype_name());
             value
+                .cast(target_dtype)?
+                .move_to_device(&ensure_autodiff(target))
         } else {
+            let device = ensure_autodiff(
+                device
+                    .map(|device| device.inner.as_ref().clone())
+                    .unwrap_or_else(tynx_core::default_device),
+            );
             TensorValue::from_python(data, dtype, &device)?
         };
         if requires_grad {
@@ -875,6 +881,36 @@ impl PyTensor {
     /// Return an off-tape tensor sharing the current numerical value.
     fn detach(&self) -> Self {
         Self::from_value(self.source.value().detach())
+    }
+
+    /// Cast tensor values to one of Tynx's supported dtypes.
+    fn cast(&self, dtype: &str) -> PyResult<Self> {
+        self.to(None, Some(dtype))
+    }
+
+    /// Move or cast a tensor without a host staging path.
+    #[pyo3(signature = (device=None, *, dtype=None))]
+    fn to(&self, device: Option<PyRef<'_, PyDevice>>, dtype: Option<&str>) -> PyResult<Self> {
+        self.capture_unsupported("Tensor.to()/cast()")?;
+        let current = self.source.value();
+        let dtype = dtype.unwrap_or(current.dtype_name());
+        let target_device = ensure_autodiff(
+            device.map_or_else(|| current.device(), |device| device.inner.as_ref().clone()),
+        );
+        let tracking = is_grad_enabled();
+        if matches!(current, TensorValue::Float(_)) && dtype == "float32" {
+            let output = self
+                .operation_input(tracking, "Tensor.to")?
+                .cast(tynx_core::DType::F32)
+                .to_device(&target_device);
+            return Ok(if tracking {
+                Self::from_operation(output, &[self])
+            } else {
+                Self::from_inner(output)
+            });
+        }
+        let output = current.detach().cast(dtype)?.move_to_device(&target_device);
+        Ok(Self::from_value(output))
     }
 
     /// Replace stable Parameter/Buffer state from a compatible tensor without changing identity.

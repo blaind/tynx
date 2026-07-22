@@ -1,0 +1,55 @@
+from __future__ import annotations
+
+import pytest
+import tynx
+
+
+def test_device_can_be_selected_during_construction_and_factories() -> None:
+    cpu = tynx.Device("cpu")
+
+    value = tynx.Tensor([1.0, 2.0], device=cpu)
+    created = tynx.ones((2, 3), device=cpu)
+
+    assert value.device == cpu
+    assert created.device == cpu
+    assert tynx.Device("flex") == cpu
+
+
+def test_cast_converts_supported_dtype_pairs() -> None:
+    floats = tynx.Tensor([-1.5, 0.0, 2.9])
+    integers = floats.cast("int64")
+    booleans = floats.cast("bool")
+
+    assert integers.dtype == "int64"
+    assert integers.tolist() == [-1, 0, 2]
+    assert booleans.tolist() == [True, False, True]
+    assert integers.cast("float32").tolist() == [-1.0, 0.0, 2.0]
+    assert booleans.cast("int64").tolist() == [1, 0, 1]
+
+
+def test_tensor_copy_constructor_can_cast_and_select_device() -> None:
+    source = tynx.Tensor([1, 2, 3], dtype="int64")
+
+    copied = tynx.Tensor(source, dtype="float32", device=tynx.Device("cpu"))
+
+    assert copied.dtype == "float32"
+    assert copied.tolist() == [1.0, 2.0, 3.0]
+    assert copied.device == tynx.Device("cpu")
+
+
+def test_float_to_preserves_gradient_path_while_discrete_cast_detaches() -> None:
+    value = tynx.Tensor([1.0, 2.0, 3.0], requires_grad=True)
+
+    moved = value.to(tynx.Device("cpu"), dtype="float32")
+    moved.sum().backward()
+
+    assert value.grad is not None
+    assert value.grad.tolist() == [1.0, 1.0, 1.0]
+    assert not value.cast("int64").requires_grad
+
+
+def test_dtype_and_device_validation_is_explicit() -> None:
+    with pytest.raises(ValueError, match="unsupported device"):
+        tynx.Device("cuda")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="unsupported Tensor dtype"):
+        tynx.Tensor([1.0]).cast("float64")  # type: ignore[arg-type]

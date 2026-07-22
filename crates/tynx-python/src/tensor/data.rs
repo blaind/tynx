@@ -202,6 +202,33 @@ impl TensorValue {
         }
     }
 
+    pub(super) fn cast(self, dtype: &str) -> PyResult<Self> {
+        match (self, dtype) {
+            (Self::Float(value), "float32") => Ok(Self::Float(value.cast(tynx_core::DType::F32))),
+            (Self::Float(value), "int64") => Ok(Self::Int(value.to_int(tynx_core::DType::I64))),
+            (Self::Float(value), "bool") => Ok(Self::Bool(value.to_bool())),
+            (Self::Int(value), "float32") => Ok(Self::Float(value.to_float(tynx_core::DType::F32))),
+            (Self::Int(value), "int64") => Ok(Self::Int(value.cast(tynx_core::DType::I64))),
+            (Self::Int(value), "bool") => Ok(Self::Bool(value.to_bool())),
+            (Self::Bool(value), "float32") => {
+                Ok(Self::Float(value.to_float(tynx_core::DType::F32)))
+            }
+            (Self::Bool(value), "int64") => Ok(Self::Int(value.to_int(tynx_core::DType::I64))),
+            (Self::Bool(value), "bool") => Ok(Self::Bool(value)),
+            (_, other) => Err(PyValueError::new_err(format!(
+                "unsupported Tensor dtype {other:?}; expected 'float32', 'int64', or 'bool'"
+            ))),
+        }
+    }
+
+    pub(super) fn move_to_device(self, device: &Device) -> Self {
+        match self {
+            Self::Float(value) => Self::Float(value.to_device(device)),
+            Self::Int(value) => Self::Int(value.to_device(device)),
+            Self::Bool(value) => Self::Bool(value.to_device(device)),
+        }
+    }
+
     pub(super) fn reshape(self, dims: Vec<usize>) -> PyResult<Self> {
         match self {
             Self::Float(value) => value

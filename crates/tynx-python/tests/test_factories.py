@@ -48,6 +48,8 @@ def test_random_factories_share_advancing_seeded_native_rng() -> None:
     assert first != tynx.rand((2, 4)).tolist()
     assert all(0.0 <= item < 1.0 for row in first for item in row)
     assert all(math.isfinite(item) for row in second for item in row)
+    assert tynx.rand_like(tynx.Tensor([[0.0, 0.0]])).shape == (1, 2)
+    assert tynx.randn_like(tynx.Tensor([[0.0, 0.0]])).shape == (1, 2)
 
 
 def test_randint_bounds_and_arange_signed_steps() -> None:

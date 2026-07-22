@@ -1,6 +1,9 @@
 //! Python projection of the process execution device.
 
-use pyo3::{exceptions::PyRuntimeError, prelude::*};
+use pyo3::{
+    exceptions::{PyRuntimeError, PyValueError},
+    prelude::*,
+};
 use tynx_core::Device;
 
 /// A Tynx execution device.
@@ -23,6 +26,14 @@ impl PyDevice {
     }
 }
 
+pub(crate) fn ensure_autodiff(device: Device) -> Device {
+    if device.is_autodiff() {
+        device
+    } else {
+        Device::autodiff(device)
+    }
+}
+
 pub(crate) fn raise_pending_device_error() -> PyResult<()> {
     match tynx_core::take_device_error() {
         Some(error) => Err(PyRuntimeError::new_err(format!(
@@ -34,6 +45,21 @@ pub(crate) fn raise_pending_device_error() -> PyResult<()> {
 
 #[pymethods]
 impl PyDevice {
+    #[new]
+    #[pyo3(signature = (kind="default"))]
+    fn py_new(kind: &str) -> PyResult<Self> {
+        let device = match kind {
+            "default" => tynx_core::default_device(),
+            "cpu" | "flex" => Device::flex(),
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unsupported device {other:?}; expected 'default', 'cpu', or 'flex'"
+                )));
+            }
+        };
+        Ok(Self::new(device))
+    }
+
     fn __repr__(&self) -> String {
         format!("Device({:?})", self.inner)
     }
@@ -43,6 +69,6 @@ impl PyDevice {
     }
 
     fn __eq__(&self, other: &Self) -> bool {
-        self.inner.as_ref() == other.inner.as_ref()
+        self.inner.as_ref().clone().inner() == other.inner.as_ref().clone().inner()
     }
 }

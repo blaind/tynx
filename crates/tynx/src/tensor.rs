@@ -417,6 +417,18 @@ macro_rules! impl_metadata {
                 }
             }
 
+            /// Move the tensor to another runtime device while preserving rank and dtype.
+            pub fn to_device(self, device: &Device) -> Self {
+                match self {
+                    Self::R1(tensor) => Self::R1(tensor.to_device(device)),
+                    Self::R2(tensor) => Self::R2(tensor.to_device(device)),
+                    Self::R3(tensor) => Self::R3(tensor.to_device(device)),
+                    Self::R4(tensor) => Self::R4(tensor.to_device(device)),
+                    Self::R5(tensor) => Self::R5(tensor.to_device(device)),
+                    Self::R6(tensor) => Self::R6(tensor.to_device(device)),
+                }
+            }
+
             /// Create a rank-erased tensor from host data.
             pub fn from_data(data: TensorData, rank: usize, device: &Device) -> Result<Self> {
                 let dtype = data.dtype;
