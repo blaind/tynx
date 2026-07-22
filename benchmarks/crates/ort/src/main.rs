@@ -11,13 +11,21 @@ use ort::{
     value::{Shape, TensorRef},
 };
 use tynx_bench_protocol::{
-    BenchResult, load_case, measure, model_bytes, print_report, require_release,
+    BenchResult, Case, Report, load_cases, measure, model_bytes, print_reports, require_release,
 };
 
 fn main() -> BenchResult<()> {
     require_release()?;
-    let case = load_case()?;
-    let bytes = model_bytes(&case)?;
+    let cases = load_cases()?;
+    let reports = cases
+        .iter()
+        .map(run_case)
+        .collect::<BenchResult<Vec<_>>>()?;
+    print_reports(&reports)
+}
+
+fn run_case(case: &Case) -> BenchResult<Report> {
+    let bytes = model_bytes(case)?;
 
     let started = Instant::now();
     let builder = Session::builder()?.with_optimization_level(GraphOptimizationLevel::All)?;
@@ -29,7 +37,7 @@ fn main() -> BenchResult<()> {
         builder.with_execution_providers([ep::CPU::default().build().error_on_failure()])?;
     let mut session = builder.commit_from_memory(&bytes)?;
     let load_ms = started.elapsed().as_secs_f64() * 1_000.0;
-    let report = measure("onnxruntime", backend(), None, load_ms, &case, || {
+    measure("onnxruntime", backend(), None, load_ms, case, || {
         let inputs = case
             .inputs
             .iter()
@@ -43,8 +51,7 @@ fn main() -> BenchResult<()> {
             .collect::<ort::Result<Vec<_>>>()?;
         let outputs = session.run(inputs)?;
         Ok(outputs[0].try_extract_tensor::<f32>()?.1.to_vec())
-    })?;
-    print_report(&report)
+    })
 }
 
 #[cfg(feature = "cuda")]

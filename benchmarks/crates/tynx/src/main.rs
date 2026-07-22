@@ -3,14 +3,27 @@ use std::time::Instant;
 use burn::tensor::{Device, TensorData};
 use tynx::{Env, Session, Value};
 use tynx_bench_protocol::{
-    BenchResult, load_case, measure, model_bytes, print_report, require_release,
+    BenchResult, Case, Report, load_cases, measure, model_bytes, print_reports, require_release,
 };
 
 fn main() -> BenchResult<()> {
     require_release()?;
-    let case = load_case()?;
-    let bytes = model_bytes(&case)?;
+    let cases = load_cases()?;
     let (backend, device, device_name) = device();
+    let reports = cases
+        .iter()
+        .map(|case| run_case(case, backend, &device, device_name.clone()))
+        .collect::<BenchResult<Vec<_>>>()?;
+    print_reports(&reports)
+}
+
+fn run_case(
+    case: &Case,
+    backend: &str,
+    device: &Device,
+    device_name: Option<String>,
+) -> BenchResult<Report> {
+    let bytes = model_bytes(case)?;
 
     let started = Instant::now();
     let session = Session::from_bytes(&bytes)?;
@@ -26,7 +39,7 @@ fn main() -> BenchResult<()> {
     }
     let output_name = session.outputs()[0].name.clone();
 
-    let report = measure("tynx", backend, device_name.clone(), load_ms, &case, || {
+    measure("tynx", backend, device_name, load_ms, case, || {
         let mut inputs = Env::new();
         for (model_input, input) in session.inputs().iter().zip(&case.inputs) {
             if model_input.name != input.name {
@@ -41,19 +54,18 @@ fn main() -> BenchResult<()> {
                 Value::from_tensor_data(
                     TensorData::new(input.values.clone(), input.shape.clone()),
                     input.shape.len(),
-                    &device,
+                    device,
                 )?,
             );
         }
-        let mut outputs = session.run(&device, inputs)?;
+        let mut outputs = session.run(device, inputs)?;
         let output = outputs
             .remove(&output_name)
             .ok_or_else(|| format!("Tynx did not produce output '{output_name}'"))?
             .into_tensor()?
             .into_data();
         Ok(output.convert::<f32>().to_vec::<f32>()?)
-    })?;
-    print_report(&report)
+    })
 }
 
 #[cfg(feature = "wgpu")]

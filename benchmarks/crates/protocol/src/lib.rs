@@ -104,28 +104,56 @@ pub struct Report {
     pub output_checksum: f64,
 }
 
-pub fn load_case() -> BenchResult<Case> {
-    let requested = env::var("TYNX_BENCH_CASE").unwrap_or_else(|_| "sign-11".to_string());
-    let mut case = load_case_named(&requested)?;
-    case.warmup = env_usize("TYNX_BENCH_WARMUP", case.warmup)?;
-    case.iterations = env_usize("TYNX_BENCH_ITERATIONS", case.iterations)?;
-    if case.iterations == 0 {
-        return Err("TYNX_BENCH_ITERATIONS must be greater than zero".into());
-    }
-    Ok(case)
+pub fn load_cases() -> BenchResult<Vec<Case>> {
+    let registry = registry()?;
+    let requested = match env::var("TYNX_BENCH_CASE") {
+        Ok(value) if !value.is_empty() => Some(value),
+        Ok(_) | Err(env::VarError::NotPresent) => None,
+        Err(error) => return Err(error.into()),
+    };
+    let specs = match requested {
+        Some(requested) => vec![
+            registry
+                .cases
+                .into_iter()
+                .find(|case| case.id == requested)
+                .ok_or_else(|| format!("unknown benchmark case '{requested}'"))?,
+        ],
+        None => registry.cases,
+    };
+
+    specs
+        .into_iter()
+        .map(|spec| {
+            let mut case = case_from_spec(spec)?;
+            case.warmup = env_usize("TYNX_BENCH_WARMUP", case.warmup)?;
+            case.iterations = env_usize("TYNX_BENCH_ITERATIONS", case.iterations)?;
+            if case.iterations == 0 {
+                return Err("TYNX_BENCH_ITERATIONS must be greater than zero".into());
+            }
+            Ok(case)
+        })
+        .collect()
 }
 
 pub fn load_case_named(requested: &str) -> BenchResult<Case> {
-    let registry: Registry = serde_json::from_str(include_str!("../../../cases.json"))?;
-    if registry.schema != 2 {
-        return Err(format!("unsupported benchmark registry schema {}", registry.schema).into());
-    }
-
-    let spec = registry
+    let spec = registry()?
         .cases
         .into_iter()
         .find(|case| case.id == requested)
         .ok_or_else(|| format!("unknown benchmark case '{requested}'"))?;
+    case_from_spec(spec)
+}
+
+fn registry() -> BenchResult<Registry> {
+    let registry: Registry = serde_json::from_str(include_str!("../../../cases.json"))?;
+    if registry.schema != 2 {
+        return Err(format!("unsupported benchmark registry schema {}", registry.schema).into());
+    }
+    Ok(registry)
+}
+
+fn case_from_spec(spec: CaseSpec) -> BenchResult<Case> {
     let inputs = spec
         .inputs
         .into_iter()
@@ -162,6 +190,7 @@ pub fn model_bytes(case: &Case) -> BenchResult<Vec<u8>> {
         "models/matmul_add_relu_dynamic.onnx.hex" => decode_hex(include_str!(
             "../../../models/matmul_add_relu_dynamic.onnx.hex"
         )),
+        "models/tiny_cnn.onnx" => Ok(include_bytes!("../../../models/tiny_cnn.onnx").to_vec()),
         model => Err(format!("model '{model}' is not embedded in the benchmark harness").into()),
     }
 }
@@ -254,8 +283,8 @@ pub fn wgpu_device_name() -> Option<String> {
     ))
 }
 
-pub fn print_report(report: &Report) -> BenchResult<()> {
-    println!("{}", serde_json::to_string_pretty(report)?);
+pub fn print_reports(reports: &[Report]) -> BenchResult<()> {
+    println!("{}", serde_json::to_string_pretty(reports)?);
     Ok(())
 }
 
@@ -374,6 +403,7 @@ mod tests {
         let matmul512 = load_case_named("matmul-512x512").unwrap();
         let matmul1024 = load_case_named("matmul-1024x1024").unwrap();
         let multi_op = load_case_named("matmul-add-relu-256x256").unwrap();
+        let tiny_cnn = load_case_named("tiny-cnn-32").unwrap();
 
         assert_eq!(sign.inputs[0].values.len(), 11);
         assert_eq!(model_bytes(&sign).unwrap().len(), 83);
@@ -393,6 +423,16 @@ mod tests {
         assert_eq!(multi_op.expected[0], 0.0);
         assert!(multi_op.expected.last().unwrap() > &1.0);
         assert_eq!(model_bytes(&multi_op).unwrap().len(), 208);
+        assert_eq!(tiny_cnn.inputs[0].shape, [1, 3, 32, 32]);
+        assert_eq!(tiny_cnn.output_shape, [1, 10]);
+        assert_eq!(tiny_cnn.estimated_flops, Some(1_032_512));
+        assert!((tiny_cnn.expected.iter().sum::<f32>() - 1.0).abs() < 1e-6);
+        assert_eq!(model_bytes(&tiny_cnn).unwrap().len(), 7_232);
+    }
+
+    #[test]
+    fn registry_contains_all_cases() {
+        assert_eq!(registry().unwrap().cases.len(), 7);
     }
 
     #[test]

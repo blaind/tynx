@@ -3,26 +3,31 @@ use std::{env, fs, path::PathBuf};
 use burn_onnx::ModelGen;
 
 fn main() {
-    generate("sign", include_str!("../../models/sign.onnx.hex"));
-    generate("matmul64", include_str!("../../models/matmul64.onnx.hex"));
-    generate(
+    generate_hex("sign", include_str!("../../models/sign.onnx.hex"));
+    generate_hex("matmul64", include_str!("../../models/matmul64.onnx.hex"));
+    generate_hex(
         "matmul_dynamic",
         include_str!("../../models/matmul_dynamic.onnx.hex"),
     );
-    generate(
+    generate_hex(
         "matmul_add_relu_dynamic",
         include_str!("../../models/matmul_add_relu_dynamic.onnx.hex"),
     );
+    generate("tiny_cnn", include_bytes!("../../models/tiny_cnn.onnx"));
 
     println!("cargo:rerun-if-changed=../../models/sign.onnx.hex");
     println!("cargo:rerun-if-changed=../../models/matmul64.onnx.hex");
     println!("cargo:rerun-if-changed=../../models/matmul_dynamic.onnx.hex");
     println!("cargo:rerun-if-changed=../../models/matmul_add_relu_dynamic.onnx.hex");
+    println!("cargo:rerun-if-changed=../../models/tiny_cnn.onnx");
     println!("cargo:rerun-if-changed=build.rs");
 }
 
-fn generate(name: &str, model_hex: &str) {
-    let model = decode_hex(model_hex.trim());
+fn generate_hex(name: &str, model_hex: &str) {
+    generate(name, &decode_hex(model_hex.trim()));
+}
+
+fn generate(name: &str, model: &[u8]) {
     let model_path =
         PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR is set")).join(format!("{name}.onnx"));
     fs::write(&model_path, model).expect("write generated ONNX fixture");
