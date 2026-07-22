@@ -9,7 +9,7 @@ readme.workspace = true
 keywords = ["machine-learning", "neural-network", "onnx", "inference", "webgpu"]
 
 [dependencies]
-burn = { git = "https://github.com/tracel-ai/burn", rev = "78f10aec1ca6c6ffb1edd17a0fa131ae59ad5403", default-features = false, features = ["std"] }
+burn = { git = "https://github.com/tracel-ai/burn", rev = "78f10aec1ca6c6ffb1edd17a0fa131ae59ad5403", default-features = false, features = ["extension", "std"] }
 log = "0.4"
 onnx-ir = { git = "https://github.com/tracel-ai/burn-onnx", rev = "af2dfb43af43bf363dc2d7d858d933d86e2a65a8" }
 pollster = { version = "0.4", optional = true }

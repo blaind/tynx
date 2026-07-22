@@ -1,5 +1,6 @@
 //! Python bindings for Tynx.
 
+mod device;
 mod grad_mode;
 mod gradient;
 mod imported_model;
@@ -15,6 +16,7 @@ use pyo3::exceptions::{PyOSError, PyValueError};
 use pyo3::prelude::*;
 use tynx_core::Session;
 
+use device::PyDevice;
 use grad_mode::{PyNoGrad, is_grad_enabled_py, no_grad};
 use gradient::{clip_grad_norm_py, clip_grad_value_py};
 use imported_model::{PyImportedModel, PyTrainabilityReport};
@@ -23,6 +25,21 @@ use optimizer::{PyAdam, PyAdamW, PySgd};
 use parameter::{PyBuffer, PyParameter};
 use random::{categorical_sample_py, dropout_py, manual_seed_py, normal_sample_py};
 use tensor::{PyTensor, maximum_py, minimum_py, where_py};
+
+/// Return the process-default execution device.
+#[pyfunction]
+fn get_default_device() -> PyDevice {
+    PyDevice::new(tynx_core::default_device())
+}
+
+/// Wait until work queued for a device is complete.
+#[pyfunction(signature = (device=None))]
+fn synchronize(device: Option<PyRef<'_, PyDevice>>) -> PyResult<()> {
+    match device {
+        Some(device) => device.sync(),
+        None => PyDevice::new(tynx_core::default_device()).sync(),
+    }
+}
 
 /// A parsed ONNX model.
 #[pyclass(name = "Session", frozen)]
@@ -86,6 +103,7 @@ fn _tynx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PySession>()?;
     module.add_class::<PyImportedModel>()?;
     module.add_class::<PyTrainabilityReport>()?;
+    module.add_class::<PyDevice>()?;
     module.add_class::<PyTensor>()?;
     module.add_class::<PyParameter>()?;
     module.add_class::<PyBuffer>()?;
@@ -95,6 +113,8 @@ fn _tynx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyAdamW>()?;
     module.add_function(wrap_pyfunction!(no_grad, module)?)?;
     module.add_function(wrap_pyfunction!(is_grad_enabled_py, module)?)?;
+    module.add_function(wrap_pyfunction!(get_default_device, module)?)?;
+    module.add_function(wrap_pyfunction!(synchronize, module)?)?;
     module.add_function(wrap_pyfunction!(where_py, module)?)?;
     module.add_function(wrap_pyfunction!(maximum_py, module)?)?;
     module.add_function(wrap_pyfunction!(minimum_py, module)?)?;

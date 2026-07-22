@@ -7,17 +7,20 @@ from typing import Literal, Optional, Union, overload
 from . import distributions, nn, optim
 from ._tynx import (
     Buffer,
+    Device,
     ImportedModel,
     Parameter,
     Session,
     Tensor,
     TrainabilityReport,
     __version__,
+    get_default_device,
     is_grad_enabled,
     manual_seed,
     maximum,
     minimum,
     no_grad,
+    synchronize,
     where,
 )
 from .checkpoint import load_checkpoint, save_checkpoint
@@ -70,6 +73,7 @@ def load(
 
 __all__ = [
     "Buffer",
+    "Device",
     "ImportedModel",
     "Parameter",
     "Session",
@@ -77,6 +81,7 @@ __all__ = [
     "TrainabilityReport",
     "__version__",
     "distributions",
+    "get_default_device",
     "is_grad_enabled",
     "load",
     "load_checkpoint",
@@ -87,5 +92,6 @@ __all__ = [
     "no_grad",
     "optim",
     "save_checkpoint",
+    "synchronize",
     "where",
 ]

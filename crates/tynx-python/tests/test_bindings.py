@@ -14,6 +14,11 @@ def test_module_metadata() -> None:
     assert callable(tynx.Session)
     assert callable(tynx.Tensor)
     assert callable(tynx.Parameter)
+    device = tynx.get_default_device()
+    assert isinstance(device, tynx.Device)
+    assert str(device)
+    tynx.synchronize()
+    tynx.synchronize(device)
 
 
 def test_tensor_metadata_and_host_conversion() -> None:
@@ -26,6 +31,9 @@ def test_tensor_metadata_and_host_conversion() -> None:
     assert tensor.tolist() == [[1.0, 2.0], [3.0, 4.0]]
     assert tynx.Tensor(3.5).shape == (1,)
     assert tynx.Tensor([3.5]).item() == pytest.approx(3.5)
+    assert isinstance(tensor.device, tynx.Device)
+    assert str(tensor.device)
+    assert tensor.device == tynx.get_default_device()
     assert len(tensor) == 2
     assert tynx.Tensor(tensor).tolist() == tensor.tolist()
     assert tynx.Tensor(range(3)).tolist() == [0.0, 1.0, 2.0]
@@ -1412,6 +1420,48 @@ def test_tensor_backward_accepts_explicit_gradient() -> None:
 
     with pytest.raises(ValueError, match="gradient shape"):
         (value * value).backward(tynx.Tensor([1.0]))
+
+
+def test_tensor_repeated_backward_reports_consumed_graph_without_dispatch() -> None:
+    value = tynx.Tensor([2.0], requires_grad=True)
+    output = (value * value).sum()
+
+    output.backward()
+    with pytest.raises(ValueError, match="already freed by a previous backward"):
+        output.backward()
+
+
+def test_tensor_sibling_results_share_backward_consumption() -> None:
+    value = tynx.Tensor([2.0, 3.0], requires_grad=True)
+    shared = value * value
+    first = shared.sum()
+    second = shared.mean()
+
+    first.backward()
+    with pytest.raises(ValueError, match="already freed by a previous backward"):
+        second.backward()
+
+
+def test_tensor_leaf_allows_repeated_backward() -> None:
+    value = tynx.Tensor([2.0], requires_grad=True)
+
+    value.backward()
+    value.backward()
+
+    assert value.grad is not None
+    assert value.grad.tolist() == [2.0]
+
+
+def test_parameter_allows_backward_after_value_generation_changes() -> None:
+    parameter = tynx.Parameter([2.0])
+
+    parameter.backward()
+    parameter.copy_(tynx.Tensor([3.0]))
+    parameter.zero_grad()
+    parameter.backward()
+
+    assert parameter.grad is not None
+    assert parameter.grad.tolist() == [1.0]
 
 
 def test_no_grad_is_nested_and_restores_tracking() -> None:

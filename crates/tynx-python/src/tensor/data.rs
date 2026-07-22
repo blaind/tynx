@@ -144,6 +144,14 @@ impl TensorValue {
         }
     }
 
+    pub(super) fn device(&self) -> Device {
+        match self {
+            Self::Float(value) => value.device(),
+            Self::Int(value) => value.device(),
+            Self::Bool(value) => value.device(),
+        }
+    }
+
     pub(super) fn tolist(self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let shape = self.dims();
         match self {

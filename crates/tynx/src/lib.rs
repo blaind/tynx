@@ -8,7 +8,7 @@ mod session;
 mod tensor;
 mod value;
 
-pub use device::default_device;
+pub use device::{default_device, take_device_error};
 pub use error::{Result, TynxError};
 pub use initializer::InitializerId;
 pub use interpreter::{Env, execute};

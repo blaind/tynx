@@ -9,7 +9,7 @@ mod selection;
 mod shape;
 
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     panic::{AssertUnwindSafe, catch_unwind},
     rc::{Rc, Weak},
 };
@@ -22,7 +22,11 @@ use pyo3::{
 use tynx_core::{Device, DynInt, DynTensor, Gradients};
 use tynx_train::ParameterSlot;
 
-use crate::{grad_mode::is_grad_enabled, to_python_error};
+use crate::{
+    device::{PyDevice, raise_pending_device_error},
+    grad_mode::is_grad_enabled,
+    to_python_error,
+};
 use comparison::{Comparison, MaskOperation};
 use data::TensorValue;
 use extrema::Extremum;
@@ -37,6 +41,12 @@ pub(crate) struct PyTensor {
     source: TensorSource,
     targets: Vec<GradTarget>,
     leaf: Option<Rc<LeafState>>,
+    backward_graphs: Vec<Rc<BackwardGraph>>,
+}
+
+#[derive(Debug, Default)]
+struct BackwardGraph {
+    consumed: Cell<bool>,
 }
 
 #[derive(Debug)]
@@ -91,17 +101,34 @@ impl GradTarget {
         }
         Ok(())
     }
+
+    fn mark_tape_consumed(&self) {
+        if let Self::Tensor(leaf) = self
+            && let Some(leaf) = leaf.upgrade()
+        {
+            leaf.tape_consumed.set(true);
+        }
+    }
 }
 
 #[derive(Debug)]
 struct LeafState {
-    tensor: DynTensor,
+    tensor: RefCell<DynTensor>,
+    tape_consumed: Cell<bool>,
     grad: RefCell<Option<DynTensor>>,
 }
 
 impl LeafState {
+    fn operation_input(&self) -> DynTensor {
+        if self.tape_consumed.replace(false) {
+            let fresh = self.tensor.borrow().clone().detach().require_grad();
+            *self.tensor.borrow_mut() = fresh;
+        }
+        self.tensor.borrow().clone()
+    }
+
     fn accumulate(&self, gradients: &Gradients) -> tynx_core::Result<()> {
-        let Some(gradient) = self.tensor.grad(gradients) else {
+        let Some(gradient) = self.tensor.borrow().grad(gradients) else {
             return Ok(());
         };
         let gradient = gradient.detach();
@@ -126,6 +153,7 @@ impl PyTensor {
             source: TensorSource::Owned(Box::new(TensorValue::Float(inner))),
             targets: Vec::new(),
             leaf: None,
+            backward_graphs: Vec::new(),
         }
     }
 
@@ -138,19 +166,22 @@ impl PyTensor {
             source: TensorSource::Owned(Box::new(value)),
             targets: Vec::new(),
             leaf: None,
+            backward_graphs: Vec::new(),
         }
     }
 
     fn from_leaf(inner: DynTensor) -> Self {
         let inner = inner.require_grad();
         let leaf = Rc::new(LeafState {
-            tensor: inner.clone(),
+            tensor: RefCell::new(inner.clone()),
+            tape_consumed: Cell::new(false),
             grad: RefCell::new(None),
         });
         Self {
             source: TensorSource::Owned(Box::new(TensorValue::Float(inner))),
             targets: vec![GradTarget::Tensor(Rc::downgrade(&leaf))],
             leaf: Some(leaf),
+            backward_graphs: Vec::new(),
         }
     }
 
@@ -164,11 +195,13 @@ impl PyTensor {
             source: TensorSource::Parameter(slot.clone()),
             targets,
             leaf: None,
+            backward_graphs: Vec::new(),
         }
     }
 
     pub(crate) fn from_operation(inner: DynTensor, sources: &[&Self]) -> Self {
         let mut targets: Vec<GradTarget> = Vec::new();
+        let mut backward_graphs: Vec<Rc<BackwardGraph>> = Vec::new();
         for source in sources {
             for target in &source.targets {
                 if !targets
@@ -178,11 +211,21 @@ impl PyTensor {
                     targets.push(target.clone());
                 }
             }
+            for graph in &source.backward_graphs {
+                if !backward_graphs
+                    .iter()
+                    .any(|existing| Rc::ptr_eq(existing, graph))
+                {
+                    backward_graphs.push(graph.clone());
+                }
+            }
         }
+        backward_graphs.push(Rc::new(BackwardGraph::default()));
         Self {
             source: TensorSource::Owned(Box::new(TensorValue::Float(inner))),
             targets,
             leaf: None,
+            backward_graphs,
         }
     }
 
@@ -205,14 +248,21 @@ impl PyTensor {
         output
     }
 
+    fn operation_input(&self, tracking: bool, operation: &str) -> PyResult<DynTensor> {
+        if tracking && let Some(leaf) = &self.leaf {
+            return Ok(leaf.operation_input());
+        }
+        self.source.operation_input(tracking, operation)
+    }
+
     fn binary(
         &self,
         other: &Self,
         operation: impl FnOnce(DynTensor, DynTensor) -> tynx_core::Result<DynTensor>,
     ) -> PyResult<Self> {
         let tracking = is_grad_enabled();
-        let left = self.source.operation_input(tracking, "arithmetic")?;
-        let right = other.source.operation_input(tracking, "arithmetic")?;
+        let left = self.operation_input(tracking, "arithmetic")?;
+        let right = other.operation_input(tracking, "arithmetic")?;
         let inner = operation(left, right).map_err(to_python_error)?;
         Ok(if tracking {
             Self::from_operation(inner, &[self, other])
@@ -239,7 +289,7 @@ impl PyTensor {
         operation: impl FnOnce(DynTensor) -> tynx_core::Result<DynTensor>,
     ) -> PyResult<Self> {
         let tracking = is_grad_enabled();
-        let input = self.source.operation_input(tracking, "operation")?;
+        let input = self.operation_input(tracking, "operation")?;
         let inner = operation(input).map_err(to_python_error)?;
         Ok(if tracking {
             Self::from_operation(inner, &[self])
@@ -284,7 +334,6 @@ impl PyTensor {
                 if let Some(tensor) = tensor {
                     return match tensor.source.value() {
                         TensorValue::Float(_) => tensor
-                            .source
                             .operation_input(tracking, "where")
                             .map(TensorValue::Float),
                         value => Ok(value.detach()),
@@ -338,7 +387,7 @@ impl PyTensor {
         let tracking = is_grad_enabled();
         match self.source.value() {
             TensorValue::Float(_) => {
-                let input = self.source.operation_input(tracking, "gather")?;
+                let input = self.operation_input(tracking, "gather")?;
                 let inner = input.gather(dim, indices).map_err(to_python_error)?;
                 Ok(if tracking {
                     Self::from_operation(inner, &[self])
@@ -355,7 +404,6 @@ impl PyTensor {
         let other_tensor = other.extract::<PyRef<'_, Self>>().ok();
         let left = match self.source.value() {
             TensorValue::Float(_) => self
-                .source
                 .operation_input(tracking, extremum.name())
                 .map(TensorValue::Float)?,
             value => value.detach(),
@@ -363,7 +411,6 @@ impl PyTensor {
         let right = if let Some(other) = other_tensor.as_deref() {
             match other.source.value() {
                 TensorValue::Float(_) => other
-                    .source
                     .operation_input(tracking, extremum.name())
                     .map(TensorValue::Float)?,
                 value => value.detach(),
@@ -415,7 +462,7 @@ impl PyTensor {
         tracking: bool,
         operation: &str,
     ) -> PyResult<DynTensor> {
-        self.source.operation_input(tracking, operation)
+        self.operation_input(tracking, operation)
     }
 }
 
@@ -474,6 +521,12 @@ impl PyTensor {
         self.source.value().dtype_name()
     }
 
+    /// Execution device used by this tensor.
+    #[getter]
+    fn device(&self) -> PyDevice {
+        PyDevice::new(self.source.value().device())
+    }
+
     /// Whether this tensor participates in an autodiff graph.
     #[getter]
     fn requires_grad(&self) -> bool {
@@ -501,7 +554,9 @@ impl PyTensor {
 
     /// Copy tensor values to nested Python lists.
     fn tolist(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        self.source.value().tolist(py)
+        let result = self.source.value().tolist(py);
+        raise_pending_device_error()?;
+        result
     }
 
     /// Copy a one-element tensor to a Python scalar.
@@ -512,7 +567,9 @@ impl PyTensor {
                 self.source.value().dims()
             )));
         }
-        self.source.value().item(py)
+        let result = self.source.value().item(py);
+        raise_pending_device_error()?;
+        result
     }
 
     /// Return an off-tape tensor sharing the current numerical value.
@@ -555,7 +612,16 @@ impl PyTensor {
                 "backward() requires a tensor attached to an autodiff graph",
             ));
         }
-        let output = self.source.operation_input(true, "backward")?;
+        if self
+            .backward_graphs
+            .iter()
+            .any(|graph| graph.consumed.get())
+        {
+            return Err(PyValueError::new_err(
+                "backward() graph was already freed by a previous backward() call",
+            ));
+        }
+        let output = self.operation_input(true, "backward")?;
         let root = match gradient {
             Some(gradient) => {
                 let seed = gradient.source.value().float("backward gradient")?;
@@ -576,12 +642,19 @@ impl PyTensor {
             }
             None => output,
         };
+        for graph in &self.backward_graphs {
+            graph.consumed.set(true);
+        }
         let gradients = catch_unwind(AssertUnwindSafe(|| root.backward())).map_err(|_| {
-            PyValueError::new_err("backward() could not traverse the autodiff graph")
+            PyValueError::new_err(
+                "backward() could not traverse the autodiff graph; it may already have been freed",
+            )
         })?;
         for target in &self.targets {
             target.accumulate(&gradients).map_err(to_python_error)?;
+            target.mark_tape_consumed();
         }
+        raise_pending_device_error()?;
         Ok(())
     }
 
@@ -999,7 +1072,7 @@ impl PyTensor {
         let tracking = is_grad_enabled();
         match self.source.value() {
             TensorValue::Float(_) => {
-                let input = self.source.operation_input(tracking, extremum.name())?;
+                let input = self.operation_input(tracking, extremum.name())?;
                 let inner = extremum
                     .float_reduce(input, &spec.dims)
                     .and_then(|value| value.reshape(spec.output_shape))
