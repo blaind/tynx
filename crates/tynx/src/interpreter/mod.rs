@@ -18,6 +18,7 @@ mod pad;
 mod pooling;
 mod pow;
 mod reduction;
+mod resize;
 mod resolve;
 mod scatter;
 mod selection;
@@ -142,6 +143,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::ReduceSum(node) => reduction::reduce_sum(node, env, device),
         Node::ReduceSumSquare(node) => reduction::reduce_sum_square(node, env, device),
         Node::Reshape(node) => shape::reshape(node, env, device),
+        Node::Resize(node) => resize::resize(node, env, device),
         Node::Relu(node) => unary::relu(node, env, device),
         Node::Round(node) => unary::round(node, env, device),
         Node::Selu(node) => unary::selu(node, env, device),
