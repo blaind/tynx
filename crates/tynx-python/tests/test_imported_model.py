@@ -11,6 +11,14 @@ _GEMM_MODEL = bytes.fromhex(
     "22040000004042067765696768742a110a0101100122040000803f4204626961735a130a0178"
     "120e0a0c080112080a0208020a02080162130a0179120e0a0c080112080a0208020a020801"
 )
+_MULTI_MODEL = bytes.fromhex(
+    "08084202100d3ab5010a1d0a01780a046d61736b120373756d1a0873756d5f6e6f64652203"
+    "4164640a210a01780a046d61736b120770726f647563741a086d756c5f6e6f646522034d756c"
+    "1212707974686f6e5f6d756c74695f6d6f64656c5a130a0178120e0a0c080112080a020802"
+    "0a0208015a160a046d61736b120e0a0c080112080a0208020a02080162150a0373756d120e0a"
+    "0c080112080a0208020a02080162190a0770726f64756374120e0a0c080112080a0208020a02"
+    "0801"
+)
 
 
 def _model_path(tmp_path: Path) -> Path:
@@ -91,3 +99,35 @@ def test_imported_trainability_report_is_structured_and_output_specific(tmp_path
     assert selected.selected_outputs == [output_name]
     with pytest.raises(ValueError, match=r"requested output.*not a declared"):
         model.require_trainable(outputs=["missing"])
+
+
+def test_imported_model_binds_multiple_named_inputs_and_returns_named_outputs(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "multi.onnx"
+    path.write_bytes(_MULTI_MODEL)
+    model = tynx.load(path, trainable="auto", simplify=False)
+    first = tynx.Tensor([[1.0], [2.0]], requires_grad=True)
+    second = tynx.Tensor([[3.0], [4.0]], requires_grad=True)
+
+    positional = model(first, second)
+    assert isinstance(positional, dict)
+    assert list(positional) == model.outputs
+    assert positional[model.outputs[0]].flatten().tolist() == pytest.approx([4.0, 6.0])
+    assert positional[model.outputs[1]].flatten().tolist() == pytest.approx([3.0, 8.0])
+
+    named = model(**{model.inputs[1]: second, model.inputs[0]: first})
+    assert isinstance(named, dict)
+    loss = named[model.outputs[0]].sum() + named[model.outputs[1]].sum()
+    loss.backward()
+    assert first.grad is not None
+    assert second.grad is not None
+    assert first.grad.flatten().tolist() == pytest.approx([4.0, 5.0])
+    assert second.grad.flatten().tolist() == pytest.approx([2.0, 3.0])
+
+    with pytest.raises(TypeError, match="missing required inputs"):
+        model(first)
+    with pytest.raises(TypeError, match="unexpected input"):
+        model(first, unknown=second)
+    with pytest.raises(TypeError, match="multiple values"):
+        model(first, **{model.inputs[0]: second, model.inputs[1]: second})

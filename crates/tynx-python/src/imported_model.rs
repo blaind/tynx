@@ -3,9 +3,9 @@
 use std::{collections::HashMap, path::PathBuf};
 
 use pyo3::{
-    exceptions::PyOSError,
+    exceptions::{PyOSError, PyTypeError},
     prelude::*,
-    types::{PyDict, PyList},
+    types::{PyDict, PyList, PyTuple},
 };
 use tynx_core::{Device, Env, Session, Value};
 use tynx_train::{
@@ -220,38 +220,109 @@ impl PyImportedModel {
         })
     }
 
-    /// Run a single-input/single-output imported forward and return a normal eager Tensor.
-    fn __call__(&self, input: PyRef<'_, PyTensor>) -> PyResult<PyTensor> {
+    /// Bind positional/named model inputs and return one Tensor or a named output dictionary.
+    #[pyo3(signature = (*args, **kwargs))]
+    fn __call__<'py>(
+        &self,
+        py: Python<'py>,
+        args: &Bound<'py, PyTuple>,
+        kwargs: Option<&Bound<'py, PyDict>>,
+    ) -> PyResult<Py<PyAny>> {
         let inputs = self.inner.session().inputs();
         let outputs = self.inner.session().outputs();
-        if inputs.len() != 1 || outputs.len() != 1 {
-            return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "positional imported-model calls currently require one input and one output; model declares {} inputs and {} outputs",
+        if args.len() > inputs.len() {
+            return Err(PyTypeError::new_err(format!(
+                "ImportedModel expected at most {} positional inputs, got {}",
                 inputs.len(),
-                outputs.len()
+                args.len()
             )));
         }
+
+        let mut bound = (0..inputs.len()).map(|_| None).collect::<Vec<_>>();
+        for (index, destination) in bound.iter_mut().enumerate().take(args.len()) {
+            *destination = Some(args.get_item(index)?.extract::<PyRef<'py, PyTensor>>()?);
+        }
+        if let Some(kwargs) = kwargs {
+            for (name, value) in kwargs.iter() {
+                let name = name.extract::<String>().map_err(|_| {
+                    PyTypeError::new_err("ImportedModel input names must be strings")
+                })?;
+                let index = inputs
+                    .iter()
+                    .position(|input| input.name == name)
+                    .ok_or_else(|| {
+                        PyTypeError::new_err(format!(
+                            "ImportedModel got an unexpected input {name:?}; expected {:?}",
+                            self.inputs()
+                        ))
+                    })?;
+                if bound[index].is_some() {
+                    return Err(PyTypeError::new_err(format!(
+                        "ImportedModel got multiple values for input {name:?}"
+                    )));
+                }
+                bound[index] = Some(value.extract::<PyRef<'py, PyTensor>>()?);
+            }
+        }
+        let missing = inputs
+            .iter()
+            .zip(&bound)
+            .filter(|(_, value)| value.is_none())
+            .map(|(input, _)| input.name.clone())
+            .collect::<Vec<_>>();
+        if !missing.is_empty() {
+            return Err(PyTypeError::new_err(format!(
+                "ImportedModel is missing required inputs {missing:?}"
+            )));
+        }
+
         let tracking = is_grad_enabled();
-        let value = input.operation_float_value(tracking, "imported model input")?;
-        let env = Env::from([(inputs[0].name.clone(), Value::Tensor(value))]);
+        let mut env = Env::new();
+        for (input, value) in inputs.iter().zip(&bound) {
+            let value = value
+                .as_ref()
+                .expect("missing imported inputs were rejected above")
+                .operation_float_value(tracking, "imported model input")?;
+            env.insert(input.name.clone(), Value::Tensor(value));
+        }
         let mut result = self
             .inner
             .run_with_tracking(env, tracking)
             .map_err(to_python_error)?;
-        let output = result
-            .remove(&outputs[0].name)
-            .expect("ImportedModel returns every declared output")
-            .into_tensor()
-            .map_err(to_python_error)?;
-        Ok(if tracking {
-            PyTensor::from_imported_operation(
-                output,
-                &[&input],
-                self.inner.parameters().trainable().cloned(),
-            )
-        } else {
-            PyTensor::from_inner(output.detach())
-        })
+        let sources = bound
+            .iter()
+            .map(|value| {
+                &**value
+                    .as_ref()
+                    .expect("missing imported inputs were rejected above")
+            })
+            .collect::<Vec<_>>();
+        let mut wrap_output = |name: &str| -> PyResult<Py<PyTensor>> {
+            let output = result
+                .remove(name)
+                .expect("ImportedModel returns every declared output")
+                .into_tensor()
+                .map_err(to_python_error)?;
+            let tensor = if tracking {
+                PyTensor::from_imported_operation(
+                    output,
+                    &sources,
+                    self.inner.parameters().trainable().cloned(),
+                )
+            } else {
+                PyTensor::from_inner(output.detach())
+            };
+            Py::new(py, tensor)
+        };
+
+        if outputs.len() == 1 {
+            return Ok(wrap_output(&outputs[0].name)?.into_any());
+        }
+        let named = PyDict::new(py);
+        for output in outputs {
+            named.set_item(&output.name, wrap_output(&output.name)?)?;
+        }
+        Ok(named.unbind().into_any())
     }
 
     #[getter]
