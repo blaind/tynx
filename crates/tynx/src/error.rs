@@ -39,6 +39,14 @@ pub enum TynxError {
         actual: String,
     },
 
+    /// A device reported an asynchronous execution failure.
+    #[error("asynchronous device error: {0}")]
+    AsynchronousDevice(String),
+
+    /// Waiting for queued device work failed.
+    #[error("device synchronization failed: {0}")]
+    DeviceSynchronization(String),
+
     /// A value had an unexpected type.
     #[error("type mismatch: {0}")]
     TypeMismatch(String),
