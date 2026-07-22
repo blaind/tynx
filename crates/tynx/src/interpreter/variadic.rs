@@ -6,8 +6,8 @@ use onnx_ir::{
     node::{max::MaxNode, mean::MeanNode, min::MinNode, sum::SumNode},
 };
 
-use super::{Env, resolve};
-use crate::{Result, Scalar, TynxError, Value};
+use super::{Env, binary, resolve};
+use crate::{DynInt, DynTensor, Result, Scalar, TynxError, Value};
 
 pub(super) fn max(node: &MaxNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
     fold(node.name.as_str(), &node.inputs, env, device, max_pair)
@@ -45,7 +45,7 @@ fn fold(
     inputs: &[Argument],
     env: &Env,
     device: &Device,
-    operation: fn(Value, Value) -> Result<Value>,
+    operation: fn(Value, Value, &Device) -> Result<Value>,
 ) -> Result<Vec<Value>> {
     if inputs.is_empty() {
         return Err(TynxError::Shape(format!(
@@ -56,43 +56,140 @@ fn fold(
 
     for index in 1..inputs.len() {
         let input = resolve::at(env, node_name, inputs, index, device)?;
-        output = operation(output, input)?;
+        output = operation(output, input, device)?;
     }
 
     Ok(vec![output])
 }
 
-fn add_pair(left: Value, right: Value) -> Result<Value> {
+fn add_pair(left: Value, right: Value, device: &Device) -> Result<Value> {
+    numeric_pair(left, right, VariadicOp::Add, "Sum/Mean", device)
+}
+
+fn max_pair(left: Value, right: Value, device: &Device) -> Result<Value> {
+    numeric_pair(left, right, VariadicOp::Max, "Max", device)
+}
+
+fn min_pair(left: Value, right: Value, device: &Device) -> Result<Value> {
+    numeric_pair(left, right, VariadicOp::Min, "Min", device)
+}
+
+#[derive(Debug, Clone, Copy)]
+enum VariadicOp {
+    Add,
+    Max,
+    Min,
+}
+
+fn numeric_pair(
+    left: Value,
+    right: Value,
+    operation: VariadicOp,
+    name: &str,
+    device: &Device,
+) -> Result<Value> {
     match (left, right) {
         (Value::Tensor(left), Value::Tensor(right)) => {
-            Ok(Value::Tensor(left.add_broadcast(right)?))
+            float_pair(left, right, operation).map(Value::Tensor)
         }
-        (Value::Int(left), Value::Int(right)) => Ok(Value::Int(left.add_broadcast(right)?)),
-        (Value::Scalar(left), Value::Scalar(right)) => add_scalars(left, right).map(Value::Scalar),
-        (left, right) => Err(pair_mismatch("Sum/Mean", left, right)),
+        (Value::Tensor(left), Value::Scalar(right)) => {
+            let dtype = left.dtype();
+            float_pair(
+                left,
+                DynTensor::full(&[1], right.as_f64(), device, dtype)?,
+                operation,
+            )
+            .map(Value::Tensor)
+        }
+        (Value::Scalar(left), Value::Tensor(right)) => {
+            let dtype = right.dtype();
+            float_pair(
+                DynTensor::full(&[1], left.as_f64(), device, dtype)?,
+                right,
+                operation,
+            )
+            .map(Value::Tensor)
+        }
+        (Value::Int(left), Value::Int(right)) => int_pair(left, right, operation).map(Value::Int),
+        (Value::Int(left), Value::Scalar(right)) => {
+            let dtype = left.dtype();
+            int_pair(
+                left,
+                binary::scalar_int_tensor(right, dtype, device)?,
+                operation,
+            )
+            .map(Value::Int)
+        }
+        (Value::Scalar(left), Value::Int(right)) => {
+            let dtype = right.dtype();
+            int_pair(
+                binary::scalar_int_tensor(left, dtype, device)?,
+                right,
+                operation,
+            )
+            .map(Value::Int)
+        }
+        (Value::Scalar(left), Value::Scalar(right)) => {
+            scalar_pair(left, right, operation).map(Value::Scalar)
+        }
+        (Value::Shape(left), Value::Shape(right)) => {
+            shape_pair(left, right, operation).map(Value::Shape)
+        }
+        (Value::Shape(left), Value::Int(right)) => {
+            int_pair(binary::shape_tensor(left, device)?, right, operation).map(Value::Int)
+        }
+        (Value::Int(left), Value::Shape(right)) => {
+            int_pair(left, binary::shape_tensor(right, device)?, operation).map(Value::Int)
+        }
+        (left, right) => Err(pair_mismatch(name, left, right)),
     }
 }
 
-fn max_pair(left: Value, right: Value) -> Result<Value> {
-    match (left, right) {
-        (Value::Tensor(left), Value::Tensor(right)) => {
-            Ok(Value::Tensor(left.max_broadcast(right)?))
-        }
-        (Value::Int(left), Value::Int(right)) => Ok(Value::Int(left.max_broadcast(right)?)),
-        (Value::Scalar(left), Value::Scalar(right)) => max_scalars(left, right).map(Value::Scalar),
-        (left, right) => Err(pair_mismatch("Max", left, right)),
+fn float_pair(left: DynTensor, right: DynTensor, operation: VariadicOp) -> Result<DynTensor> {
+    match operation {
+        VariadicOp::Add => left.add_broadcast(right),
+        VariadicOp::Max => left.max_broadcast(right),
+        VariadicOp::Min => left.min_broadcast(right),
     }
 }
 
-fn min_pair(left: Value, right: Value) -> Result<Value> {
-    match (left, right) {
-        (Value::Tensor(left), Value::Tensor(right)) => {
-            Ok(Value::Tensor(left.min_broadcast(right)?))
-        }
-        (Value::Int(left), Value::Int(right)) => Ok(Value::Int(left.min_broadcast(right)?)),
-        (Value::Scalar(left), Value::Scalar(right)) => min_scalars(left, right).map(Value::Scalar),
-        (left, right) => Err(pair_mismatch("Min", left, right)),
+fn int_pair(left: DynInt, right: DynInt, operation: VariadicOp) -> Result<DynInt> {
+    match operation {
+        VariadicOp::Add => left.add_broadcast(right),
+        VariadicOp::Max => left.max_broadcast(right),
+        VariadicOp::Min => left.min_broadcast(right),
     }
+}
+
+fn scalar_pair(left: Scalar, right: Scalar, operation: VariadicOp) -> Result<Scalar> {
+    match operation {
+        VariadicOp::Add => add_scalars(left, right),
+        VariadicOp::Max => max_scalars(left, right),
+        VariadicOp::Min => min_scalars(left, right),
+    }
+}
+
+fn shape_pair(left: Vec<i64>, right: Vec<i64>, operation: VariadicOp) -> Result<Vec<i64>> {
+    let output_len = left.len().max(right.len());
+    if left.len() != output_len && left.len() != 1 || right.len() != output_len && right.len() != 1
+    {
+        return Err(TynxError::Shape(format!(
+            "shape operands cannot broadcast lengths {} and {}",
+            left.len(),
+            right.len()
+        )));
+    }
+    Ok((0..output_len)
+        .map(|index| {
+            let left = left[if left.len() == 1 { 0 } else { index }];
+            let right = right[if right.len() == 1 { 0 } else { index }];
+            match operation {
+                VariadicOp::Add => left + right,
+                VariadicOp::Max => left.max(right),
+                VariadicOp::Min => left.min(right),
+            }
+        })
+        .collect())
 }
 
 fn add_scalars(left: Scalar, right: Scalar) -> Result<Scalar> {
@@ -239,5 +336,54 @@ mod tests {
             .unwrap();
 
         assert_eq!(floats(output), [3.0, 7.0, 5.0, 5.0]);
+    }
+
+    #[test]
+    fn takes_maximum_of_tensor_and_scalar() {
+        let node = MaxNodeBuilder::new("max")
+            .input_tensor("a", 1, DType::F32)
+            .input_scalar("floor", DType::F32)
+            .output_tensor("y", 1, DType::F32)
+            .build();
+        let device = Device::default();
+        let mut env = Env::new();
+        env.insert(
+            "a".into(),
+            Value::from_tensor_data(TensorData::new(vec![-2.0_f32, 1.0, 4.0], [3]), 1, &device)
+                .unwrap(),
+        );
+        env.insert("floor".into(), Value::Scalar(Scalar::F64(0.5)));
+
+        let output = max(&node, &env, &device).unwrap().pop().unwrap();
+
+        assert_eq!(floats(output), [0.5, 1.0, 4.0]);
+    }
+
+    #[test]
+    fn takes_maximum_of_shape_and_integer_tensor() {
+        let node = MaxNodeBuilder::new("max")
+            .input_shape("shape", 3)
+            .input_tensor("limit", 1, DType::I64)
+            .output_tensor("y", 1, DType::I64)
+            .build();
+        let device = Device::default();
+        let mut env = Env::new();
+        env.insert("shape".into(), Value::Shape(vec![20, 8, 3]));
+        env.insert(
+            "limit".into(),
+            Value::from_tensor_data(TensorData::new(vec![0_i64, 10, 5], [3]), 1, &device).unwrap(),
+        );
+
+        let output = max(&node, &env, &device)
+            .unwrap()
+            .pop()
+            .unwrap()
+            .into_int()
+            .unwrap();
+
+        assert_eq!(
+            output.into_data().iter::<i64>().collect::<Vec<_>>(),
+            [20, 10, 5]
+        );
     }
 }

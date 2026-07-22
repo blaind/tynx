@@ -149,12 +149,12 @@ fn shape_binary(left: Vec<i64>, right: Vec<i64>, operation: BinaryOp) -> Result<
         .collect()
 }
 
-fn shape_tensor(values: Vec<i64>, device: &Device) -> Result<DynInt> {
+pub(super) fn shape_tensor(values: Vec<i64>, device: &Device) -> Result<DynInt> {
     let length = values.len();
     DynInt::from_data(TensorData::new(values, [length]), 1, device)
 }
 
-fn scalar_int_tensor(scalar: Scalar, dtype: DType, device: &Device) -> Result<DynInt> {
+pub(super) fn scalar_int_tensor(scalar: Scalar, dtype: DType, device: &Device) -> Result<DynInt> {
     let data = if dtype.is_uint() {
         let value = match scalar {
             Scalar::U64(value) => value,
