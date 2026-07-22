@@ -14,7 +14,7 @@ pub(crate) fn clip_grad_norm_py(
     norm_type: f64,
 ) -> PyResult<PyTensor> {
     let parameters = collect_parameters(parameters, "clip_grad_norm_")?;
-    clip_grad_norm(&parameters, max_norm, norm_type)
+    clip_grad_norm(&parameters.slots, max_norm, norm_type)
         .map(PyTensor::from_inner)
         .map_err(to_python_error)
 }
@@ -23,7 +23,7 @@ pub(crate) fn clip_grad_norm_py(
 #[pyfunction(name = "clip_grad_value_")]
 pub(crate) fn clip_grad_value_py(parameters: &Bound<'_, PyAny>, clip_value: f64) -> PyResult<()> {
     let parameters = collect_parameters(parameters, "clip_grad_value_")?;
-    clip_grad_value(&parameters, clip_value)
+    clip_grad_value(&parameters.slots, clip_value)
         .map(|_| ())
         .map_err(to_python_error)
 }

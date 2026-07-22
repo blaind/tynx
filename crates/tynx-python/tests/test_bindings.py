@@ -409,6 +409,84 @@ def test_adam_trains_an_authored_python_linear_model() -> None:
     assert bias.item() == pytest.approx(1.0, abs=1e-3)
 
 
+def test_named_adam_state_dict_resumes_exactly_on_a_fresh_model() -> None:
+    def train_step(model: tynx.nn.Linear, optimizer: tynx.optim.Adam) -> None:
+        optimizer.zero_grad()
+        loss = tynx.nn.functional.mse_loss(model(tynx.Tensor([[2.0]])), tynx.Tensor([[5.0]]))
+        loss.backward()
+        optimizer.step()
+
+    model = tynx.nn.Linear(1, 1)
+    model.weight.copy_(tynx.Tensor([[1.5]]))
+    assert model.bias is not None
+    model.bias.copy_(tynx.Tensor([0.5]))
+    optimizer = tynx.optim.Adam(
+        model.named_parameters(),
+        lr=0.03,
+        betas=(0.8, 0.95),
+        eps=1e-6,
+        amsgrad=True,
+    )
+    train_step(model, optimizer)
+    model_state = model.state_dict()
+    optimizer_state = optimizer.state_dict()
+
+    assert optimizer_state["version"] == 1
+    assert optimizer_state["optimizer"] == "Adam"
+    assert optimizer_state["parameter_names"] == ["bias", "weight"]
+    native_state = optimizer_state["state"]
+    assert isinstance(native_state, dict)
+    assert sorted(native_state) == ["bias", "weight"]
+    weight_state = native_state["weight"]
+    assert isinstance(weight_state, dict)
+    assert isinstance(weight_state["exp_avg"], tynx.Tensor)
+    assert isinstance(weight_state["max_exp_avg_sq"], tynx.Tensor)
+
+    train_step(model, optimizer)
+    expected = model.state_dict()
+
+    resumed_model = tynx.nn.Linear(1, 1)
+    resumed_model.load_state_dict(model_state)
+    resumed = tynx.optim.Adam(resumed_model.named_parameters(), lr=0.9, amsgrad=True)
+    resumed.load_state_dict(optimizer_state)
+    assert resumed.lr == pytest.approx(0.03)
+    assert resumed.betas == pytest.approx((0.8, 0.95))
+    train_step(resumed_model, resumed)
+
+    for name, value in resumed_model.state_dict().items():
+        assert value.tolist() == expected[name].tolist()
+
+
+def test_optimizer_state_dict_requires_names_and_rejects_incompatible_payloads() -> None:
+    parameter = tynx.Parameter([2.0])
+    unnamed = tynx.optim.SGD([parameter], lr=0.1, momentum=0.9)
+    with pytest.raises(ValueError, match="named_parameters"):
+        unnamed.state_dict()
+    with pytest.raises(TypeError, match="cannot mix"):
+        tynx.optim.SGD([parameter, ("weight", parameter)], lr=0.1)
+
+    optimizer = tynx.optim.SGD([("weight", parameter)], lr=0.1, momentum=0.9)
+    parameter.backward()
+    optimizer.step()
+    state = optimizer.state_dict()
+    assert state["optimizer"] == "SGD"
+
+    destination = tynx.Parameter([parameter.item()])
+    wrong_name = tynx.optim.SGD([("other", destination)], lr=0.7, momentum=0.9)
+    with pytest.raises(ValueError, match="parameter names do not match"):
+        wrong_name.load_state_dict(state)
+    assert wrong_name.lr == pytest.approx(0.7)
+
+    adamw = tynx.optim.AdamW([("weight", destination)])
+    with pytest.raises(ValueError, match="cannot load SGD state into AdamW"):
+        adamw.load_state_dict(state)
+
+    invalid = dict(state)
+    invalid["version"] = 999
+    with pytest.raises(ValueError, match="unsupported optimizer state_dict version"):
+        optimizer.load_state_dict(invalid)
+
+
 def test_clip_grad_norm_returns_pre_clip_norm_and_deduplicates_parameters() -> None:
     parameter = tynx.Parameter([3.0, 4.0])
     (parameter * parameter).sum().backward()

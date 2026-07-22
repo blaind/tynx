@@ -376,6 +376,10 @@ impl PyTensor {
             TensorSource::Owned(_) => None,
         }
     }
+
+    pub(crate) fn detached_float_value(&self, operation: &str) -> PyResult<DynTensor> {
+        self.source.value().detach().float(operation)
+    }
 }
 
 #[pymethods]

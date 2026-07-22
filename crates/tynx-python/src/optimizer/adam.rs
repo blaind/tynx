@@ -1,9 +1,12 @@
 //! CPython Adam-family optimizers over stable Rust parameter slots.
 
-use pyo3::{prelude::*, types::PyAny};
-use tynx_train::{Adam, AdamConfig, AdamW, AdamWConfig, ParameterSlot};
+use pyo3::{
+    prelude::*,
+    types::{PyAny, PyDict},
+};
+use tynx_train::{Adam, AdamConfig, AdamStateKind, AdamW, AdamWConfig, ParameterSlot};
 
-use super::{collect_parameters, zero_grad};
+use super::{parameters::collect_parameters, require_named_parameters, state, zero_grad};
 use crate::to_python_error;
 
 /// Adam with coupled L2 weight decay over an explicit parameter list.
@@ -11,6 +14,7 @@ use crate::to_python_error;
 pub(crate) struct PyAdam {
     inner: Adam,
     parameters: Vec<ParameterSlot>,
+    named_parameters: Option<tynx_train::ParameterStore>,
 }
 
 #[pymethods]
@@ -32,14 +36,18 @@ impl PyAdam {
         weight_decay: f64,
         amsgrad: bool,
     ) -> PyResult<Self> {
-        let parameters = collect_parameters(parameters, "Adam")?;
+        let collected = collect_parameters(parameters, "Adam")?;
         let config = AdamConfig::new(lr)
             .with_betas(betas.0, betas.1)
             .with_epsilon(eps)
             .with_weight_decay(weight_decay)
             .with_amsgrad(amsgrad);
         let inner = Adam::with_config(config).map_err(to_python_error)?;
-        Ok(Self { inner, parameters })
+        Ok(Self {
+            inner,
+            parameters: collected.slots,
+            named_parameters: collected.named,
+        })
     }
 
     /// Clear every managed parameter's persistent gradient.
@@ -52,6 +60,19 @@ impl PyAdam {
         self.inner
             .step_slots(&self.parameters)
             .map(|_| ())
+            .map_err(to_python_error)
+    }
+
+    fn state_dict(&self, py: Python<'_>) -> PyResult<Py<PyDict>> {
+        let parameters = require_named_parameters(&self.named_parameters, "Adam")?;
+        state::adam_to_python(py, &self.inner.state_dict(parameters))
+    }
+
+    fn load_state_dict(&mut self, state_dict: &Bound<'_, PyAny>) -> PyResult<()> {
+        let parameters = require_named_parameters(&self.named_parameters, "Adam")?;
+        let state_dict = state::adam_from_python(state_dict, AdamStateKind::Adam)?;
+        self.inner
+            .load_state_dict(parameters, &state_dict)
             .map_err(to_python_error)
     }
 
@@ -123,6 +144,7 @@ impl PyAdam {
 pub(crate) struct PyAdamW {
     inner: AdamW,
     parameters: Vec<ParameterSlot>,
+    named_parameters: Option<tynx_train::ParameterStore>,
 }
 
 #[pymethods]
@@ -144,14 +166,18 @@ impl PyAdamW {
         weight_decay: f64,
         amsgrad: bool,
     ) -> PyResult<Self> {
-        let parameters = collect_parameters(parameters, "AdamW")?;
+        let collected = collect_parameters(parameters, "AdamW")?;
         let config = AdamWConfig::new(lr)
             .with_betas(betas.0, betas.1)
             .with_epsilon(eps)
             .with_weight_decay(weight_decay)
             .with_amsgrad(amsgrad);
         let inner = AdamW::with_config(config).map_err(to_python_error)?;
-        Ok(Self { inner, parameters })
+        Ok(Self {
+            inner,
+            parameters: collected.slots,
+            named_parameters: collected.named,
+        })
     }
 
     /// Clear every managed parameter's persistent gradient.
@@ -164,6 +190,19 @@ impl PyAdamW {
         self.inner
             .step_slots(&self.parameters)
             .map(|_| ())
+            .map_err(to_python_error)
+    }
+
+    fn state_dict(&self, py: Python<'_>) -> PyResult<Py<PyDict>> {
+        let parameters = require_named_parameters(&self.named_parameters, "AdamW")?;
+        state::adam_to_python(py, &self.inner.state_dict(parameters))
+    }
+
+    fn load_state_dict(&mut self, state_dict: &Bound<'_, PyAny>) -> PyResult<()> {
+        let parameters = require_named_parameters(&self.named_parameters, "AdamW")?;
+        let state_dict = state::adam_from_python(state_dict, AdamStateKind::AdamW)?;
+        self.inner
+            .load_state_dict(parameters, &state_dict)
             .map_err(to_python_error)
     }
 

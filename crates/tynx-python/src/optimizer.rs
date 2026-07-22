@@ -1,15 +1,18 @@
 //! CPython optimizer projections over stable Rust parameter slots.
 
 mod adam;
+mod parameters;
+mod state;
 
 use pyo3::{
-    exceptions::{PyTypeError, PyValueError},
+    exceptions::PyValueError,
     prelude::*,
-    types::{PyAny, PyAnyMethods},
+    types::{PyAny, PyDict},
 };
-use tynx_train::{ParameterSlot, Sgd, SgdConfig};
+use tynx_train::{ParameterSlot, ParameterStore, Sgd, SgdConfig};
 
-use crate::{tensor::PyTensor, to_python_error};
+use crate::to_python_error;
+pub(crate) use parameters::collect_parameters;
 
 pub(crate) use adam::{PyAdam, PyAdamW};
 
@@ -18,6 +21,7 @@ pub(crate) use adam::{PyAdam, PyAdamW};
 pub(crate) struct PySgd {
     inner: Sgd,
     parameters: Vec<ParameterSlot>,
+    named_parameters: Option<ParameterStore>,
 }
 
 #[pymethods]
@@ -32,14 +36,18 @@ impl PySgd {
         weight_decay: f64,
         nesterov: bool,
     ) -> PyResult<Self> {
-        let parameters = collect_parameters(parameters, "SGD")?;
+        let collected = collect_parameters(parameters, "SGD")?;
         let config = SgdConfig::new(lr)
             .with_momentum(momentum)
             .with_dampening(dampening)
             .with_weight_decay(weight_decay)
             .with_nesterov(nesterov);
         let inner = Sgd::with_config(config).map_err(to_python_error)?;
-        Ok(Self { inner, parameters })
+        Ok(Self {
+            inner,
+            parameters: collected.slots,
+            named_parameters: collected.named,
+        })
     }
 
     /// Clear every managed parameter's persistent gradient.
@@ -52,6 +60,21 @@ impl PySgd {
         self.inner
             .step_slots(&self.parameters)
             .map(|_| ())
+            .map_err(to_python_error)
+    }
+
+    /// Return a portable optimizer dictionary when constructed from named parameters.
+    fn state_dict(&self, py: Python<'_>) -> PyResult<Py<PyDict>> {
+        let parameters = require_named_parameters(&self.named_parameters, "SGD")?;
+        state::sgd_to_python(py, &self.inner.state_dict(parameters))
+    }
+
+    /// Restore a portable optimizer dictionary by stable parameter name.
+    fn load_state_dict(&mut self, state_dict: &Bound<'_, PyAny>) -> PyResult<()> {
+        let parameters = require_named_parameters(&self.named_parameters, "SGD")?;
+        let state_dict = state::sgd_from_python(state_dict)?;
+        self.inner
+            .load_state_dict(parameters, &state_dict)
             .map_err(to_python_error)
     }
 
@@ -102,47 +125,19 @@ impl PySgd {
     }
 }
 
-pub(crate) fn collect_parameters(
-    parameters: &Bound<'_, PyAny>,
-    optimizer_name: &str,
-) -> PyResult<Vec<ParameterSlot>> {
-    let iterator = parameters.try_iter().map_err(|_| {
-        PyTypeError::new_err(format!(
-            "{optimizer_name} parameters must be an iterable of Parameter objects"
-        ))
-    })?;
-    let mut slots: Vec<ParameterSlot> = Vec::new();
-    for item in iterator {
-        let item = item?;
-        let tensor = item.extract::<PyRef<'_, PyTensor>>().map_err(|_| {
-            PyTypeError::new_err(format!(
-                "{optimizer_name} parameters must contain only Parameter objects"
-            ))
-        })?;
-        let slot = tensor.parameter_slot().ok_or_else(|| {
-            PyTypeError::new_err(format!(
-                "{optimizer_name} parameters must contain only Parameter objects"
-            ))
-        })?;
-        if !slot.contract().trainable() {
-            return Err(PyTypeError::new_err(format!(
-                "{optimizer_name} parameters must contain only Parameter objects"
-            )));
-        }
-        if !slots.iter().any(|existing| existing.id() == slot.id()) {
-            slots.push(slot);
-        }
-    }
-    if slots.is_empty() {
-        return Err(PyValueError::new_err(format!(
-            "{optimizer_name} requires at least one Parameter"
-        )));
-    }
-    Ok(slots)
-}
-
 fn zero_grad(parameters: &[ParameterSlot]) {
     for parameter in parameters {
         parameter.zero_grad();
     }
+}
+
+fn require_named_parameters<'a>(
+    parameters: &'a Option<ParameterStore>,
+    optimizer_name: &str,
+) -> PyResult<&'a ParameterStore> {
+    parameters.as_ref().ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "{optimizer_name}.state_dict() requires construction from model.named_parameters()"
+        ))
+    })
 }
