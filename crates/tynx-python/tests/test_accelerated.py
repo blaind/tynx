@@ -4,6 +4,7 @@ import gc
 import math
 import os
 from pathlib import Path
+from typing import cast
 
 import pytest
 import tynx
@@ -47,8 +48,8 @@ def test_accelerated_multidimensional_extrema_avoid_i64_mask_reductions() -> Non
     assert value.argmin(dim=1).tolist() == [1, 2]
 
     with_nan = tynx.Tensor([[1.0, float("nan"), 3.0], [4.0, 5.0, 6.0]])
-    maxima = with_nan.max(dim=1).tolist()
-    minima = with_nan.min(dim=1).tolist()
+    maxima = cast(list[float], with_nan.max(dim=1).tolist())
+    minima = cast(list[float], with_nan.min(dim=1).tolist())
     assert math.isnan(maxima[0])
     assert maxima[1] == pytest.approx(6.0)
     assert math.isnan(minima[0])
