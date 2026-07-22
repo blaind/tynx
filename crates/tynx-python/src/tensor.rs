@@ -609,6 +609,9 @@ impl PyTensor {
     }
 
     pub(crate) fn tensor_from_python(data: &Bound<'_, PyAny>) -> PyResult<DynTensor> {
+        if let Ok(tensor) = data.extract::<PyRef<'_, Self>>() {
+            return tensor.detached_float_value("Parameter/Buffer construction");
+        }
         let device = Device::autodiff(tynx_core::default_device());
         TensorValue::float_from_python(data, &device)
     }

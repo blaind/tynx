@@ -11,7 +11,7 @@ use burn::tensor::{
     activation,
     module::{
         adaptive_avg_pool2d as burn_adaptive_avg_pool2d, avg_pool2d as burn_avg_pool2d,
-        conv2d as burn_conv2d, max_pool2d as burn_max_pool2d,
+        conv2d as burn_conv2d, embedding as burn_embedding, max_pool2d as burn_max_pool2d,
     },
     ops::ConvOptions,
 };
@@ -1196,6 +1196,61 @@ impl DynTensor {
             Self::R4(input) => Ok(Self::R4(burn_adaptive_avg_pool2d(input, output_size))),
             _ => unreachable!("pooling rank was validated before dispatch"),
         }
+    }
+
+    /// Select embedding rows with repeated-index gradient accumulation.
+    #[cfg(feature = "training")]
+    pub fn embedding(self, indices: DynInt, padding_idx: Option<usize>) -> Result<Self> {
+        let weight_shape = self.dims();
+        if weight_shape.len() != 2 {
+            return Err(TynxError::Shape(format!(
+                "embedding weight must have rank 2, got {weight_shape:?}"
+            )));
+        }
+        if indices.dtype() != DType::I64 {
+            return Err(TynxError::TypeMismatch(format!(
+                "embedding indices must use I64 storage, got {:?}",
+                indices.dtype()
+            )));
+        }
+        if indices.rank() == MAX_RANK {
+            return Err(rank_overflow(MAX_RANK + 1));
+        }
+        if self.device() != indices.device() {
+            return Err(TynxError::Shape(
+                "embedding weight and indices must be on the same device".to_string(),
+            ));
+        }
+        let embeddings = weight_shape[0];
+        let features = weight_shape[1];
+        let weight = if let Some(padding_idx) = padding_idx {
+            if padding_idx >= embeddings {
+                return Err(TynxError::Shape(format!(
+                    "embedding padding_idx {padding_idx} is outside {embeddings} rows"
+                )));
+            }
+            let mask = DynInt::arange(0, embeddings as i64, 1, &self.device(), DType::I64)?
+                .equal_scalar(padding_idx as i64)
+                .logical_not()
+                .to_float(self.dtype())
+                .reshape(vec![embeddings, 1])?;
+            let inverse = mask.clone().full_like(1.0).sub_broadcast(mask.clone())?;
+            self.clone()
+                .mul_broadcast(mask)?
+                .add_broadcast(self.detach().mul_broadcast(inverse)?)?
+        } else {
+            self
+        };
+        let index_shape = indices.dims();
+        let num_indices = index_shape.iter().product();
+        let indices = indices.reshape(vec![1, num_indices])?;
+        let (Self::R2(weight), DynInt::R2(indices)) = (weight, indices) else {
+            unreachable!("embedding inputs were reshaped and validated before dispatch")
+        };
+        let output = Self::R3(burn_embedding(weight, indices));
+        let mut output_shape = index_shape;
+        output_shape.push(features);
+        output.reshape(output_shape)
     }
 
     /// Create a random floating-point tensor with an explicit shape and dtype.

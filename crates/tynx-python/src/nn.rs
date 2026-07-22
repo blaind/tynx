@@ -1,6 +1,7 @@
 //! Native differentiable neural-network operations used by Python layers and functionals.
 
-use pyo3::prelude::*;
+use pyo3::{exceptions::PyTypeError, prelude::*};
+use tynx_core::Value;
 
 use crate::{grad_mode::is_grad_enabled, tensor::PyTensor, to_python_error};
 
@@ -115,6 +116,34 @@ pub(crate) fn adaptive_avg_pool2d_py(
         .map_err(to_python_error)?;
     Ok(if tracking {
         PyTensor::from_operation(output, &[&input])
+    } else {
+        PyTensor::from_inner(output)
+    })
+}
+
+#[pyfunction(name = "_embedding")]
+pub(crate) fn embedding_py(
+    input: PyRef<'_, PyTensor>,
+    weight: PyRef<'_, PyTensor>,
+    padding_idx: Option<usize>,
+) -> PyResult<PyTensor> {
+    input.capture_unsupported("embedding")?;
+    weight.capture_unsupported("embedding")?;
+    let indices = match input.detached_runtime_value() {
+        Value::Int(indices) => indices,
+        value => {
+            return Err(PyTypeError::new_err(format!(
+                "embedding input must be an int64 Tensor, got {value:?}"
+            )));
+        }
+    };
+    let tracking = is_grad_enabled();
+    let output = weight
+        .operation_float_value(tracking, "embedding")?
+        .embedding(indices, padding_idx)
+        .map_err(to_python_error)?;
+    Ok(if tracking {
+        PyTensor::from_operation(output, &[&weight])
     } else {
         PyTensor::from_inner(output)
     })

@@ -8,6 +8,7 @@ from .linear import Linear
 from .module import Layer, Module
 from .normalization import BatchNorm, BatchNorm1d, BatchNorm2d, LayerNorm
 from .pooling import AdaptiveAvgPool2d, AvgPool2d, MaxPool2d
+from .sparse import Embedding
 
 __all__ = [
     "AdaptiveAvgPool2d",
@@ -17,6 +18,7 @@ __all__ = [
     "BatchNorm2d",
     "Conv2d",
     "Dropout",
+    "Embedding",
     "Layer",
     "LayerNorm",
     "Linear",

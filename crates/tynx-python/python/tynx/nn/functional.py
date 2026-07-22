@@ -7,6 +7,7 @@ from .._tynx import (
     _adaptive_avg_pool2d,
     _avg_pool2d,
     _conv2d,
+    _embedding,
     _max_pool2d,
     maximum,
 )
@@ -86,6 +87,34 @@ def adaptive_avg_pool2d(input: Tensor, output_size: IntOrPair) -> Tensor:
     return _adaptive_avg_pool2d(input, _pair(output_size, "output_size", positive=True))
 
 
+def embedding(
+    input: Tensor,
+    weight: Tensor,
+    padding_idx: Optional[int] = None,
+    max_norm: Optional[float] = None,
+    norm_type: float = 2.0,
+    scale_grad_by_freq: bool = False,
+    sparse: bool = False,
+) -> Tensor:
+    """Select rows from a dense embedding table."""
+    if max_norm is not None:
+        raise NotImplementedError("embedding max_norm is not supported")
+    if norm_type != 2.0:
+        raise NotImplementedError("embedding norm_type is only meaningful with max_norm")
+    if scale_grad_by_freq:
+        raise NotImplementedError("embedding scale_grad_by_freq=True is not supported")
+    if sparse:
+        raise NotImplementedError("embedding sparse gradients are not supported")
+    if input.dtype != "int64":
+        raise TypeError(f"embedding input must be int64, got {input.dtype}")
+    if weight.dtype != "float32" or weight.ndim != 2:
+        raise ValueError(
+            f"embedding weight must be rank-2 float32, got {weight.dtype} {weight.shape}"
+        )
+    padding_idx = _padding_index(padding_idx, weight.shape[0])
+    return _embedding(input, weight, padding_idx)
+
+
 def mse_loss(input: Tensor, target: Tensor, reduction: Reduction = "mean") -> Tensor:
     """Return elementwise, mean, or summed squared error for exactly matching shapes."""
     _require_same_shape(input, target, "mse_loss")
@@ -158,12 +187,21 @@ def _bool(value: bool, name: str) -> bool:
     return value
 
 
+def _padding_index(value: Optional[int], rows: int) -> Optional[int]:
+    if value is None:
+        return None
+    if type(value) is not int or not -rows <= value < rows:
+        raise ValueError(f"padding_idx must be within [-{rows}, {rows - 1}], got {value!r}")
+    return value + rows if value < 0 else value
+
+
 __all__ = [
     "adaptive_avg_pool2d",
     "avg_pool2d",
     "binary_cross_entropy_with_logits",
     "conv2d",
     "cross_entropy",
+    "embedding",
     "max_pool2d",
     "mse_loss",
 ]
