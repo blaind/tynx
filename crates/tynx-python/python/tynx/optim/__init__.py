@@ -8,10 +8,11 @@ from typing import TypeVar as _TypeVar
 from typing import Union as _Union
 from typing import cast as _cast
 
-from ._tynx import SGD as _NativeSGD
-from ._tynx import Adam as _NativeAdam
-from ._tynx import AdamW as _NativeAdamW
-from ._tynx import Parameter as _Parameter
+from .._tynx import SGD as _NativeSGD
+from .._tynx import Adam as _NativeAdam
+from .._tynx import AdamW as _NativeAdamW
+from .._tynx import Parameter as _Parameter
+from . import lr_scheduler
 
 OptimizerParameter = _Union[_Parameter, tuple[str, _Parameter]]
 OptimizerParameterGroup = _Mapping[str, object]
@@ -419,4 +420,11 @@ class AdamW(_AdamBase[_NativeAdamW]):
             synced.update(options)
 
 
-__all__ = ["SGD", "Adam", "AdamW", "OptimizerParameter", "OptimizerParameterGroup"]
+__all__ = [
+    "SGD",
+    "Adam",
+    "AdamW",
+    "OptimizerParameter",
+    "OptimizerParameterGroup",
+    "lr_scheduler",
+]
