@@ -104,6 +104,50 @@ def test_tensor_unary_gradients_match_finite_differences(
     assert value.grad.item() == pytest.approx(numerical, rel=2e-3, abs=2e-3)
 
 
+def test_tensor_shape_operations() -> None:
+    value = tynx.Tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+
+    assert value.reshape(3, 2).shape == (3, 2)
+    assert value.reshape((3, 2)).tolist() == [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]
+    assert value.reshape(-1, 2).shape == (3, 2)
+    assert value.flatten().tolist() == pytest.approx([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+    volume = value.reshape(1, 2, 3)
+    assert volume.flatten(1).shape == (1, 6)
+    assert value.transpose(0, 1).tolist() == [[1.0, 4.0], [2.0, 5.0], [3.0, 6.0]]
+    assert value.permute(-1, 0).shape == (3, 2)
+    assert value.unsqueeze(0).shape == (1, 2, 3)
+    assert value.unsqueeze(-1).shape == (2, 3, 1)
+    assert value.unsqueeze(1).squeeze(1).shape == value.shape
+    assert value.squeeze().shape == value.shape
+    assert tynx.Tensor([[[1.0]]]).squeeze().shape == (1,)
+
+
+def test_tensor_shape_operations_preserve_gradients() -> None:
+    value = tynx.Tensor([[1.0, 2.0], [3.0, 4.0]], requires_grad=True)
+
+    value.transpose(0, 1).reshape(4).sum().backward()
+
+    assert value.grad is not None
+    assert value.grad.tolist() == [[1.0, 1.0], [1.0, 1.0]]
+
+
+def test_tensor_shape_operations_validate_arguments() -> None:
+    value = tynx.Tensor([[1.0, 2.0], [3.0, 4.0]])
+
+    with pytest.raises(ValueError, match="at most one"):
+        value.reshape(-1, -1)
+    with pytest.raises(ValueError, match="cannot reshape"):
+        value.reshape(3, 2)
+    with pytest.raises(ValueError, match="appears more than once"):
+        value.permute(0, 0)
+    with pytest.raises(ValueError, match="cannot come after"):
+        value.flatten(1, 0)
+    with pytest.raises(ValueError, match="out of range"):
+        value.unsqueeze(3)
+    with pytest.raises(TypeError, match="integers"):
+        value.transpose(True, 1)
+
+
 def test_tensor_rejects_ragged_or_empty_data() -> None:
     with pytest.raises(ValueError, match="ragged"):
         tynx.Tensor([[1.0], [2.0, 3.0]])

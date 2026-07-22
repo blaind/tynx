@@ -1,6 +1,7 @@
 //! Eager CPython tensor projection over the binding-neutral Rust tensor facade.
 
 mod reduction;
+mod shape;
 
 use std::{
     cell::RefCell,
@@ -405,6 +406,59 @@ impl PyTensor {
     /// Apply the square root element-wise.
     fn sqrt(&self) -> PyResult<Self> {
         self.unary(|input| Ok(input.sqrt()))
+    }
+
+    /// Return a tensor with the same values and a new shape.
+    #[pyo3(signature = (*shape))]
+    fn reshape(&self, shape: &Bound<'_, PyTuple>) -> PyResult<Self> {
+        let output = shape::reshape(shape, self.numel())?;
+        self.unary(move |input| input.reshape(output))
+    }
+
+    /// Flatten a contiguous range of dimensions.
+    #[pyo3(signature = (start_dim=0, end_dim=-1))]
+    fn flatten(&self, start_dim: isize, end_dim: isize) -> PyResult<Self> {
+        let input_shape = self.source.value().dims();
+        let start = shape::axis_value(start_dim, input_shape.len(), false, "flatten start_dim")?;
+        let end = shape::axis_value(end_dim, input_shape.len(), false, "flatten end_dim")?;
+        let output = shape::flatten(&input_shape, start, end)?;
+        self.unary(move |input| input.reshape(output))
+    }
+
+    /// Swap two tensor dimensions.
+    fn transpose(&self, dim0: &Bound<'_, PyAny>, dim1: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let rank = self.ndim();
+        let dim0 = shape::axis(dim0, rank, false, "transpose")?;
+        let dim1 = shape::axis(dim1, rank, false, "transpose")?;
+        let mut axes = (0..rank).collect::<Vec<_>>();
+        axes.swap(dim0, dim1);
+        self.unary(move |input| input.permute(axes))
+    }
+
+    /// Reorder all tensor dimensions.
+    #[pyo3(signature = (*dims))]
+    fn permute(&self, dims: &Bound<'_, PyTuple>) -> PyResult<Self> {
+        let axes = shape::permutation(dims, self.ndim())?;
+        self.unary(move |input| input.permute(axes))
+    }
+
+    /// Remove singleton dimensions, or one selected singleton dimension.
+    #[pyo3(signature = (dim=None))]
+    fn squeeze(&self, dim: Option<&Bound<'_, PyAny>>) -> PyResult<Self> {
+        let input_shape = self.source.value().dims();
+        let dim = dim
+            .map(|dim| shape::axis(dim, input_shape.len(), false, "squeeze"))
+            .transpose()?;
+        let output = shape::squeeze(&input_shape, dim);
+        self.unary(move |input| input.reshape(output))
+    }
+
+    /// Insert a singleton dimension.
+    fn unsqueeze(&self, dim: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let input_shape = self.source.value().dims();
+        let dim = shape::axis(dim, input_shape.len(), true, "unsqueeze")?;
+        let output = shape::unsqueeze(&input_shape, dim)?;
+        self.unary(move |input| input.reshape(output))
     }
 
     fn __add__(&self, other: &Bound<'_, PyAny>) -> PyResult<Self> {
