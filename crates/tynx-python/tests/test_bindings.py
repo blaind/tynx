@@ -273,6 +273,10 @@ def test_tensor_gather_rejects_invalid_indices_and_shapes() -> None:
         values.gather(1, tynx.Tensor([[0], [1], [2]], dtype="int64"))
     with pytest.raises(ValueError, match="dimension 2 is out of range"):
         values.gather(2, tynx.Tensor([[0], [0]], dtype="int64"))
+    with pytest.raises(IndexError, match=r"index 5.*dimension 1.*size 3"):
+        values.gather(1, tynx.Tensor([[5], [0]], dtype="int64"))
+    with pytest.raises(IndexError, match=r"index -1.*dimension 1.*size 3"):
+        values.gather(1, tynx.Tensor([[-1], [0]], dtype="int64"))
 
 
 def test_tensor_value_min_max_reductions_follow_shape_policy() -> None:

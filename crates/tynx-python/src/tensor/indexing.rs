@@ -1,7 +1,7 @@
 //! Typed eager indexing validation and dispatch.
 
 use pyo3::{
-    exceptions::{PyTypeError, PyValueError},
+    exceptions::{PyIndexError, PyTypeError, PyValueError},
     prelude::*,
 };
 use tynx_core::DynInt;
@@ -37,6 +37,20 @@ pub(super) fn gather_indices(
                 "gather index size {index_size} exceeds input size {data_size} at dimension {axis}"
             )));
         }
+    }
+
+    let axis_size = i64::try_from(data_shape[dim]).map_err(|_| {
+        PyValueError::new_err("gather input dimension exceeds supported index range")
+    })?;
+    if let Some(index) = indices
+        .clone()
+        .into_data()
+        .iter::<i64>()
+        .find(|index| *index < 0 || *index >= axis_size)
+    {
+        return Err(PyIndexError::new_err(format!(
+            "gather index {index} is out of bounds for dimension {dim} with size {axis_size}"
+        )));
     }
 
     Ok(indices)
