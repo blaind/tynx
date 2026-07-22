@@ -7,6 +7,7 @@ import argparse
 import email
 import importlib.metadata
 import json
+import re
 import subprocess
 import zipfile
 from pathlib import Path
@@ -20,6 +21,8 @@ BUILD_PATHS = (
     b"/Users/runner",
     b"\\Users\\runneradmin",
 )
+MAX_MANYLINUX = (2, 28)
+MANYLINUX_TAG = re.compile(r"manylinux_(\d+)_(\d+)")
 
 
 def workspace_version() -> str:
@@ -70,6 +73,16 @@ def check_wheels(wheels: list[Path], expected: str, max_mib: int) -> None:
             raise SystemExit(
                 f"{wheel}: filename does not contain expected version {expected}"
             )
+        match = MANYLINUX_TAG.search(wheel.name)
+        if match is not None:
+            required_glibc = tuple(map(int, match.groups()))
+            if required_glibc > MAX_MANYLINUX:
+                required = ".".join(map(str, required_glibc))
+                maximum = ".".join(map(str, MAX_MANYLINUX))
+                raise SystemExit(
+                    f"{wheel}: requires glibc {required}; release wheels must support "
+                    f"glibc {maximum} or older"
+                )
 
         size = wheel.stat().st_size
         if size > max_bytes:
