@@ -1,7 +1,9 @@
 //! ONNX matrix multiplication execution.
 
-use burn::tensor::{DType, Device};
-use onnx_ir::node::{gemm::GemmNode, matmul::MatMulNode, matmulinteger::MatMulIntegerNode};
+use burn::tensor::{DType, Device, linalg::det as burn_det};
+use onnx_ir::node::{
+    det::DetNode, gemm::GemmNode, matmul::MatMulNode, matmulinteger::MatMulIntegerNode,
+};
 
 use super::{Env, resolve, shape};
 use crate::{DynInt, DynTensor, Result, Scalar, TynxError, Value};
@@ -10,6 +12,27 @@ pub(super) fn matmul(node: &MatMulNode, env: &Env, device: &Device) -> Result<Ve
     let left = resolve::at(env, &node.name, &node.inputs, 0, device)?;
     let right = resolve::at(env, &node.name, &node.inputs, 1, device)?;
     Ok(vec![matmul_values(left, right, device)?])
+}
+
+pub(super) fn det(node: &DetNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
+    let input = resolve::first(env, &node.name, &node.inputs, device)?.into_tensor()?;
+    let output = match input {
+        DynTensor::R1(_) => {
+            return Err(TynxError::Shape(
+                "Det requires a tensor with rank at least 2".to_string(),
+            ));
+        }
+        DynTensor::R2(tensor) => {
+            let [rows, columns] = tensor.dims();
+            let determinant = burn_det::<3, 2, 1>(tensor.reshape([1, rows, columns]));
+            Value::from_tensor_data(determinant.into_data(), 0, device)?
+        }
+        DynTensor::R3(tensor) => Value::Tensor(DynTensor::R1(burn_det::<3, 2, 1>(tensor))),
+        DynTensor::R4(tensor) => Value::Tensor(DynTensor::R2(burn_det::<4, 3, 2>(tensor))),
+        DynTensor::R5(tensor) => Value::Tensor(DynTensor::R3(burn_det::<5, 4, 3>(tensor))),
+        DynTensor::R6(tensor) => Value::Tensor(DynTensor::R4(burn_det::<6, 5, 4>(tensor))),
+    };
+    Ok(vec![output])
 }
 
 pub(super) fn gemm(node: &GemmNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
@@ -205,7 +228,10 @@ fn finish_matmul(
 #[cfg(test)]
 mod tests {
     use burn::tensor::TensorData;
-    use onnx_ir::{DType, node::matmul::MatMulNodeBuilder};
+    use onnx_ir::{
+        DType,
+        node::{det::DetNodeBuilder, matmul::MatMulNodeBuilder},
+    };
 
     use super::*;
 
@@ -248,5 +274,31 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(output, [58.0, 64.0, 139.0, 154.0]);
+    }
+
+    #[test]
+    fn computes_a_matrix_determinant() {
+        let node = DetNodeBuilder::new("det")
+            .input_tensor("x", 2, DType::F32)
+            .output_scalar("y", DType::F32)
+            .build();
+        let device = Device::default();
+        let mut env = Env::new();
+        env.insert(
+            "x".into(),
+            Value::from_tensor_data(
+                TensorData::new(vec![1.0_f32, 2.0, 3.0, 4.0], [2, 2]),
+                2,
+                &device,
+            )
+            .unwrap(),
+        );
+
+        let output = det(&node, &env, &device).unwrap();
+
+        assert!(matches!(
+            output.as_slice(),
+            [Value::Scalar(Scalar::F64(value))] if (*value + 2.0).abs() < 1e-6
+        ));
     }
 }

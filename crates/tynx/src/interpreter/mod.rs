@@ -105,6 +105,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::CumSum(node) => cumsum::cumsum(node, env, device),
         Node::DequantizeLinear(node) => quantization::dequantize_linear(node, env, device),
         Node::DepthToSpace(node) => spatial_layout::depth_to_space(node, env, device),
+        Node::Det(node) => matrix::det(node, env, device),
         Node::Div(node) => binary::div(node, env, device),
         Node::Dropout(node) => dropout::dropout(node, env, device),
         Node::Elu(node) => unary::elu(node, env, device),
