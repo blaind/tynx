@@ -81,16 +81,75 @@ impl TensorSource {
 #[derive(Debug, Clone)]
 enum GradTarget {
     Tensor(Weak<LeafState>),
-    Parameter(ParameterSlot),
+    Parameter {
+        slot: ParameterSlot,
+        generation: Option<u64>,
+        generation_conflict: bool,
+    },
 }
 
 impl GradTarget {
+    fn validate_generation(&self) -> PyResult<()> {
+        if let Self::Parameter {
+            slot,
+            generation_conflict: true,
+            ..
+        } = self
+        {
+            return Err(PyRuntimeError::new_err(format!(
+                "parameter {} was used at multiple value generations in one graph; rebuild the graph before backward()",
+                slot.name()
+                    .unwrap_or_else(|| format!("#{}", slot.id().get()))
+            )));
+        }
+        if let Self::Parameter {
+            slot,
+            generation: Some(expected),
+            ..
+        } = self
+            && *expected != slot.value_generation()
+        {
+            return Err(PyRuntimeError::new_err(format!(
+                "parameter {} was modified after the forward pass; rebuild the graph before backward()",
+                slot.name()
+                    .unwrap_or_else(|| format!("#{}", slot.id().get()))
+            )));
+        }
+        Ok(())
+    }
+
     fn same_identity(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Tensor(left), Self::Tensor(right)) => left.ptr_eq(right),
-            (Self::Parameter(left), Self::Parameter(right)) => left.id() == right.id(),
+            (Self::Parameter { slot: left, .. }, Self::Parameter { slot: right, .. }) => {
+                left.id() == right.id()
+            }
             _ => false,
         }
+    }
+
+    fn merge_same_identity(&mut self, other: &Self) -> bool {
+        if !self.same_identity(other) {
+            return false;
+        }
+        if let (
+            Self::Parameter {
+                generation: left,
+                generation_conflict,
+                ..
+            },
+            Self::Parameter {
+                slot,
+                generation: right,
+                generation_conflict: right_conflict,
+            },
+        ) = (self, other)
+        {
+            let left = left.get_or_insert_with(|| slot.value_generation());
+            let right = right.unwrap_or_else(|| slot.value_generation());
+            *generation_conflict |= *right_conflict || *left != right;
+        }
+        true
     }
 
     fn accumulate(&self, gradients: &Gradients) -> tynx_core::Result<()> {
@@ -100,11 +159,44 @@ impl GradTarget {
                     leaf.accumulate(gradients)?;
                 }
             }
-            Self::Parameter(slot) => {
+            Self::Parameter {
+                slot,
+                generation,
+                generation_conflict,
+            } => {
+                if *generation_conflict {
+                    return Err(tynx_core::TynxError::TypeMismatch(format!(
+                        "parameter {} was used at multiple value generations in one graph; rebuild the graph before backward()",
+                        slot.name()
+                            .unwrap_or_else(|| format!("#{}", slot.id().get()))
+                    )));
+                }
+                if generation.is_some_and(|expected| expected != slot.value_generation()) {
+                    return Err(tynx_core::TynxError::TypeMismatch(format!(
+                        "parameter {} was modified after the forward pass; rebuild the graph before backward()",
+                        slot.name()
+                            .unwrap_or_else(|| format!("#{}", slot.id().get()))
+                    )));
+                }
                 slot.accumulate_grad(gradients)?;
             }
         }
         Ok(())
+    }
+
+    fn for_operation(&self) -> Self {
+        match self {
+            Self::Tensor(leaf) => Self::Tensor(leaf.clone()),
+            Self::Parameter {
+                slot,
+                generation,
+                generation_conflict,
+            } => Self::Parameter {
+                slot: slot.clone(),
+                generation: Some(generation.unwrap_or_else(|| slot.value_generation())),
+                generation_conflict: *generation_conflict,
+            },
+        }
     }
 
     fn mark_tape_consumed(&self) {
@@ -195,7 +287,11 @@ impl PyTensor {
 
     pub(crate) fn from_parameter(slot: ParameterSlot) -> Self {
         let targets = if slot.contract().trainable() {
-            vec![GradTarget::Parameter(slot.clone())]
+            vec![GradTarget::Parameter {
+                slot: slot.clone(),
+                generation: None,
+                generation_conflict: false,
+            }]
         } else {
             Vec::new()
         };
@@ -213,11 +309,13 @@ impl PyTensor {
         let mut backward_graphs: Vec<Rc<BackwardGraph>> = Vec::new();
         for source in sources {
             for target in &source.targets {
-                if !targets
-                    .iter()
-                    .any(|existing| existing.same_identity(target))
+                if let Some(existing) = targets
+                    .iter_mut()
+                    .find(|existing| existing.same_identity(target))
                 {
-                    targets.push(target.clone());
+                    existing.merge_same_identity(&target.for_operation());
+                } else {
+                    targets.push(target.for_operation());
                 }
             }
             for graph in &source.backward_graphs {
@@ -246,12 +344,19 @@ impl PyTensor {
     ) -> Self {
         let mut output = Self::from_operation(inner, sources);
         for parameter in parameters {
-            let target = GradTarget::Parameter(parameter);
-            if !output
+            let generation = parameter.value_generation();
+            let target = GradTarget::Parameter {
+                slot: parameter,
+                generation: Some(generation),
+                generation_conflict: false,
+            };
+            if let Some(existing) = output
                 .targets
-                .iter()
-                .any(|existing| existing.same_identity(&target))
+                .iter_mut()
+                .find(|existing| existing.same_identity(&target))
             {
+                existing.merge_same_identity(&target);
+            } else {
                 output.targets.push(target);
             }
         }
@@ -767,7 +872,7 @@ impl PyTensor {
                 .targets
                 .iter()
                 .filter_map(|target| match target {
-                    GradTarget::Parameter(parameter) => Some(parameter.clone()),
+                    GradTarget::Parameter { slot, .. } => Some(slot.clone()),
                     GradTarget::Tensor(_) => None,
                 })
                 .collect();
@@ -792,6 +897,9 @@ impl PyTensor {
             return Err(PyValueError::new_err(
                 "backward() graph was already freed by a previous backward() call",
             ));
+        }
+        for target in &self.targets {
+            target.validate_generation()?;
         }
         let output = self.operation_input(true, "backward")?;
         let root = match gradient {
