@@ -43,8 +43,8 @@ impl CaptureState {
     }
 
     fn input(&self, tensor: &PyTensor) -> PyResult<ValueId> {
-        let value = tensor.detached_float_value("compile input")?;
-        self.with_builder(|builder| Ok(builder.input(&value)))
+        let value = tensor.detached_runtime_value();
+        self.with_builder(|builder| builder.input_value(&value).map_err(to_python_error))
     }
 
     fn parameter(&self, slot: ParameterSlot) -> PyResult<ValueId> {
@@ -64,6 +64,10 @@ impl CaptureState {
 
     fn binary(&self, op: BinaryOp, left: ValueId, right: ValueId) -> PyResult<ValueId> {
         self.with_builder(|builder| builder.binary(op, left, right).map_err(to_python_error))
+    }
+
+    fn gather(&self, input: ValueId, dim: usize, indices: ValueId) -> PyResult<ValueId> {
+        self.with_builder(|builder| builder.gather(input, dim, indices).map_err(to_python_error))
     }
 
     fn zero_grad(&self, parameters: Vec<ParameterSlot>) -> PyResult<()> {
@@ -267,6 +271,36 @@ pub(crate) fn record_binary(
         .map(|value| Some(TraceValue { state, value }))
 }
 
+pub(crate) fn record_gather(
+    input: &PyTensor,
+    dim: usize,
+    indices: &PyTensor,
+) -> PyResult<Option<TraceValue>> {
+    let input_trace = trace_for(input)?;
+    let index_trace = trace_for(indices)?;
+    let state = match (&input_trace, &index_trace) {
+        (None, None) => return Ok(None),
+        (Some(trace), None) | (None, Some(trace)) => {
+            trace.state.unsupported(
+                "a closed-over Tensor value; pass changing tensors as function inputs",
+            )?;
+            return Ok(None);
+        }
+        (Some(input), Some(index)) if Rc::ptr_eq(&input.state, &index.state) => input.state.clone(),
+        (Some(input), Some(_)) => {
+            input
+                .state
+                .unsupported("tensors from different capture sessions")?;
+            return Ok(None);
+        }
+    };
+    let input = input_trace.expect("matched as a traced value").value;
+    let indices = index_trace.expect("matched as a traced value").value;
+    state
+        .gather(input, dim, indices)
+        .map(|value| Some(TraceValue { state, value }))
+}
+
 /// Native first-call trace session used by the public Python decorator.
 #[pyclass(name = "_CaptureSession", unsendable)]
 pub(crate) struct PyCaptureSession {
@@ -372,9 +406,9 @@ impl PyCapturedGraph {
         let inputs = Self::inputs(inputs, "captured graph matching")?;
         let values = inputs
             .iter()
-            .map(|input| input.detached_float_value("captured graph matching"))
-            .collect::<PyResult<Vec<_>>>()?;
-        Ok(self.graph.validate_inputs(&values).is_ok())
+            .map(|input| input.detached_runtime_value())
+            .collect::<Vec<_>>();
+        Ok(self.graph.validate_value_inputs(&values).is_ok())
     }
 
     #[pyo3(signature = (*inputs))]
@@ -383,21 +417,25 @@ impl PyCapturedGraph {
         let tracking = is_grad_enabled();
         let values = inputs
             .iter()
-            .map(|input| input.operation_float_value(tracking, "captured graph replay"))
+            .map(|input| input.operation_runtime_value(tracking, "captured graph replay"))
             .collect::<PyResult<Vec<_>>>()?;
-        let outputs = self.graph.run(&values, tracking).map_err(to_python_error)?;
+        let outputs = self
+            .graph
+            .run_values(&values, tracking)
+            .map_err(to_python_error)?;
         let sources = inputs.iter().map(|input| &**input).collect::<Vec<_>>();
         let outputs = outputs
             .into_iter()
             .map(|output| {
-                let tensor = if tracking {
-                    PyTensor::from_imported_operation(
-                        output,
-                        &sources,
-                        self.parameters.iter().cloned(),
-                    )
-                } else {
-                    PyTensor::from_inner(output)
+                let tensor = match output {
+                    tynx_core::Value::Tensor(output) if tracking => {
+                        PyTensor::from_imported_operation(
+                            output,
+                            &sources,
+                            self.parameters.iter().cloned(),
+                        )
+                    }
+                    output => PyTensor::from_runtime_value(output)?,
                 };
                 Py::new(py, tensor)
             })

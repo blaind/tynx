@@ -6,7 +6,7 @@ use pyo3::{
     prelude::*,
     types::{PyAny, PyBool, PyList, PyListMethods, PyRange, PyTuple, PyTupleMethods},
 };
-use tynx_core::{Device, DynBool, DynInt, DynTensor, TensorData};
+use tynx_core::{Device, DynBool, DynInt, DynTensor, TensorData, Value};
 
 use crate::to_python_error;
 
@@ -18,6 +18,14 @@ pub(super) enum TensorValue {
 }
 
 impl TensorValue {
+    pub(super) fn into_runtime(self) -> Value {
+        match self {
+            Self::Float(value) => Value::Tensor(value),
+            Self::Int(value) => Value::Int(value),
+            Self::Bool(value) => Value::Bool(value),
+        }
+    }
+
     pub(super) fn from_python(
         data: &Bound<'_, PyAny>,
         dtype: Option<&str>,

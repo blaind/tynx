@@ -20,11 +20,13 @@ use pyo3::{
     types::{PyAny, PyTuple},
 };
 use tynx_capture::{BinaryOp, UnaryOp};
-use tynx_core::{Device, DynInt, DynTensor, Gradients};
+use tynx_core::{Device, DynInt, DynTensor, Gradients, Value};
 use tynx_train::ParameterSlot;
 
 use crate::{
-    capture::{TraceValue, record_backward, record_binary, record_unary, record_unsupported},
+    capture::{
+        TraceValue, record_backward, record_binary, record_gather, record_unary, record_unsupported,
+    },
     device::{PyDevice, raise_pending_device_error},
     grad_mode::is_grad_enabled,
     to_python_error,
@@ -422,11 +424,13 @@ impl PyTensor {
             TensorValue::Float(_) => {
                 let input = self.operation_input(tracking, "gather")?;
                 let inner = input.gather(dim, indices).map_err(to_python_error)?;
-                Ok(if tracking {
+                let mut output = if tracking {
                     Self::from_operation(inner, &[self])
                 } else {
                     Self::from_inner(inner)
-                })
+                };
+                output.trace = record_gather(self, dim, index)?;
+                Ok(output)
             }
             value => indexing::gather(value.detach(), dim, indices).map(Self::from_value),
         }
@@ -521,6 +525,32 @@ impl PyTensor {
 
     pub(crate) fn detached_float_value(&self, operation: &str) -> PyResult<DynTensor> {
         self.source.value().detach().float(operation)
+    }
+
+    pub(crate) fn detached_runtime_value(&self) -> Value {
+        self.source.value().detach().into_runtime()
+    }
+
+    pub(crate) fn operation_runtime_value(
+        &self,
+        tracking: bool,
+        operation: &str,
+    ) -> PyResult<Value> {
+        match self.source.value() {
+            TensorValue::Float(_) => self.operation_input(tracking, operation).map(Value::Tensor),
+            value => Ok(value.detach().into_runtime()),
+        }
+    }
+
+    pub(crate) fn from_runtime_value(value: Value) -> PyResult<Self> {
+        match value {
+            Value::Tensor(value) => Ok(Self::from_inner(value)),
+            Value::Int(value) => Ok(Self::from_int_inner(value)),
+            Value::Bool(value) => Ok(Self::from_value(TensorValue::Bool(value))),
+            Value::Scalar(_) | Value::Shape(_) => Err(PyTypeError::new_err(
+                "captured graph output must be a device tensor",
+            )),
+        }
     }
 
     pub(crate) fn operation_float_value(
@@ -1184,7 +1214,11 @@ impl PyTensor {
                 .unary_captured(UnaryOp::Reshape(output.clone()), move |input| {
                     input.reshape(output)
                 }),
-            value => value.reshape(output).map(Self::from_value),
+            value => {
+                let mut result = Self::from_value(value.reshape(output.clone())?);
+                result.trace = record_unary(self, UnaryOp::Reshape(output))?;
+                Ok(result)
+            }
         }
     }
 

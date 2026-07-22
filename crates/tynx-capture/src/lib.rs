@@ -8,7 +8,7 @@
 
 use std::{collections::HashSet, fmt::Debug, rc::Rc};
 
-use tynx_core::{DType, Device, Distribution, DynTensor, Result, TynxError};
+use tynx_core::{DType, Device, Distribution, DynTensor, Result, TynxError, Value};
 use tynx_train::{ParamId, ParameterContract, ParameterSlot, backward_slots};
 
 /// Rust-only optimizer action retained by a captured whole-step program.
@@ -49,6 +49,33 @@ impl TensorSignature {
         }
     }
 
+    /// Capture the shape, dtype, and device of any device tensor value.
+    pub fn from_value(value: &Value) -> Result<Self> {
+        let signature = match value {
+            Value::Tensor(tensor) => Self {
+                shape: tensor.dims(),
+                dtype: tensor.dtype(),
+                device: tensor.device(),
+            },
+            Value::Int(tensor) => Self {
+                shape: tensor.dims(),
+                dtype: tensor.dtype(),
+                device: tensor.device(),
+            },
+            Value::Bool(tensor) => Self {
+                shape: tensor.dims(),
+                dtype: tensor.dtype(),
+                device: tensor.device(),
+            },
+            Value::Scalar(_) | Value::Shape(_) => {
+                return Err(TynxError::TypeMismatch(
+                    "capture inputs must be device tensors".to_string(),
+                ));
+            }
+        };
+        Ok(signature)
+    }
+
     /// Return the exact captured shape.
     pub fn shape(&self) -> &[usize] {
         &self.shape
@@ -64,8 +91,8 @@ impl TensorSignature {
         &self.device
     }
 
-    fn validate(&self, tensor: &DynTensor, label: &str) -> Result<()> {
-        let actual = Self::from_tensor(tensor);
+    fn validate_value(&self, value: &Value, label: &str) -> Result<()> {
+        let actual = Self::from_value(value)?;
         if actual != *self {
             return Err(TynxError::TypeMismatch(format!(
                 "captured {label} expected shape {:?}, dtype {:?}, and device {:?}, got shape {:?}, dtype {:?}, and device {:?}",
@@ -145,6 +172,11 @@ enum Node {
         left: ValueId,
         right: ValueId,
     },
+    Gather {
+        input: ValueId,
+        dim: usize,
+        indices: ValueId,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -204,10 +236,16 @@ impl GraphBuilder {
 
     /// Record one exact-signature runtime input.
     pub fn input(&mut self, tensor: &DynTensor) -> ValueId {
+        self.input_value(&Value::Tensor(tensor.clone()))
+            .expect("floating-point tensors are valid capture inputs")
+    }
+
+    /// Record one exact-signature runtime tensor input of any supported dtype.
+    pub fn input_value(&mut self, value: &Value) -> Result<ValueId> {
         let input = self.input_signatures.len();
         self.input_signatures
-            .push(TensorSignature::from_tensor(tensor));
-        self.push(Node::Input(input))
+            .push(TensorSignature::from_value(value)?);
+        Ok(self.push(Node::Input(input)))
     }
 
     /// Record a read from a stable parameter slot.
@@ -231,6 +269,17 @@ impl GraphBuilder {
         self.require_value(left)?;
         self.require_value(right)?;
         Ok(self.push(Node::Binary { op, left, right }))
+    }
+
+    /// Record differentiable floating-point gather with integer indices.
+    pub fn gather(&mut self, input: ValueId, dim: usize, indices: ValueId) -> Result<ValueId> {
+        self.require_value(input)?;
+        self.require_value(indices)?;
+        Ok(self.push(Node::Gather {
+            input,
+            dim,
+            indices,
+        }))
     }
 
     /// Record gradient clearing at the current execution position.
@@ -329,7 +378,20 @@ impl Graph {
     /// When `tracking` is true, parameter nodes read the current generation's autodiff leaf.
     /// Ordinary optimizer value updates do not invalidate the graph; structural changes do.
     pub fn run(&self, inputs: &[DynTensor], tracking: bool) -> Result<Vec<DynTensor>> {
-        self.validate_inputs(inputs)?;
+        let inputs = inputs
+            .iter()
+            .cloned()
+            .map(Value::Tensor)
+            .collect::<Vec<_>>();
+        self.run_values(&inputs, tracking)?
+            .into_iter()
+            .map(Value::into_tensor)
+            .collect()
+    }
+
+    /// Replay the graph with exact-signature float, integer, or boolean tensor inputs.
+    pub fn run_values(&self, inputs: &[Value], tracking: bool) -> Result<Vec<Value>> {
+        self.validate_value_inputs(inputs)?;
 
         let mut values = Vec::with_capacity(self.nodes.len());
         let mut effects = self.effects.iter().peekable();
@@ -345,15 +407,20 @@ impl Graph {
                 Node::Parameter(guard) => {
                     guard.validate()?;
                     if tracking {
-                        guard.slot.read()
+                        Value::Tensor(guard.slot.read())
                     } else {
-                        guard.slot.value()
+                        Value::Tensor(guard.slot.value())
                     }
                 }
                 Node::Unary { op, input } => execute_unary(op, value(&values, *input)?)?,
                 Node::Binary { op, left, right } => {
                     execute_binary(*op, value(&values, *left)?, value(&values, *right)?)?
                 }
+                Node::Gather {
+                    input,
+                    dim,
+                    indices,
+                } => execute_gather(value(&values, *input)?, *dim, value(&values, *indices)?)?,
             };
             debug_assert_eq!(values.len(), index);
             values.push(value);
@@ -371,6 +438,16 @@ impl Graph {
 
     /// Validate exact input signatures and stable parameter structures without executing nodes.
     pub fn validate_inputs(&self, inputs: &[DynTensor]) -> Result<()> {
+        let inputs = inputs
+            .iter()
+            .cloned()
+            .map(Value::Tensor)
+            .collect::<Vec<_>>();
+        self.validate_value_inputs(&inputs)
+    }
+
+    /// Validate exact typed input signatures and stable parameter structures without execution.
+    pub fn validate_value_inputs(&self, inputs: &[Value]) -> Result<()> {
         if inputs.len() != self.input_signatures.len() {
             return Err(TynxError::TypeMismatch(format!(
                 "captured graph expected {} inputs, got {}",
@@ -381,7 +458,7 @@ impl Graph {
         for (index, (signature, input)) in
             self.input_signatures.iter().zip(inputs.iter()).enumerate()
         {
-            signature.validate(input, &format!("input {index}"))?;
+            signature.validate_value(input, &format!("input {index}"))?;
         }
         for node in &self.nodes {
             if let Node::Parameter(guard) = node {
@@ -392,7 +469,7 @@ impl Graph {
     }
 }
 
-fn execute_effect(effect: &Effect, values: &[DynTensor]) -> Result<()> {
+fn execute_effect(effect: &Effect, values: &[Value]) -> Result<()> {
     match effect {
         Effect::ZeroGrad(parameters) => {
             for parameter in parameters {
@@ -401,21 +478,33 @@ fn execute_effect(effect: &Effect, values: &[DynTensor]) -> Result<()> {
             Ok(())
         }
         Effect::Backward { loss, parameters } => {
-            backward_slots(&value(values, *loss)?, parameters).map(|_| ())
+            let loss = value(values, *loss)?.into_tensor()?;
+            backward_slots(&loss, parameters).map(|_| ())
         }
         Effect::OptimizerStep(optimizer) => optimizer.step(),
     }
 }
 
-fn value(values: &[DynTensor], id: ValueId) -> Result<DynTensor> {
+fn value(values: &[Value], id: ValueId) -> Result<Value> {
     values
         .get(id.index())
         .cloned()
         .ok_or_else(|| TynxError::MissingValue(format!("captured node {}", id.index())))
 }
 
-fn execute_unary(op: &UnaryOp, input: DynTensor) -> Result<DynTensor> {
-    match op {
+fn execute_unary(op: &UnaryOp, input: Value) -> Result<Value> {
+    if let UnaryOp::Reshape(shape) = op {
+        return match input {
+            Value::Tensor(value) => value.reshape(shape.clone()).map(Value::Tensor),
+            Value::Int(value) => value.reshape(shape.clone()).map(Value::Int),
+            Value::Bool(value) => value.reshape(shape.clone()).map(Value::Bool),
+            Value::Scalar(_) | Value::Shape(_) => Err(TynxError::TypeMismatch(
+                "captured reshape requires a device tensor".to_string(),
+            )),
+        };
+    }
+    let input = input.into_tensor()?;
+    let output = match op {
         UnaryOp::Relu => Ok(input.relu()),
         UnaryOp::Sigmoid => Ok(input.sigmoid()),
         UnaryOp::Tanh => Ok(input.tanh()),
@@ -444,16 +533,26 @@ fn execute_unary(op: &UnaryOp, input: DynTensor) -> Result<DynTensor> {
                     .mul_scalar(1.0 / (1.0 - probability)))
             }
         }
-    }
+    }?;
+    Ok(Value::Tensor(output))
 }
 
-fn execute_binary(op: BinaryOp, left: DynTensor, right: DynTensor) -> Result<DynTensor> {
-    match op {
+fn execute_binary(op: BinaryOp, left: Value, right: Value) -> Result<Value> {
+    let left = left.into_tensor()?;
+    let right = right.into_tensor()?;
+    let output = match op {
         BinaryOp::Add => left.add_broadcast(right),
         BinaryOp::Subtract => left.sub_broadcast(right),
         BinaryOp::Multiply => left.mul_broadcast(right),
         BinaryOp::Divide => left.div_broadcast(right),
         BinaryOp::Matmul => left.matmul(right),
         BinaryOp::Power => left.powf_broadcast(right),
-    }
+    }?;
+    Ok(Value::Tensor(output))
+}
+
+fn execute_gather(input: Value, dim: usize, indices: Value) -> Result<Value> {
+    let input = input.into_tensor()?;
+    let indices = indices.into_int()?;
+    input.gather(dim, indices).map(Value::Tensor)
 }

@@ -58,6 +58,30 @@ def test_compile_preserves_nested_multi_output_structure() -> None:
     assert forward.replay_count == 1
 
 
+def test_compile_replays_integer_index_gather_and_gradient() -> None:
+    calls = 0
+
+    @tynx.compile(fullgraph=True)
+    def select(logits: tynx.Tensor, actions: tynx.Tensor) -> tynx.Tensor:
+        nonlocal calls
+        calls += 1
+        return logits.gather(1, actions.unsqueeze(1)).squeeze(1)
+
+    first_logits = tynx.Tensor([[1.0, 2.0], [3.0, 4.0]], requires_grad=True)
+    first = select(first_logits, tynx.Tensor([0, 1], dtype="int64"))
+    assert first.tolist() == [1.0, 4.0]
+
+    second_logits = tynx.Tensor([[5.0, 6.0], [7.0, 8.0]], requires_grad=True)
+    second = select(second_logits, tynx.Tensor([1, 0], dtype="int64"))
+    assert second.tolist() == [6.0, 7.0]
+    second.sum().backward()
+    assert second_logits.grad is not None
+    assert second_logits.grad.tolist() == [[0.0, 1.0], [1.0, 0.0]]
+    assert calls == 1
+    assert select.compile_count == 1
+    assert select.replay_count == 1
+
+
 def test_compile_replay_preserves_input_and_parameter_gradients() -> None:
     weight = tynx.Parameter([[2.0], [-1.0]], name="weight")
 
