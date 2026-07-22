@@ -8,7 +8,7 @@ publish.workspace = true
 [features]
 default = ["flex"]
 flex = ["burn/flex", "tynx/flex"]
-wgpu = ["burn/autotune", "burn/fusion", "burn/webgpu"]
+wgpu = ["burn/autotune", "burn/fusion", "burn/webgpu", "tynx-bench-protocol/wgpu-device"]
 
 [dependencies]
 burn.workspace = true

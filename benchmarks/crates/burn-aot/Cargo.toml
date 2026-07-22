@@ -9,7 +9,13 @@ build = "build.rs"
 [features]
 default = ["flex"]
 flex = ["burn/flex"]
-wgpu = ["burn/autotune", "burn/fusion", "burn/webgpu", "burn-store/wgpu"]
+wgpu = [
+    "burn/autotune",
+    "burn/fusion",
+    "burn/webgpu",
+    "burn-store/wgpu",
+    "tynx-bench-protocol/wgpu-device",
+]
 
 [dependencies]
 burn.workspace = true

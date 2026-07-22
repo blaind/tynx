@@ -3,14 +3,20 @@ use std::{env, fs, path::PathBuf};
 use burn_onnx::ModelGen;
 
 fn main() {
-    let model_hex = include_str!("../../models/sign.onnx.hex").trim();
-    let model = decode_hex(model_hex);
-    let model_path =
-        PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR is set")).join("sign.onnx");
-    fs::write(&model_path, model).expect("write generated ONNX fixture");
+    generate("sign", include_str!("../../models/sign.onnx.hex"));
+    generate("matmul64", include_str!("../../models/matmul64.onnx.hex"));
 
     println!("cargo:rerun-if-changed=../../models/sign.onnx.hex");
+    println!("cargo:rerun-if-changed=../../models/matmul64.onnx.hex");
     println!("cargo:rerun-if-changed=build.rs");
+}
+
+fn generate(name: &str, model_hex: &str) {
+    let model = decode_hex(model_hex.trim());
+    let model_path =
+        PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR is set")).join(format!("{name}.onnx"));
+    fs::write(&model_path, model).expect("write generated ONNX fixture");
+
     ModelGen::new()
         .input(model_path.to_str().expect("UTF-8 model path"))
         .out_dir("model/")
