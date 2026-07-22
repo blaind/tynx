@@ -18,6 +18,7 @@ mod normalization;
 mod pad;
 mod pooling;
 mod pow;
+mod quantization;
 mod reduction;
 mod resize;
 mod resolve;
@@ -90,6 +91,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Cos(node) => unary::cos(node, env, device),
         Node::Cosh(node) => unary::cosh(node, env, device),
         Node::CumSum(node) => cumsum::cumsum(node, env, device),
+        Node::DequantizeLinear(node) => quantization::dequantize_linear(node, env, device),
         Node::Div(node) => binary::div(node, env, device),
         Node::Dropout(node) => dropout::dropout(node, env, device),
         Node::Elu(node) => unary::elu(node, env, device),
@@ -141,6 +143,8 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Pad(node) => pad::pad(node, env, device),
         Node::PRelu(node) => binary::prelu(node, env, device),
         Node::Pow(node) => pow::pow(node, env, device),
+        Node::QLinearMatMul(node) => quantization::qlinear_matmul(node, env, device),
+        Node::QuantizeLinear(node) => quantization::quantize_linear(node, env, device),
         Node::Reciprocal(node) => unary::reciprocal(node, env, device),
         Node::ReduceL1(node) => reduction::reduce_l1(node, env, device),
         Node::ReduceL2(node) => reduction::reduce_l2(node, env, device),

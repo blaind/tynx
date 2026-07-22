@@ -103,7 +103,7 @@ fn optional_zero_point(
     }
 }
 
-fn matmul_values(left: Value, right: Value, device: &Device) -> Result<Value> {
+pub(super) fn matmul_values(left: Value, right: Value, device: &Device) -> Result<Value> {
     match (left, right) {
         (Value::Tensor(left), Value::Tensor(right)) => {
             let dtype = left.dtype();

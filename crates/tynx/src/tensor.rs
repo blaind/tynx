@@ -918,6 +918,11 @@ impl DynTensor {
         map_float!(self, |tensor| tensor.add_scalar(value))
     }
 
+    /// Subtract a scalar from every element.
+    pub fn sub_scalar(self, value: f64) -> Self {
+        map_float!(self, |tensor| tensor.sub_scalar(value))
+    }
+
     /// Multiply matrices or batches of matrices with matching runtime ranks.
     pub fn matmul(self, other: Self) -> Result<Self> {
         Ok(match (self, other) {
