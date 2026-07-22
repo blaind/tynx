@@ -3,9 +3,26 @@
 import math
 from typing import Literal, Optional
 
-from .._tynx import Tensor, rand, randn
+from .._tynx import Tensor, full, rand, randn, where
 
 FanMode = Literal["fan_in", "fan_out"]
+
+
+def constant_(tensor: Tensor, value: float) -> Tensor:
+    """Fill a stable Parameter or Buffer with one value."""
+    _require_float_tensor(tensor)
+    tensor.copy_(full(tensor.shape, value, device=tensor.device))
+    return tensor
+
+
+def zeros_(tensor: Tensor) -> Tensor:
+    """Fill a stable Parameter or Buffer with zeros."""
+    return constant_(tensor, 0.0)
+
+
+def ones_(tensor: Tensor) -> Tensor:
+    """Fill a stable Parameter or Buffer with ones."""
+    return constant_(tensor, 1.0)
 
 
 def uniform_(tensor: Tensor, a: float = 0.0, b: float = 1.0) -> Tensor:
@@ -23,6 +40,38 @@ def normal_(tensor: Tensor, mean: float = 0.0, std: float = 1.0) -> Tensor:
     if std < 0:
         raise ValueError(f"normal_ requires std >= 0, got {std}")
     tensor.copy_(randn(tensor.shape, device=tensor.device) * std + mean)
+    return tensor
+
+
+def trunc_normal_(
+    tensor: Tensor,
+    mean: float = 0.0,
+    std: float = 1.0,
+    a: float = -2.0,
+    b: float = 2.0,
+) -> Tensor:
+    """Fill from a normal distribution truncated to the inclusive interval ``[a, b]``."""
+    _require_float_tensor(tensor)
+    if not all(math.isfinite(value) for value in (mean, std)):
+        raise ValueError("trunc_normal_ mean and std must be finite")
+    if std <= 0:
+        raise ValueError(f"trunc_normal_ requires std > 0, got {std}")
+    if math.isnan(a) or math.isnan(b) or a >= b:
+        raise ValueError(f"trunc_normal_ requires a < b, got {a} >= {b}")
+
+    probability = _normal_cdf((b - mean) / std) - _normal_cdf((a - mean) / std)
+    if probability <= 0.0:
+        raise ValueError("trunc_normal_ interval has no representable probability mass")
+    rounds = _rejection_rounds(probability)
+
+    def draw() -> Tensor:
+        return randn(tensor.shape, device=tensor.device) * std + mean
+
+    samples = draw()
+    for _ in range(rounds - 1):
+        invalid = (samples < a) | (samples > b)
+        samples = where(invalid, draw(), samples)
+    tensor.copy_(samples.clamp(a, b))
     return tensor
 
 
@@ -116,12 +165,31 @@ def _require_float_tensor(tensor: Tensor) -> None:
         raise TypeError(f"initialization requires a float32 tensor, got {tensor.dtype}")
 
 
+def _normal_cdf(value: float) -> float:
+    return (1.0 + math.erf(value / math.sqrt(2.0))) / 2.0
+
+
+def _rejection_rounds(probability: float) -> int:
+    if probability >= 1.0:
+        return 1
+    rounds = math.ceil(math.log(1e-7) / math.log1p(-probability))
+    if rounds > 128:
+        raise ValueError(
+            "trunc_normal_ interval is too narrow for the bounded native rejection sampler"
+        )
+    return max(1, rounds)
+
+
 __all__ = [
     "calculate_gain",
+    "constant_",
     "kaiming_normal_",
     "kaiming_uniform_",
     "normal_",
+    "ones_",
+    "trunc_normal_",
     "uniform_",
     "xavier_normal_",
     "xavier_uniform_",
+    "zeros_",
 ]

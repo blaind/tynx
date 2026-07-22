@@ -28,6 +28,43 @@ def test_uniform_and_normal_initialization_use_seeded_native_rng() -> None:
     assert first.tolist() == second.tolist()
 
 
+def test_constant_zero_and_one_initializers_preserve_parameter_identity() -> None:
+    parameter = tynx.Parameter([[4.0, 5.0], [6.0, 7.0]])
+
+    assert tynx.nn.init.constant_(parameter, 2.5) is parameter
+    assert parameter.tolist() == [[2.5, 2.5], [2.5, 2.5]]
+    assert tynx.nn.init.zeros_(parameter) is parameter
+    assert parameter.tolist() == [[0.0, 0.0], [0.0, 0.0]]
+    assert tynx.nn.init.ones_(parameter) is parameter
+    assert parameter.tolist() == [[1.0, 1.0], [1.0, 1.0]]
+
+
+def test_truncated_normal_is_bounded_and_seeded() -> None:
+    first = tynx.Parameter(tynx.empty((512,)))
+    second = tynx.Parameter(tynx.empty((512,)))
+
+    tynx.manual_seed(101)
+    returned = tynx.nn.init.trunc_normal_(first, mean=0.5, std=0.75, a=-0.5, b=1.25)
+    tynx.manual_seed(101)
+    tynx.nn.init.trunc_normal_(second, mean=0.5, std=0.75, a=-0.5, b=1.25)
+
+    values = cast(list[float], first.tolist())
+    assert returned is first
+    assert first.tolist() == second.tolist()
+    assert all(-0.5 <= value <= 1.25 for value in values)
+    assert len(set(values)) > 100
+
+
+def test_truncated_normal_rejects_invalid_or_impractical_intervals() -> None:
+    parameter = tynx.Parameter([0.0])
+    with pytest.raises(ValueError, match="std > 0"):
+        tynx.nn.init.trunc_normal_(parameter, std=0.0)
+    with pytest.raises(ValueError, match="a < b"):
+        tynx.nn.init.trunc_normal_(parameter, a=1.0, b=1.0)
+    with pytest.raises(ValueError, match="too narrow"):
+        tynx.nn.init.trunc_normal_(parameter, a=-0.001, b=0.001)
+
+
 def test_xavier_initializers_use_expected_scale() -> None:
     uniform = tynx.Parameter(tynx.empty((6, 4)))
     normal = tynx.Parameter(tynx.empty((6, 4)))
