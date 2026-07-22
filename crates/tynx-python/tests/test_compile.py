@@ -108,3 +108,49 @@ def test_fullgraph_rejects_unsupported_operation_visibly() -> None:
 
     with pytest.raises(RuntimeError, match=r"fullgraph=True.*cannot capture"):
         compiled(tynx.Tensor([1.0]))
+
+
+def test_tensor_dependent_python_control_flow_falls_back() -> None:
+    calls = 0
+
+    def forward(input: tynx.Tensor) -> tynx.Tensor:
+        nonlocal calls
+        calls += 1
+        return input.relu() if input else -input
+
+    compiled = tynx.compile(forward)
+    with pytest.warns(RuntimeWarning, match="fell back to eager"):
+        assert compiled(tynx.Tensor([2.0])).tolist() == [2.0]
+    assert compiled(tynx.Tensor([-3.0])).tolist() == [0.0]
+    assert calls == 2
+    assert compiled.compile_count == 0
+
+
+def test_fullgraph_rejects_host_reads() -> None:
+    @tynx.compile(fullgraph=True)
+    def forward(input: tynx.Tensor) -> tynx.Tensor:
+        return input.relu() if input.item() > 0 else -input
+
+    with pytest.raises(RuntimeError, match=r"Tensor.item.*host reads"):
+        forward(tynx.Tensor([1.0]))
+
+
+def test_fullgraph_rejects_state_mutation_before_publication() -> None:
+    state = tynx.Buffer([7.0], name="state")
+
+    @tynx.compile(fullgraph=True)
+    def forward(input: tynx.Tensor) -> tynx.Tensor:
+        state.copy_(input)
+        return input.relu()
+
+    with pytest.raises(RuntimeError, match=r"state mutation.*copy_"):
+        forward(tynx.Tensor([3.0]))
+    assert state.tolist() == [7.0]
+
+
+def test_fullgraph_rejects_random_dropout() -> None:
+    layer = tynx.nn.Dropout(0.5)
+    forward = tynx.compile(layer, fullgraph=True)
+
+    with pytest.raises(RuntimeError, match="random Dropout"):
+        forward(tynx.Tensor([1.0, 1.0]))

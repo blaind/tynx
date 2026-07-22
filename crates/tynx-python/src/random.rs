@@ -17,6 +17,8 @@ pub(crate) fn normal_sample_py(
     scale: PyRef<'_, PyTensor>,
     seed: Option<u64>,
 ) -> PyResult<PyTensor> {
+    loc.capture_unsupported("random Normal sampling")?;
+    scale.capture_unsupported("random Normal sampling")?;
     let loc = loc.detached_float_value("Normal.sample")?;
     let scale = scale.detached_float_value("Normal.sample")?;
     let device = loc.device();
@@ -38,6 +40,7 @@ pub(crate) fn categorical_sample_py(
     logits: PyRef<'_, PyTensor>,
     seed: Option<u64>,
 ) -> PyResult<PyTensor> {
+    logits.capture_unsupported("random Categorical sampling")?;
     let logits = logits.detached_float_value("Categorical.sample")?;
     let rank = logits.rank();
     if rank == 0 {
@@ -77,6 +80,7 @@ pub(crate) fn categorical_sample_py(
 
 #[pyfunction(name = "_dropout")]
 pub(crate) fn dropout_py(input: PyRef<'_, PyTensor>, probability: f64) -> PyResult<PyTensor> {
+    input.capture_unsupported("random Dropout")?;
     if !(0.0..=1.0).contains(&probability) {
         return Err(PyValueError::new_err(format!(
             "dropout probability must be between 0 and 1, got {probability}"

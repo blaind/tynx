@@ -338,6 +338,7 @@ impl PyTensor {
     }
 
     fn compare(&self, other: &Bound<'_, PyAny>, comparison: Comparison) -> PyResult<Self> {
+        self.capture_unsupported("tensor comparisons")?;
         let left = self.source.value().detach();
         let value = if let Ok(other) = other.extract::<PyRef<'_, Self>>() {
             left.compare_tensor(other.source.value().detach(), comparison)?
@@ -527,6 +528,13 @@ impl PyTensor {
     ) -> PyResult<DynTensor> {
         self.operation_input(tracking, operation)
     }
+
+    pub(crate) fn capture_unsupported(&self, reason: &str) -> PyResult<()> {
+        if let Some(trace) = &self.trace {
+            trace.unsupported(reason)?;
+        }
+        Ok(())
+    }
 }
 
 #[pymethods]
@@ -578,6 +586,19 @@ impl PyTensor {
         self.source.value().dims()[0]
     }
 
+    fn __bool__(&self, py: Python<'_>) -> PyResult<bool> {
+        self.capture_unsupported("tensor-dependent Python control flow")?;
+        if self.numel() != 1 {
+            return Err(PyValueError::new_err(format!(
+                "the truth value of a Tensor with shape {:?} is ambiguous",
+                self.source.value().dims()
+            )));
+        }
+        let value = self.source.value().item(py)?;
+        raise_pending_device_error()?;
+        value.bind(py).is_truthy()
+    }
+
     /// Element dtype.
     #[getter]
     fn dtype(&self) -> &'static str {
@@ -617,6 +638,7 @@ impl PyTensor {
 
     /// Copy tensor values to nested Python lists.
     fn tolist(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        self.capture_unsupported("Tensor.tolist() host reads")?;
         let result = self.source.value().tolist(py);
         raise_pending_device_error()?;
         result
@@ -624,6 +646,7 @@ impl PyTensor {
 
     /// Copy tensor values to a NumPy array with the matching dtype and shape.
     fn numpy(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        self.capture_unsupported("Tensor.numpy() host reads")?;
         let result = self.source.value().numpy(py);
         raise_pending_device_error()?;
         result
@@ -631,6 +654,7 @@ impl PyTensor {
 
     /// Copy a one-element tensor to a Python scalar.
     fn item(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        self.capture_unsupported("Tensor.item() host reads")?;
         if self.numel() != 1 {
             return Err(PyValueError::new_err(format!(
                 "item() requires a one-element tensor, got shape {:?}",
@@ -649,6 +673,7 @@ impl PyTensor {
 
     /// Replace stable Parameter/Buffer state from a compatible tensor without changing identity.
     fn copy_(&self, source: PyRef<'_, Self>) -> PyResult<()> {
+        source.capture_unsupported("state mutation through Tensor.copy_()")?;
         let slot = self.parameter_slot().ok_or_else(|| {
             PyTypeError::new_err("copy_ target must be a stable Parameter or Buffer")
         })?;
