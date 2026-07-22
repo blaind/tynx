@@ -71,6 +71,7 @@ impl Session {
 
     /// Load a model from bytes with optional graph simplification.
     pub fn from_bytes_with(data: &[u8], simplify: bool) -> Result<Self> {
+        validate_model(data)?;
         let declared_output_names = declared_output_names(data)?;
         let (prepared, changed) = crate::interpreter::prepare_model(data)?;
         let parse_data = if changed { prepared.as_slice() } else { data };
@@ -194,6 +195,74 @@ impl Session {
             })
             .collect()
     }
+}
+
+fn validate_model(data: &[u8]) -> Result<()> {
+    // onnx-ir 0.21's compliance suite covers default-domain ONNX opsets 1 through 24.
+    const MAX_DEFAULT_OPSET: i64 = 24;
+
+    let model =
+        ModelProto::parse_from_bytes(data).map_err(|error| TynxError::Parse(error.to_string()))?;
+    let graph = model
+        .graph
+        .as_ref()
+        .ok_or_else(|| TynxError::Parse("ONNX model has no graph".to_string()))?;
+    let uses_default_domain = graph
+        .node
+        .iter()
+        .any(|node| node.domain.is_empty() || node.domain == "ai.onnx");
+    if uses_default_domain {
+        let opset = model
+            .opset_import
+            .iter()
+            .find(|opset| opset.domain.is_empty() || opset.domain == "ai.onnx")
+            .map(|opset| opset.version)
+            .ok_or_else(|| {
+                TynxError::Parse(
+                    "default-domain ONNX nodes require a default-domain opset import".to_string(),
+                )
+            })?;
+        if !(1..=MAX_DEFAULT_OPSET).contains(&opset) {
+            return Err(TynxError::Parse(format!(
+                "unsupported default-domain ONNX opset {opset}; this build supports opsets 1 through {MAX_DEFAULT_OPSET}"
+            )));
+        }
+    }
+    let mut values = graph
+        .input
+        .iter()
+        .map(|value| value.name.clone())
+        .chain(graph.initializer.iter().map(|value| value.name.clone()))
+        .filter(|name| !name.is_empty())
+        .collect::<HashSet<_>>();
+    let mut node_outputs = HashSet::new();
+    for node in &graph.node {
+        for input in node.input.iter().filter(|name| !name.is_empty()) {
+            if !values.contains(input) {
+                return Err(TynxError::Parse(format!(
+                    "node '{}' input references unknown value '{input}'",
+                    node.name
+                )));
+            }
+        }
+        for output in node.output.iter().filter(|name| !name.is_empty()) {
+            if !node_outputs.insert(output.clone()) || values.contains(output) {
+                return Err(TynxError::Parse(format!(
+                    "value '{output}' has more than one writer"
+                )));
+            }
+            values.insert(output.clone());
+        }
+    }
+    for output in &graph.output {
+        if !values.contains(&output.name) {
+            return Err(TynxError::Parse(format!(
+                "graph output references unknown value '{}'",
+                output.name
+            )));
+        }
+    }
+    Ok(())
 }
 
 impl PreparedSession {
@@ -462,6 +531,50 @@ mod tests {
         let error = Session::from_bytes(b"not an ONNX model").unwrap_err();
 
         assert!(matches!(error, TynxError::Parse(_)));
+    }
+
+    #[test]
+    fn structural_validation_does_not_require_a_default_domain_opset() {
+        let mut model = ModelProto::parse_from_bytes(&identity_model_bytes("x", "y")).unwrap();
+        model.opset_import[0].domain = "ai.onnx.ml".to_string();
+        model.graph.as_mut().unwrap().node[0].domain = "ai.onnx.ml".to_string();
+
+        validate_model(&model.write_to_bytes().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn rejects_unknown_future_opset_for_default_domain_nodes() {
+        let mut model = ModelProto::parse_from_bytes(&identity_model_bytes("x", "y")).unwrap();
+        model.opset_import[0].version = 999;
+
+        let error = validate_model(&model.write_to_bytes().unwrap()).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported default-domain ONNX opset 999")
+        );
+    }
+
+    #[test]
+    fn rejects_duplicate_node_output_writers() {
+        let mut model = ModelProto::parse_from_bytes(&identity_model_bytes("x", "y")).unwrap();
+        let duplicate = model.graph.node[0].clone();
+        model.graph.as_mut().unwrap().node.push(duplicate);
+
+        let error = Session::from_bytes(&model.write_to_bytes().unwrap()).unwrap_err();
+
+        assert!(error.to_string().contains("'y' has more than one writer"));
+    }
+
+    #[test]
+    fn rejects_dangling_node_inputs_during_load() {
+        let mut model = ModelProto::parse_from_bytes(&identity_model_bytes("x", "y")).unwrap();
+        model.graph.as_mut().unwrap().node[0].input[0] = "ghost".to_string();
+
+        let error = Session::from_bytes(&model.write_to_bytes().unwrap()).unwrap_err();
+
+        assert!(error.to_string().contains("unknown value 'ghost'"));
     }
 
     #[test]
