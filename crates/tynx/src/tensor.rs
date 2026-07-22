@@ -878,6 +878,19 @@ impl DynTensor {
         Ok(zip_float!(left, right, |left, right| left.div(right)))
     }
 
+    /// Apply floating-point modulo semantics with multidirectional broadcasting.
+    pub fn modulo_broadcast(self, other: Self, fmod: bool) -> Result<Self> {
+        let (left, right) = Self::broadcast_pair(self, other)?;
+        Ok(zip_float!(left, right, |left, right| {
+            if fmod {
+                left.fmod(right)
+            } else {
+                let remainder = left.remainder(right.clone());
+                remainder.add(right.clone()).remainder(right)
+            }
+        }))
+    }
+
     /// Take the element-wise maximum with multidirectional broadcasting.
     pub fn max_broadcast(self, other: Self) -> Result<Self> {
         let (left, right) = Self::broadcast_pair(self, other)?;
@@ -1694,6 +1707,73 @@ impl DynInt {
     pub fn add_broadcast(self, other: Self) -> Result<Self> {
         let (left, right) = Self::broadcast_pair(self, other)?;
         Ok(zip_int!(left, right, |left, right| left.add(right)))
+    }
+
+    /// Subtract two integer tensors with multidirectional broadcasting.
+    pub fn sub_broadcast(self, other: Self) -> Result<Self> {
+        let (left, right) = Self::broadcast_pair(self, other)?;
+        Ok(zip_int!(left, right, |left, right| left.sub(right)))
+    }
+
+    /// Multiply two integer tensors with multidirectional broadcasting.
+    pub fn mul_broadcast(self, other: Self) -> Result<Self> {
+        let (left, right) = Self::broadcast_pair(self, other)?;
+        Ok(zip_int!(left, right, |left, right| left.mul(right)))
+    }
+
+    /// Divide two integer tensors with multidirectional broadcasting.
+    pub fn div_broadcast(self, other: Self) -> Result<Self> {
+        let (left, right) = Self::broadcast_pair(self, other)?;
+        Ok(zip_int!(left, right, |left, right| left.div(right)))
+    }
+
+    /// Apply ONNX modulo or fmod semantics with multidirectional broadcasting.
+    pub fn modulo_broadcast(self, other: Self, fmod: bool) -> Result<Self> {
+        let (left, right) = Self::broadcast_pair(self, other)?;
+        Ok(zip_int!(left, right, |left, right| {
+            if fmod {
+                let quotient = left.clone().div(right.clone());
+                left.sub(quotient.mul(right))
+            } else {
+                let remainder = left.remainder(right.clone());
+                remainder.add(right.clone()).remainder(right)
+            }
+        }))
+    }
+
+    /// Apply bitwise AND with multidirectional broadcasting.
+    pub fn bitwise_and_broadcast(self, other: Self) -> Result<Self> {
+        let (left, right) = Self::broadcast_pair(self, other)?;
+        Ok(zip_int!(left, right, |left, right| left.bitwise_and(right)))
+    }
+
+    /// Apply bitwise OR with multidirectional broadcasting.
+    pub fn bitwise_or_broadcast(self, other: Self) -> Result<Self> {
+        let (left, right) = Self::broadcast_pair(self, other)?;
+        Ok(zip_int!(left, right, |left, right| left.bitwise_or(right)))
+    }
+
+    /// Apply bitwise XOR with multidirectional broadcasting.
+    pub fn bitwise_xor_broadcast(self, other: Self) -> Result<Self> {
+        let (left, right) = Self::broadcast_pair(self, other)?;
+        Ok(zip_int!(left, right, |left, right| left.bitwise_xor(right)))
+    }
+
+    /// Apply bitwise NOT.
+    pub fn bitwise_not(self) -> Self {
+        map_int!(self, |tensor| tensor.bitwise_not())
+    }
+
+    /// Shift left with multidirectional broadcasting.
+    pub fn bitwise_left_shift_broadcast(self, other: Self) -> Result<Self> {
+        let (left, right) = Self::broadcast_pair(self, other)?;
+        Ok(zip_int!(left, right, |left, right| left.bitwise_left_shift(right)))
+    }
+
+    /// Shift right with multidirectional broadcasting.
+    pub fn bitwise_right_shift_broadcast(self, other: Self) -> Result<Self> {
+        let (left, right) = Self::broadcast_pair(self, other)?;
+        Ok(zip_int!(left, right, |left, right| left.bitwise_right_shift(right)))
     }
 
     /// Sum elements along dimensions while retaining singleton dimensions.

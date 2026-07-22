@@ -7,34 +7,72 @@ use onnx_ir::node::{
 };
 
 use super::{Env, resolve};
-use crate::{Result, Value};
+use crate::{DynInt, DynTensor, Result, TynxError, Value};
 
 pub(super) fn add(node: &AddNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
-    let left = resolve::at(env, &node.name, &node.inputs, 0, device)?.into_tensor()?;
-    let right = resolve::at(env, &node.name, &node.inputs, 1, device)?.into_tensor()?;
-
-    Ok(vec![Value::Tensor(left.add_broadcast(right)?)])
+    numeric_binary(
+        &node.name,
+        &node.inputs,
+        env,
+        device,
+        DynTensor::add_broadcast,
+        DynInt::add_broadcast,
+    )
 }
 
 pub(super) fn sub(node: &SubNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
-    let left = resolve::at(env, &node.name, &node.inputs, 0, device)?.into_tensor()?;
-    let right = resolve::at(env, &node.name, &node.inputs, 1, device)?.into_tensor()?;
-
-    Ok(vec![Value::Tensor(left.sub_broadcast(right)?)])
+    numeric_binary(
+        &node.name,
+        &node.inputs,
+        env,
+        device,
+        DynTensor::sub_broadcast,
+        DynInt::sub_broadcast,
+    )
 }
 
 pub(super) fn mul(node: &MulNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
-    let left = resolve::at(env, &node.name, &node.inputs, 0, device)?.into_tensor()?;
-    let right = resolve::at(env, &node.name, &node.inputs, 1, device)?.into_tensor()?;
-
-    Ok(vec![Value::Tensor(left.mul_broadcast(right)?)])
+    numeric_binary(
+        &node.name,
+        &node.inputs,
+        env,
+        device,
+        DynTensor::mul_broadcast,
+        DynInt::mul_broadcast,
+    )
 }
 
 pub(super) fn div(node: &DivNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
-    let left = resolve::at(env, &node.name, &node.inputs, 0, device)?.into_tensor()?;
-    let right = resolve::at(env, &node.name, &node.inputs, 1, device)?.into_tensor()?;
+    numeric_binary(
+        &node.name,
+        &node.inputs,
+        env,
+        device,
+        DynTensor::div_broadcast,
+        DynInt::div_broadcast,
+    )
+}
 
-    Ok(vec![Value::Tensor(left.div_broadcast(right)?)])
+fn numeric_binary(
+    node_name: &str,
+    inputs: &[onnx_ir::Argument],
+    env: &Env,
+    device: &Device,
+    float_op: impl FnOnce(DynTensor, DynTensor) -> Result<DynTensor>,
+    int_op: impl FnOnce(DynInt, DynInt) -> Result<DynInt>,
+) -> Result<Vec<Value>> {
+    let left = resolve::at(env, node_name, inputs, 0, device)?;
+    let right = resolve::at(env, node_name, inputs, 1, device)?;
+    let output = match (left, right) {
+        (Value::Tensor(left), Value::Tensor(right)) => Value::Tensor(float_op(left, right)?),
+        (Value::Int(left), Value::Int(right)) => Value::Int(int_op(left, right)?),
+        (left, right) => {
+            return Err(TynxError::TypeMismatch(format!(
+                "numeric operands must have matching tensor kinds, got {left:?} and {right:?}"
+            )));
+        }
+    };
+    Ok(vec![output])
 }
 
 pub(super) fn prelu(node: &PReluNode, env: &Env, device: &Device) -> Result<Vec<Value>> {

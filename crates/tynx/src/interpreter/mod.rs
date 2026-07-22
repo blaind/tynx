@@ -11,6 +11,7 @@ mod cumsum;
 mod dropout;
 mod extrema;
 mod gather;
+mod integer;
 mod logical;
 mod matrix;
 mod normalization;
@@ -71,6 +72,11 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::AveragePool2d(node) => pooling::average_pool2d(node, env, device),
         Node::AveragePool3d(node) => pooling::average_pool3d(node, env, device),
         Node::BatchNormalization(node) => normalization::batch_normalization(node, env, device),
+        Node::BitShift(node) => integer::bitshift(node, env, device),
+        Node::BitwiseAnd(node) => integer::bitwise_and(node, env, device),
+        Node::BitwiseNot(node) => integer::bitwise_not(node, env, device),
+        Node::BitwiseOr(node) => integer::bitwise_or(node, env, device),
+        Node::BitwiseXor(node) => integer::bitwise_xor(node, env, device),
         Node::Cast(node) => cast::cast(node, env, device),
         Node::CastLike(node) => cast::cast_like(node, env, device),
         Node::Ceil(node) => unary::ceil(node, env, device),
@@ -125,6 +131,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Mean(node) => variadic::mean(node, env, device),
         Node::Min(node) => variadic::min(node, env, device),
         Node::Mish(node) => unary::mish(node, env, device),
+        Node::Mod(node) => integer::modulo(node, env, device),
         Node::Mul(node) => binary::mul(node, env, device),
         Node::Neg(node) => unary::neg(node, env, device),
         Node::Not(node) => logical::not(node, env, device),
