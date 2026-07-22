@@ -27,6 +27,26 @@ def test_compile_replays_linear_relu_without_python_dispatch() -> None:
     assert compiled.node_counts == (6,)
 
 
+def test_compile_replays_softmax_without_fallback() -> None:
+    calls = 0
+
+    @tynx.compile(fullgraph=True)
+    def policy(logits: tynx.Tensor) -> tynx.Tensor:
+        nonlocal calls
+        calls += 1
+        return logits.softmax(-1)
+
+    first = policy(tynx.Tensor([[1.0, 2.0, 3.0]]))
+    second = policy(tynx.Tensor([[3.0, 2.0, 1.0]]))
+
+    assert first.tolist()[0] == pytest.approx([0.09003057, 0.24472848, 0.66524094])
+    assert second.tolist()[0] == pytest.approx([0.66524094, 0.24472848, 0.09003057])
+    assert calls == 1
+    assert policy.compile_count == 1
+    assert policy.fallback_count == 0
+    assert policy.replay_count == 1
+
+
 def test_compile_preserves_nested_multi_output_structure() -> None:
     calls = 0
 
@@ -306,6 +326,30 @@ def test_captured_categorical_sampling_advances_and_matches_eager_rng() -> None:
 
     assert captured == eager
     assert len({tuple(result) for result in captured}) > 1
+    assert calls == 1
+    assert sample.compile_count == 1
+    assert sample.replay_count == 5
+
+
+def test_captured_normal_sampling_advances_matches_eager_and_stays_detached() -> None:
+    loc = tynx.Tensor([0.0] * 32, requires_grad=True)
+    scale = tynx.Tensor([1.0] * 32, requires_grad=True)
+    tynx.manual_seed(161803)
+    eager = [tynx.distributions.Normal(loc, scale).sample() for _ in range(6)]
+    calls = 0
+
+    @tynx.compile(fullgraph=True)
+    def sample(mean: tynx.Tensor, stddev: tynx.Tensor) -> tynx.Tensor:
+        nonlocal calls
+        calls += 1
+        return tynx.distributions.Normal(mean, stddev).sample()
+
+    tynx.manual_seed(161803)
+    captured = [sample(loc, scale) for _ in range(6)]
+
+    assert [value.tolist() for value in captured] == [value.tolist() for value in eager]
+    assert len({tuple(value.tolist()) for value in captured}) > 1
+    assert all(not value.requires_grad for value in captured)
     assert calls == 1
     assert sample.compile_count == 1
     assert sample.replay_count == 5

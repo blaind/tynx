@@ -301,7 +301,10 @@ impl PyTensor {
             BinaryOp::Multiply => UnaryOp::MultiplyScalar(scalar),
             BinaryOp::Divide => UnaryOp::DivideScalar(scalar),
             BinaryOp::Power => UnaryOp::PowerScalar(scalar),
-            BinaryOp::Matmul | BinaryOp::Minimum | BinaryOp::Maximum => {
+            BinaryOp::Matmul
+            | BinaryOp::Minimum
+            | BinaryOp::Maximum
+            | BinaryOp::NormalSample { .. } => {
                 unreachable!("these operations do not use scalar arithmetic")
             }
         };
@@ -542,6 +545,16 @@ impl PyTensor {
         operation: UnaryOp,
     ) -> PyResult<Self> {
         self.trace = record_unary(source, operation)?;
+        Ok(self)
+    }
+
+    pub(crate) fn with_recorded_binary(
+        mut self,
+        left: &Self,
+        right: &Self,
+        operation: BinaryOp,
+    ) -> PyResult<Self> {
+        self.trace = record_binary(left, right, operation)?;
         Ok(self)
     }
 
@@ -901,7 +914,7 @@ impl PyTensor {
     /// Normalize values into probabilities along one dimension.
     fn softmax(&self, dim: &Bound<'_, PyAny>) -> PyResult<Self> {
         let dim = shape::axis(dim, self.ndim(), false, "softmax")?;
-        self.unary(|input| Ok(input.softmax(dim)))
+        self.unary_captured(UnaryOp::Softmax(dim), |input| Ok(input.softmax(dim)))
     }
 
     /// Apply numerically stable log-softmax along one dimension.

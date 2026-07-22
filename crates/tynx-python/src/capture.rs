@@ -485,9 +485,10 @@ impl PyCapturedGraph {
         let sources = inputs.iter().map(|input| &**input).collect::<Vec<_>>();
         let outputs = outputs
             .into_iter()
-            .map(|output| {
+            .zip(self.graph.output_differentiability())
+            .map(|(output, differentiable)| {
                 let tensor = match output {
-                    tynx_core::Value::Tensor(output) if tracking => {
+                    tynx_core::Value::Tensor(output) if tracking && *differentiable => {
                         PyTensor::from_imported_operation(
                             output,
                             &sources,
