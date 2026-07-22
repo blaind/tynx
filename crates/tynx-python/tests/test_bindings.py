@@ -23,6 +23,26 @@ def test_module_metadata() -> None:
     tynx.synchronize(device)
 
 
+def test_manual_seed_replays_authored_module_initialization() -> None:
+    random.seed(17)
+    expected_application_draw = random.random()
+    random.seed(17)
+
+    tynx.manual_seed(5)
+    first_linear = tynx.nn.Linear(4, 4)
+    first_conv = tynx.nn.Conv2d(2, 3, 3)
+
+    tynx.manual_seed(5)
+    second_linear = tynx.nn.Linear(4, 4)
+    second_conv = tynx.nn.Conv2d(2, 3, 3)
+
+    assert first_linear.weight.tolist() == second_linear.weight.tolist()
+    assert first_linear.bias is not None and second_linear.bias is not None
+    assert first_linear.bias.tolist() == second_linear.bias.tolist()
+    assert first_conv.weight.tolist() == second_conv.weight.tolist()
+    assert random.random() == expected_application_draw
+
+
 def test_tensor_metadata_and_host_conversion() -> None:
     tensor = tynx.Tensor([[1.0, 2.0], [3.0, 4.0]])
 

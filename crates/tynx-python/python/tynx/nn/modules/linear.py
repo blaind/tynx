@@ -1,10 +1,10 @@
 """Fully connected eager layer."""
 
 import math
-import random
 from typing import TYPE_CHECKING, cast
 
 from ..._tynx import Parameter, Tensor
+from .._random import uniform
 from .module import Module
 
 if TYPE_CHECKING:
@@ -23,14 +23,12 @@ class Linear(Module):
 
         bound = 1.0 / math.sqrt(self.in_features)
         weights = [
-            [random.uniform(-bound, bound) for _ in range(self.in_features)]
+            [uniform(-bound, bound) for _ in range(self.in_features)]
             for _ in range(self.out_features)
         ]
         self.weight = Parameter(cast("TensorData", weights), name="weight")
         self.bias = (
-            Parameter(
-                [random.uniform(-bound, bound) for _ in range(self.out_features)], name="bias"
-            )
+            Parameter([uniform(-bound, bound) for _ in range(self.out_features)], name="bias")
             if bias
             else None
         )
