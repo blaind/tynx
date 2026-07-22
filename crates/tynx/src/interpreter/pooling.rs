@@ -30,6 +30,52 @@ use super::{
 use crate::{DynInt, DynTensor, Result, TynxError, Value};
 
 const COLUMN_MAJOR_PREFIX: &str = "__tynx_maxpool_column_major__";
+const LP_POOL3D_PREFIX: &str = "__tynx_lppool3d_p";
+
+// The pinned onnx-ir revision only maps LpPool to 1D and 2D node types. Use
+// AveragePool3d as a typed carrier for rank-5 LpPool, retaining the norm in the
+// node name so execution can apply the original ONNX semantics.
+pub(super) fn prepare_model(data: &[u8]) -> Result<(Vec<u8>, bool)> {
+    let mut model =
+        ModelProto::parse_from_bytes(data).map_err(|error| TynxError::Parse(error.to_string()))?;
+    let Some(graph) = model.graph.as_mut() else {
+        return Ok((Vec::new(), false));
+    };
+    let mut changed = false;
+    for node in &mut graph.node {
+        if node.op_type != "LpPool" {
+            continue;
+        }
+        let spatial_rank = node
+            .attribute
+            .iter()
+            .find(|attribute| attribute.name == "kernel_shape")
+            .map(|attribute| attribute.ints.len());
+        if spatial_rank != Some(3) {
+            continue;
+        }
+        let p = node
+            .attribute
+            .iter()
+            .find(|attribute| attribute.name == "p")
+            .map_or(2, |attribute| attribute.i);
+        if p <= 0 {
+            return Err(TynxError::Shape(format!(
+                "LpPool p must be positive, got {p}"
+            )));
+        }
+        node.op_type = "AveragePool".to_string();
+        node.attribute.retain(|attribute| attribute.name != "p");
+        changed = true;
+    }
+    if !changed {
+        return Ok((Vec::new(), false));
+    }
+    model
+        .write_to_bytes()
+        .map(|bytes| (bytes, true))
+        .map_err(|error| TynxError::Parse(error.to_string()))
+}
 
 pub(super) fn preserve_attributes(data: &[u8], graph: &mut OnnxGraph) -> Result<()> {
     let model =
@@ -38,25 +84,41 @@ pub(super) fn preserve_attributes(data: &[u8], graph: &mut OnnxGraph) -> Result<
         return Ok(());
     };
     let mut flags = HashMap::<String, VecDeque<bool>>::new();
+    let mut lp_norms = HashMap::<String, VecDeque<Option<i64>>>::new();
     for node in &raw_graph.node {
-        if node.op_type != "MaxPool" {
-            continue;
-        }
         let Some(input) = node.input.first() else {
             continue;
         };
-        let column_major = node
-            .attribute
-            .iter()
-            .any(|attribute| attribute.name == "storage_order" && attribute.i == 1);
-        flags
-            .entry(input.clone())
-            .or_default()
-            .push_back(column_major);
+        if node.op_type == "MaxPool" {
+            let column_major = node
+                .attribute
+                .iter()
+                .any(|attribute| attribute.name == "storage_order" && attribute.i == 1);
+            flags
+                .entry(input.clone())
+                .or_default()
+                .push_back(column_major);
+        }
+        if matches!(node.op_type.as_str(), "AveragePool" | "LpPool")
+            && node
+                .attribute
+                .iter()
+                .find(|attribute| attribute.name == "kernel_shape")
+                .is_some_and(|attribute| attribute.ints.len() == 3)
+        {
+            let p = (node.op_type == "LpPool").then(|| {
+                node.attribute
+                    .iter()
+                    .find(|attribute| attribute.name == "p")
+                    .map_or(2, |attribute| attribute.i)
+            });
+            lp_norms.entry(input.clone()).or_default().push_back(p);
+        }
     }
 
     for node in &mut graph.nodes {
         match node {
+            Node::AveragePool3d(node) => mark_lp_pool3d(node, &mut lp_norms),
             Node::MaxPool1d(node) => mark_storage_order(node, &mut flags),
             Node::MaxPool2d(node) => mark_storage_order(node, &mut flags),
             Node::MaxPool3d(node) => mark_storage_order(node, &mut flags),
@@ -64,6 +126,18 @@ pub(super) fn preserve_attributes(data: &[u8], graph: &mut OnnxGraph) -> Result<
         }
     }
     Ok(())
+}
+
+fn mark_lp_pool3d(
+    node: &mut AveragePool3dNode,
+    norms: &mut HashMap<String, VecDeque<Option<i64>>>,
+) {
+    let Some(input) = node.inputs.first() else {
+        return;
+    };
+    if let Some(Some(p)) = norms.get_mut(&input.name).and_then(VecDeque::pop_front) {
+        node.name = format!("{LP_POOL3D_PREFIX}{p}__{}", node.name);
+    }
 }
 
 fn mark_storage_order<N: PoolNode>(node: &mut N, flags: &mut HashMap<String, VecDeque<bool>>) {
@@ -183,6 +257,18 @@ pub(super) fn average_pool3d(
         &node.config.auto_pad,
         node.config.ceil_mode,
     );
+    if let Some(p) = lp_pool3d_p(&node.name) {
+        let p = p as f64;
+        let output = grouped_sum_pool3d(
+            input.abs().powf_scalar(p),
+            node.config.kernel_size,
+            node.config.strides,
+            node.config.dilation,
+            padding,
+        )
+        .powf_scalar(1.0 / p);
+        return Ok(vec![Value::Tensor(DynTensor::R5(output))]);
+    }
     let output = grouped_average_pool3d(
         input,
         node.config.kernel_size,
@@ -201,6 +287,14 @@ pub(super) fn average_pool3d(
         node.config.count_include_pad,
     );
     Ok(vec![Value::Tensor(DynTensor::R5(output))])
+}
+
+fn lp_pool3d_p(name: &str) -> Option<i64> {
+    name.strip_prefix(LP_POOL3D_PREFIX)?
+        .split_once("__")?
+        .0
+        .parse()
+        .ok()
 }
 
 pub(super) fn max_pool1d(node: &MaxPool1dNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
@@ -493,6 +587,27 @@ fn grouped_sum_pool2d(
     )
 }
 
+fn grouped_sum_pool3d(
+    input: Tensor<5>,
+    kernel: [usize; 3],
+    stride: [usize; 3],
+    dilation: [usize; 3],
+    padding: [(usize, usize); 3],
+) -> Tensor<5> {
+    let [_, channels, _, _, _] = input.dims();
+    let device = input.device();
+    let dtype = input.dtype();
+    burn_conv3d(
+        input.pad(padding, PadMode::Constant(0.0)),
+        Tensor::<5>::ones(
+            [channels, 1, kernel[0], kernel[1], kernel[2]],
+            (&device, dtype),
+        ),
+        None,
+        ConvOptions::new(stride, [0; 3], dilation, channels),
+    )
+}
+
 fn grouped_average_pool1d(
     input: Tensor<3>,
     kernel: usize,
@@ -659,6 +774,7 @@ mod tests {
     use onnx_ir::{
         DType,
         node::{
+            avg_pool3d::{AveragePool3dNodeBuilder, AvgPool3dConfig},
             lp_pool1d::{LpPool1dConfig, LpPool1dNodeBuilder},
             max_pool3d::{MaxPool3dConfig, MaxPool3dNodeBuilder},
             padding::{AutoPad, PaddingConfig1d, PaddingConfig3d},
@@ -733,6 +849,49 @@ mod tests {
 
         assert!((output[0] - 5.0_f32.sqrt()).abs() < 1e-6);
         assert_eq!(output[1], 5.0);
+    }
+
+    #[test]
+    fn lp_pool3d_sums_powered_volumes() {
+        let node = AveragePool3dNodeBuilder::new(format!("{LP_POOL3D_PREFIX}2__lp_pool"))
+            .input_tensor("x", 5, DType::F32)
+            .output_tensor("y", 5, DType::F32)
+            .config(AvgPool3dConfig::new(
+                [2, 2, 2],
+                [1, 1, 1],
+                PaddingConfig3d::Valid,
+                false,
+                [1, 1, 1],
+                false,
+                AutoPad::NotSet,
+            ))
+            .build();
+        let device = Device::default();
+        let mut env = Env::new();
+        env.insert(
+            "x".into(),
+            Value::from_tensor_data(
+                TensorData::new(
+                    vec![1.0_f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+                    [1, 1, 2, 2, 2],
+                ),
+                5,
+                &device,
+            )
+            .unwrap(),
+        );
+
+        let output = average_pool3d(&node, &env, &device)
+            .unwrap()
+            .pop()
+            .unwrap()
+            .into_tensor()
+            .unwrap()
+            .into_data()
+            .iter::<f32>()
+            .collect::<Vec<_>>();
+
+        assert!((output[0] - 204.0_f32.sqrt()).abs() < 1e-6);
     }
 
     #[test]

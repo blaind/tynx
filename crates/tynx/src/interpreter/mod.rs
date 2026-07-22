@@ -67,8 +67,16 @@ pub(crate) fn prepare_model(data: &[u8]) -> Result<(Vec<u8>, bool)> {
         data
     };
     let (scatter_data, scatter_changed) = scatter::prepare_model(prepared)?;
+    let prepared = if scatter_changed {
+        scatter_data.as_slice()
+    } else {
+        prepared
+    };
+    let (pooling_data, pooling_changed) = pooling::prepare_model(prepared)?;
 
-    if scatter_changed {
+    if pooling_changed {
+        Ok((pooling_data, true))
+    } else if scatter_changed {
         Ok((scatter_data, true))
     } else if convolution_changed {
         Ok((convolution_data, true))

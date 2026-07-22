@@ -854,7 +854,7 @@
     "test_lppool_2d_same_lower": "pass",
     "test_lppool_2d_same_upper": "pass",
     "test_lppool_2d_strides": "pass",
-    "test_lppool_3d_default": "panic",
+    "test_lppool_3d_default": "pass",
     "test_lrn": "pass",
     "test_lrn_default": "pass",
     "test_lstm_batchwise": "pass",
