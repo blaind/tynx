@@ -184,6 +184,11 @@ pub enum UnaryOp {
     },
     /// Training-mode Dropout driven by the device's advancing native RNG stream.
     Dropout(f64),
+    /// Detached categorical sampling using Gumbel-max over the final dimension.
+    CategoricalSample {
+        /// Optional explicit seed applied before every execution.
+        seed: Option<u64>,
+    },
 }
 
 /// Binary operations supported by the initial runtime IR.
@@ -670,6 +675,39 @@ fn execute_unary(op: &UnaryOp, input: Value) -> Result<Value> {
             )),
         };
     }
+    if let UnaryOp::CategoricalSample { seed } = op {
+        let logits = input.into_tensor()?.detach();
+        let rank = logits.rank();
+        if rank == 0 {
+            return Err(TynxError::Shape(
+                "categorical logits must have at least one dimension".to_string(),
+            ));
+        }
+        let dims = logits.dims();
+        if dims[rank - 1] == 0 {
+            return Err(TynxError::Shape(
+                "categorical logits must contain at least one category".to_string(),
+            ));
+        }
+        let device = logits.device();
+        if let Some(seed) = seed {
+            device.seed(*seed);
+        }
+        let uniform = DynTensor::random(
+            &dims,
+            Distribution::Uniform(1.0e-7, 1.0 - 1.0e-7),
+            &device,
+            DType::F32,
+        )?;
+        let gumbel = uniform.log().mul_scalar(-1.0).log().mul_scalar(-1.0);
+        let perturbed = logits.add_broadcast(gumbel)?;
+        let indices = perturbed.arg_extreme(rank - 1, true, false);
+        let mut output_shape = dims[..rank - 1].to_vec();
+        if output_shape.is_empty() {
+            output_shape.push(1);
+        }
+        return indices.reshape(output_shape).map(Value::Int);
+    }
     let input = input.into_tensor()?;
     let output = match op {
         UnaryOp::Negate => Ok(input.negated()),
@@ -711,6 +749,7 @@ fn execute_unary(op: &UnaryOp, input: Value) -> Result<Value> {
                     .mul_scalar(1.0 / (1.0 - probability)))
             }
         }
+        UnaryOp::CategoricalSample { .. } => unreachable!("handled before float unary dispatch"),
     }?;
     Ok(Value::Tensor(output))
 }
