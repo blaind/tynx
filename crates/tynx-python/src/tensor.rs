@@ -295,7 +295,17 @@ impl PyTensor {
             return self.binary(&other, capture_op, tensor_operation);
         }
         let scalar = extract_scalar_operand(other)?;
-        self.unary(|input| Ok(scalar_operation(input, scalar)))
+        let capture_op = match capture_op {
+            BinaryOp::Add => UnaryOp::AddScalar(scalar),
+            BinaryOp::Subtract => UnaryOp::SubtractScalar(scalar),
+            BinaryOp::Multiply => UnaryOp::MultiplyScalar(scalar),
+            BinaryOp::Divide => UnaryOp::DivideScalar(scalar),
+            BinaryOp::Power => UnaryOp::PowerScalar(scalar),
+            BinaryOp::Matmul | BinaryOp::Minimum | BinaryOp::Maximum => {
+                unreachable!("these operations do not use scalar arithmetic")
+            }
+        };
+        self.unary_captured(capture_op, |input| Ok(scalar_operation(input, scalar)))
     }
 
     fn unary(
@@ -439,6 +449,18 @@ impl PyTensor {
     fn elementwise_extreme(&self, other: &Bound<'_, PyAny>, extremum: Extremum) -> PyResult<Self> {
         let tracking = is_grad_enabled();
         let other_tensor = other.extract::<PyRef<'_, Self>>().ok();
+        if matches!(self.source.value(), TensorValue::Float(_))
+            && let Some(other) = other_tensor.as_deref()
+            && matches!(other.source.value(), TensorValue::Float(_))
+        {
+            let capture_op = match extremum {
+                Extremum::Minimum => BinaryOp::Minimum,
+                Extremum::Maximum => BinaryOp::Maximum,
+            };
+            return self.binary(other, capture_op, |left, right| {
+                extremum.float_pair(left, right)
+            });
+        }
         let left = match self.source.value() {
             TensorValue::Float(_) => self
                 .operation_input(tracking, extremum.name())
@@ -885,7 +907,7 @@ impl PyTensor {
     /// Apply numerically stable log-softmax along one dimension.
     fn log_softmax(&self, dim: &Bound<'_, PyAny>) -> PyResult<Self> {
         let dim = shape::axis(dim, self.ndim(), false, "log_softmax")?;
-        self.unary(|input| Ok(input.log_softmax(dim)))
+        self.unary_captured(UnaryOp::LogSoftmax(dim), |input| Ok(input.log_softmax(dim)))
     }
 
     /// Clamp values to optional scalar bounds.
@@ -1009,7 +1031,9 @@ impl PyTensor {
 
     fn __rsub__(&self, other: &Bound<'_, PyAny>) -> PyResult<Self> {
         let scalar = extract_scalar_operand(other)?;
-        self.unary(|input| Ok(input.negated().add_scalar(scalar)))
+        self.unary_captured(UnaryOp::ReverseSubtractScalar(scalar), |input| {
+            Ok(input.negated().add_scalar(scalar))
+        })
     }
 
     fn __isub__(&self, _other: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -1049,7 +1073,9 @@ impl PyTensor {
 
     fn __rtruediv__(&self, other: &Bound<'_, PyAny>) -> PyResult<Self> {
         let scalar = extract_scalar_operand(other)?;
-        self.unary(|input| Ok(input.reciprocal().mul_scalar(scalar)))
+        self.unary_captured(UnaryOp::ReverseDivideScalar(scalar), |input| {
+            Ok(input.reciprocal().mul_scalar(scalar))
+        })
     }
 
     fn __itruediv__(&self, _other: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -1100,7 +1126,7 @@ impl PyTensor {
     }
 
     fn __neg__(&self) -> PyResult<Self> {
-        self.unary(|input| Ok(input.negated()))
+        self.unary_captured(UnaryOp::Negate, |input| Ok(input.negated()))
     }
 
     fn __abs__(&self) -> PyResult<Self> {
@@ -1142,7 +1168,9 @@ impl PyTensor {
             ));
         }
         let base = extract_scalar_operand(base)?;
-        self.unary(move |exponent| exponent.clone().full_like(base).powf_broadcast(exponent))
+        self.unary_captured(UnaryOp::ReversePowerScalar(base), move |exponent| {
+            exponent.clone().full_like(base).powf_broadcast(exponent)
+        })
     }
 
     fn __ipow__(
@@ -1228,7 +1256,10 @@ impl PyTensor {
                 "clamp requires at least one of min or max",
             ));
         }
-        self.unary(|input| Ok(input.clip(min, max)))
+        self.unary_captured(
+            UnaryOp::Clamp { min, max },
+            |input| Ok(input.clip(min, max)),
+        )
     }
 
     fn reduce(&self, dim: Option<&Bound<'_, PyAny>>, keepdim: bool, sum: bool) -> PyResult<Self> {

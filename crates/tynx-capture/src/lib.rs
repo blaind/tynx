@@ -106,6 +106,8 @@ impl TensorSignature {
 /// Unary operations supported by the initial runtime IR.
 #[derive(Debug, Clone, PartialEq)]
 pub enum UnaryOp {
+    /// Arithmetic negation.
+    Negate,
     /// Rectified linear activation.
     Relu,
     /// Logistic activation.
@@ -120,6 +122,31 @@ pub enum UnaryOp {
     Sqrt,
     /// Gaussian error linear unit.
     Gelu,
+    /// Add a trace-time scalar constant.
+    AddScalar(f64),
+    /// Subtract a trace-time scalar constant.
+    SubtractScalar(f64),
+    /// Subtract the tensor from a trace-time scalar constant.
+    ReverseSubtractScalar(f64),
+    /// Multiply by a trace-time scalar constant.
+    MultiplyScalar(f64),
+    /// Divide by a trace-time scalar constant.
+    DivideScalar(f64),
+    /// Divide a trace-time scalar constant by the tensor.
+    ReverseDivideScalar(f64),
+    /// Raise the tensor to a trace-time scalar exponent.
+    PowerScalar(f64),
+    /// Raise a trace-time scalar base to the tensor.
+    ReversePowerScalar(f64),
+    /// Numerically stable log-softmax along one axis.
+    LogSoftmax(usize),
+    /// Clamp to optional trace-time scalar bounds.
+    Clamp {
+        /// Optional lower bound.
+        min: Option<f64>,
+        /// Optional upper bound.
+        max: Option<f64>,
+    },
     /// Reshape without changing element order.
     Reshape(Vec<usize>),
     /// Permute all tensor axes.
@@ -157,6 +184,10 @@ pub enum BinaryOp {
     Matmul,
     /// Elementwise floating-point exponentiation.
     Power,
+    /// Elementwise minimum.
+    Minimum,
+    /// Elementwise maximum.
+    Maximum,
 }
 
 #[derive(Debug, Clone)]
@@ -505,6 +536,7 @@ fn execute_unary(op: &UnaryOp, input: Value) -> Result<Value> {
     }
     let input = input.into_tensor()?;
     let output = match op {
+        UnaryOp::Negate => Ok(input.negated()),
         UnaryOp::Relu => Ok(input.relu()),
         UnaryOp::Sigmoid => Ok(input.sigmoid()),
         UnaryOp::Tanh => Ok(input.tanh()),
@@ -512,6 +544,16 @@ fn execute_unary(op: &UnaryOp, input: Value) -> Result<Value> {
         UnaryOp::Log => Ok(input.log()),
         UnaryOp::Sqrt => Ok(input.sqrt()),
         UnaryOp::Gelu => Ok(input.gelu()),
+        UnaryOp::AddScalar(value) => Ok(input.add_scalar(*value)),
+        UnaryOp::SubtractScalar(value) => Ok(input.sub_scalar(*value)),
+        UnaryOp::ReverseSubtractScalar(value) => Ok(input.negated().add_scalar(*value)),
+        UnaryOp::MultiplyScalar(value) => Ok(input.mul_scalar(*value)),
+        UnaryOp::DivideScalar(value) => Ok(input.div_scalar(*value)),
+        UnaryOp::ReverseDivideScalar(value) => Ok(input.reciprocal().mul_scalar(*value)),
+        UnaryOp::PowerScalar(value) => Ok(input.powf_scalar(*value)),
+        UnaryOp::ReversePowerScalar(value) => input.clone().full_like(*value).powf_broadcast(input),
+        UnaryOp::LogSoftmax(dim) => Ok(input.log_softmax(*dim)),
+        UnaryOp::Clamp { min, max } => Ok(input.clip(*min, *max)),
         UnaryOp::Reshape(shape) => input.reshape(shape.clone()),
         UnaryOp::Permute(axes) => input.permute(axes.clone()),
         UnaryOp::Sum { dims, output_shape } => input.sum_dims(dims).reshape(output_shape.clone()),
@@ -547,6 +589,8 @@ fn execute_binary(op: BinaryOp, left: Value, right: Value) -> Result<Value> {
         BinaryOp::Divide => left.div_broadcast(right),
         BinaryOp::Matmul => left.matmul(right),
         BinaryOp::Power => left.powf_broadcast(right),
+        BinaryOp::Minimum => left.min_broadcast(right),
+        BinaryOp::Maximum => left.max_broadcast(right),
     }?;
     Ok(Value::Tensor(output))
 }

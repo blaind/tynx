@@ -82,6 +82,61 @@ def test_compile_replays_integer_index_gather_and_gradient() -> None:
     assert select.replay_count == 1
 
 
+def test_compile_replays_ppo_math_primitives() -> None:
+    calls = 0
+
+    @tynx.compile(fullgraph=True)
+    def ppo_loss(
+        logits: tynx.Tensor,
+        actions: tynx.Tensor,
+        old_log_prob: tynx.Tensor,
+        advantages: tynx.Tensor,
+        values: tynx.Tensor,
+        returns: tynx.Tensor,
+    ) -> tuple[tynx.Tensor, tynx.Tensor]:
+        nonlocal calls
+        calls += 1
+        policy = tynx.distributions.Categorical(logits=logits)
+        log_prob = policy.log_prob(actions)
+        ratio = (log_prob - old_log_prob).exp()
+        unclipped = ratio * advantages
+        clipped = ratio.clamp(0.8, 1.2) * advantages
+        policy_loss = -tynx.minimum(unclipped, clipped).mean()
+        value_loss = tynx.nn.functional.mse_loss(values, returns)
+        loss = policy_loss + value_loss * 0.5 - policy.entropy().mean() * 0.01
+        return loss, value_loss
+
+    actions = tynx.Tensor([0, 1], dtype="int64")
+    old_log_prob = tynx.Tensor([-0.6931472, -0.6931472])
+    advantages = tynx.Tensor([1.0, -0.5])
+    returns = tynx.Tensor([1.0, -1.0])
+    ppo_loss(
+        tynx.Tensor([[0.0, 0.0], [0.0, 0.0]]),
+        actions,
+        old_log_prob,
+        advantages,
+        tynx.Tensor([0.0, 0.0]),
+        returns,
+    )
+
+    logits = tynx.Tensor([[0.2, -0.1], [-0.3, 0.4]], requires_grad=True)
+    loss, value_loss = ppo_loss(
+        logits,
+        actions,
+        old_log_prob,
+        advantages,
+        tynx.Tensor([0.5, -0.25]),
+        returns,
+    )
+    assert loss.item() == pytest.approx(-0.043811, abs=1e-5)
+    assert value_loss.item() == pytest.approx(0.40625)
+    loss.backward()
+    assert logits.grad is not None
+    assert all(value == value for value in logits.grad.flatten().tolist())
+    assert calls == 1
+    assert ppo_loss.replay_count == 1
+
+
 def test_compile_replay_preserves_input_and_parameter_gradients() -> None:
     weight = tynx.Parameter([[2.0], [-1.0]], name="weight")
 
@@ -148,12 +203,12 @@ def test_unsupported_operation_falls_back_for_whole_function() -> None:
     def forward(input: tynx.Tensor) -> tynx.Tensor:
         nonlocal calls
         calls += 1
-        return input + 1.0
+        return abs(input)
 
     compiled = tynx.compile(forward)
     with pytest.warns(RuntimeWarning, match="fell back to eager"):
-        assert compiled(tynx.Tensor([1.0])).tolist() == [2.0]
-    assert compiled(tynx.Tensor([2.0])).tolist() == [3.0]
+        assert compiled(tynx.Tensor([-1.0])).tolist() == [1.0]
+    assert compiled(tynx.Tensor([-2.0])).tolist() == [2.0]
     assert calls == 2
     assert compiled.compile_count == 0
     assert compiled.fallback_count == 2
@@ -164,7 +219,7 @@ def test_unsupported_operation_falls_back_for_whole_function() -> None:
 
 def test_fullgraph_rejects_unsupported_operation_visibly() -> None:
     def function(input: tynx.Tensor) -> tynx.Tensor:
-        return input + 1.0
+        return abs(input)
 
     compiled = tynx.compile(function, fullgraph=True)
 
