@@ -130,7 +130,7 @@ pub(super) fn layer_normalization(
         .mul_broadcast(inv_std.clone())?
         .mul_broadcast(scale)?;
     if let Some(bias) = node.inputs.get(2).filter(|input| !input.is_optional()) {
-        let bias = resolve::input(env, bias, device)?
+        let bias = resolve::input_at(env, bias, 2, device)?
             .into_tensor()?
             .cast(compute_dtype)
             .to_rank(input_rank)?;

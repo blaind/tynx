@@ -303,6 +303,18 @@ macro_rules! impl_metadata {
                 }
             }
 
+            /// Return the device that owns the tensor.
+            pub fn device(&self) -> Device {
+                match self {
+                    Self::R1(tensor) => tensor.device(),
+                    Self::R2(tensor) => tensor.device(),
+                    Self::R3(tensor) => tensor.device(),
+                    Self::R4(tensor) => tensor.device(),
+                    Self::R5(tensor) => tensor.device(),
+                    Self::R6(tensor) => tensor.device(),
+                }
+            }
+
             /// Create a rank-erased tensor from host data.
             pub fn from_data(data: TensorData, rank: usize, device: &Device) -> Result<Self> {
                 let dtype = data.dtype;

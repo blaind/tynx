@@ -28,6 +28,17 @@ pub enum TynxError {
     #[error("value '{0}' not found in environment")]
     MissingValue(String),
 
+    /// A prepared session received a tensor allocated on another device.
+    #[error("input '{name}' is on {actual}, but the prepared session uses {expected}")]
+    DeviceMismatch {
+        /// Input name.
+        name: String,
+        /// Prepared device.
+        expected: String,
+        /// Input tensor device.
+        actual: String,
+    },
+
     /// A value had an unexpected type.
     #[error("type mismatch: {0}")]
     TypeMismatch(String),

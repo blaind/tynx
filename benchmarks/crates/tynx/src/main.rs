@@ -3,7 +3,8 @@ use std::time::Instant;
 use burn::tensor::{Device, TensorData};
 use tynx::{Env, Session, Value};
 use tynx_bench_protocol::{
-    BenchResult, Case, Report, load_cases, measure, model_bytes, print_reports, require_release,
+    BenchResult, Case, Report, load_cases, measure_prepared, model_bytes, print_reports,
+    require_release,
 };
 
 fn main() -> BenchResult<()> {
@@ -28,6 +29,9 @@ fn run_case(
     let started = Instant::now();
     let session = Session::from_bytes(&bytes)?;
     let load_ms = started.elapsed().as_secs_f64() * 1_000.0;
+    let started = Instant::now();
+    let session = session.prepare(device)?;
+    let prepare_ms = started.elapsed().as_secs_f64() * 1_000.0;
     if session.inputs().len() != case.inputs.len() {
         return Err(format!(
             "model requires {} inputs, case '{}' provides {}",
@@ -39,33 +43,41 @@ fn run_case(
     }
     let output_name = session.outputs()[0].name.clone();
 
-    measure("tynx", backend, device_name, load_ms, case, || {
-        let mut inputs = Env::new();
-        for (model_input, input) in session.inputs().iter().zip(&case.inputs) {
-            if model_input.name != input.name {
-                return Err(format!(
-                    "model input '{}' does not match case input '{}'",
-                    model_input.name, input.name
-                )
-                .into());
+    measure_prepared(
+        "tynx",
+        backend,
+        device_name,
+        load_ms,
+        Some(prepare_ms),
+        case,
+        || {
+            let mut inputs = Env::new();
+            for (model_input, input) in session.inputs().iter().zip(&case.inputs) {
+                if model_input.name != input.name {
+                    return Err(format!(
+                        "model input '{}' does not match case input '{}'",
+                        model_input.name, input.name
+                    )
+                    .into());
+                }
+                inputs.insert(
+                    input.name.clone(),
+                    Value::from_tensor_data(
+                        TensorData::new(input.values.clone(), input.shape.clone()),
+                        input.shape.len(),
+                        device,
+                    )?,
+                );
             }
-            inputs.insert(
-                input.name.clone(),
-                Value::from_tensor_data(
-                    TensorData::new(input.values.clone(), input.shape.clone()),
-                    input.shape.len(),
-                    device,
-                )?,
-            );
-        }
-        let mut outputs = session.run(device, inputs)?;
-        let output = outputs
-            .remove(&output_name)
-            .ok_or_else(|| format!("Tynx did not produce output '{output_name}'"))?
-            .into_tensor()?
-            .into_data();
-        Ok(output.convert::<f32>().to_vec::<f32>()?)
-    })
+            let mut outputs = session.run(inputs)?;
+            let output = outputs
+                .remove(&output_name)
+                .ok_or_else(|| format!("Tynx did not produce output '{output_name}'"))?
+                .into_tensor()?
+                .into_data();
+            Ok(output.convert::<f32>().to_vec::<f32>()?)
+        },
+    )
 }
 
 #[cfg(feature = "wgpu")]
