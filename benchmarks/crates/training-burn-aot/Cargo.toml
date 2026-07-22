@@ -1,0 +1,33 @@
+[package]
+name = "burn-aot-training-bench"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+build = "build.rs"
+
+[features]
+default = ["flex"]
+flex = ["burn/flex"]
+multithread = ["dep:burn-flex", "burn-flex/rayon", "dep:rayon"]
+wgpu = [
+    "burn/autotune",
+    "burn/fusion",
+    "burn/webgpu",
+    "burn-store/wgpu",
+    "tynx-bench-protocol/wgpu-device",
+]
+
+[dependencies]
+burn = { workspace = true, features = ["optim"] }
+burn-flex = { workspace = true, optional = true }
+burn-store.workspace = true
+rayon = { workspace = true, optional = true }
+tynx-bench-protocol = { workspace = true, features = ["training"] }
+
+[build-dependencies]
+burn-onnx = { git = "https://github.com/tracel-ai/burn-onnx", rev = "af2dfb43af43bf363dc2d7d858d933d86e2a65a8" }
+tynx-bench-protocol = { workspace = true, features = ["training"] }
+
+[lints]
+workspace = true

@@ -7,12 +7,16 @@ publish.workspace = true
 
 [features]
 mobilenet = []
+training = ["dep:onnx-ir", "dep:protobuf", "dep:sha2"]
 wgpu-device = ["dep:pollster", "dep:wgpu"]
 
 [dependencies]
+onnx-ir = { workspace = true, optional = true }
 pollster = { workspace = true, optional = true }
+protobuf = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
+sha2 = { workspace = true, optional = true }
 wgpu = { workspace = true, optional = true }
 
 [lints]

@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "cases": [
+    {
+      "id": "mlp-784-512-10-b64",
+      "batch_size": 64,
+      "dataset_batches": 8,
+      "iterations": 100,
+      "reset_interval": 20,
+      "estimated_step_flops": 156106752
+    },
+    {
+      "id": "mlp-784-512-10-b1024",
+      "batch_size": 1024,
+      "dataset_batches": 8,
+      "iterations": 40,
+      "reset_interval": 10,
+      "estimated_step_flops": 2497708032
+    },
+    {
+      "id": "mlp-784-512-10-b4096",
+      "batch_size": 4096,
+      "dataset_batches": 8,
+      "iterations": 20,
+      "reset_interval": 5,
+      "estimated_step_flops": 9990832128
+    }
+  ]
+}

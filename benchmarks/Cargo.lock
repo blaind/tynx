@@ -413,6 +413,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "burn-aot-training-bench"
+version = "0.1.0"
+dependencies = [
+ "burn",
+ "burn-flex",
+ "burn-onnx",
+ "burn-store",
+ "rayon",
+ "tynx-bench-protocol",
+]
+
+[[package]]
 name = "burn-autodiff"
 version = "0.22.0-pre.1"
 source = "git+https://github.com/tracel-ai/burn?rev=78f10aec1ca6c6ffb1edd17a0fa131ae59ad5403#78f10aec1ca6c6ffb1edd17a0fa131ae59ad5403"
@@ -5536,14 +5548,16 @@ dependencies = [
 
 [[package]]
 name = "tynx"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "burn",
  "getrandom 0.4.3",
  "log",
  "onnx-ir",
+ "pollster",
  "protobuf",
  "thiserror 2.0.19",
+ "wgpu",
 ]
 
 [[package]]
@@ -5561,10 +5575,33 @@ dependencies = [
 name = "tynx-bench-protocol"
 version = "0.1.0"
 dependencies = [
+ "onnx-ir",
  "pollster",
+ "protobuf",
  "serde",
  "serde_json",
+ "sha2",
  "wgpu",
+]
+
+[[package]]
+name = "tynx-train"
+version = "0.1.1"
+dependencies = [
+ "burn",
+ "tynx",
+]
+
+[[package]]
+name = "tynx-training-bench"
+version = "0.1.0"
+dependencies = [
+ "burn",
+ "burn-flex",
+ "rayon",
+ "tynx",
+ "tynx-bench-protocol",
+ "tynx-train",
 ]
 
 [[package]]

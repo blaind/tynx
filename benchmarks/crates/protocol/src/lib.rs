@@ -1,5 +1,8 @@
 //! Shared benchmark cases, timing, validation, and JSON reporting.
 
+#[cfg(feature = "training")]
+pub mod training;
+
 use std::{env, error::Error, fs, hint::black_box, time::Instant};
 
 use serde::{Deserialize, Serialize};

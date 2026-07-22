@@ -37,8 +37,8 @@ cargo run --manifest-path benchmarks/Cargo.toml --locked --release -p burn-aot-b
 ORT downloads its official CPU binary for the default configuration.
 
 Set `TYNX_BENCH_THREADS` to `1` for a matched single-thread run or `auto` for each runtime's
-all-core default. Tynx and burn-onnx AOT need the `multithread` feature in both modes so the
-single-thread and all-core measurements use the same Rayon-enabled build:
+default pool. Tynx and burn-onnx AOT need the `multithread` feature in both modes so the
+single-thread and runtime-default measurements use the same Rayon-enabled build:
 
 ```sh
 TYNX_BENCH_THREADS=1 cargo run --manifest-path benchmarks/Cargo.toml --locked --release \
@@ -57,9 +57,55 @@ Burn runners remain serial and reject explicit counts greater than one.
 
 Each runner executes every registered case by default and emits one JSON report array. Set
 `TYNX_BENCH_CASE` to limit a run to one case. The manual GitHub workflow invokes each engine in
-matched single-thread and automatic all-core modes, adds a comparison table to the job summary,
+matched single-thread and automatic runtime-default modes, adds a comparison table to the job summary,
 and uploads its JSON reports. Leave the workflow iteration inputs blank to use the per-case
 defaults.
+
+## Training
+
+The training suite compares an imported Tynx model with burn-onnx generated AOT Rust using the
+same deterministic ONNX weights, rotating device-resident batches, MSE loss, plain SGD update, Burn
+revision, and backend. The initial model is a two-layer `784 -> 512 -> 10` Gemm/ReLU MLP because
+live trainable state currently supports Gemm, Linear, and MatMul. Trainable convolution benchmarks
+will be added after slot-backed Conv execution lands.
+
+```sh
+TYNX_BENCH_CASE=mlp-784-512-10-b64 \
+TYNX_BENCH_THREADS=1 \
+cargo run --manifest-path benchmarks/Cargo.toml --locked --release \
+  -p tynx-training-bench --features multithread
+
+TYNX_BENCH_CASE=mlp-784-512-10-b64 \
+TYNX_BENCH_THREADS=1 \
+cargo run --manifest-path benchmarks/Cargo.toml --locked --release \
+  -p burn-aot-training-bench --features multithread
+```
+
+The registry provides batch sizes 64, 1024, and 4096. Omit `TYNX_BENCH_CASE` to run the full
+scaling sweep. The default boundary is one complete `zero_grad -> forward -> loss -> backward ->
+optimizer step -> device sync` operation. Select another boundary or synchronization policy with:
+
+```sh
+TYNX_BENCH_TRAINING_MODE=forward_loss       # or forward_backward, train_step
+TYNX_BENCH_SYNC_POLICY=each_step            # or final_only
+```
+
+`final_only` means no explicit sync between steps and one sync after each reset block. It does not
+claim that backward is asynchronous. The report records empty-sync overhead so fixed device
+round-trip cost remains visible.
+
+Steady-state timing starts only after two ten-step median windows move by at most 2 percent for
+three consecutive comparisons, with a minimum of 20 and maximum of 200 warmup steps. The actual
+count and convergence status are reported. Set `TYNX_BENCH_WARMUP_MIN` and
+`TYNX_BENCH_WARMUP_MAX` to override the bounds. State is restored outside timing at regular block
+boundaries so loss and gradient magnitudes remain stationary.
+
+Every result includes parse, preparation, cold-step, warmup, steady-step, throughput, estimated
+training GFLOP/s, cache policy, synchronization policy, model SHA-256, parameter SHA-256, exact
+trainable/frozen/gradient sets, and a five-step loss trajectory. Compare the two JSON outputs with
+`jq -s -e -f benchmarks/check-training-trajectory.jq tynx.json burn-aot.json`; this requires matching
+CPU parameter hashes and loss trajectories. Training benchmarks are intentionally not wired into
+CI yet, and performance results have no latency gate.
 
 ## MobileNetV2
 

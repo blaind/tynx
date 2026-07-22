@@ -3,6 +3,8 @@ members = [
     "crates/burn-aot",
     "crates/ort",
     "crates/protocol",
+    "crates/training-burn-aot",
+    "crates/training-tynx",
     "crates/tynx",
 ]
 resolver = "3"
@@ -17,10 +19,14 @@ publish = false
 burn = { git = "https://github.com/tracel-ai/burn", rev = "78f10aec1ca6c6ffb1edd17a0fa131ae59ad5403", default-features = false, features = ["std"] }
 burn-flex = { git = "https://github.com/tracel-ai/burn", rev = "78f10aec1ca6c6ffb1edd17a0fa131ae59ad5403", default-features = false }
 burn-store = { git = "https://github.com/tracel-ai/burn", rev = "78f10aec1ca6c6ffb1edd17a0fa131ae59ad5403", default-features = false, features = ["burnpack", "std"] }
+onnx-ir = { git = "https://github.com/tracel-ai/burn-onnx", rev = "af2dfb43af43bf363dc2d7d858d933d86e2a65a8" }
+protobuf = "3"
 rayon = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 pollster = "0.4"
+tynx-train = { path = "../crates/tynx-train" }
 tynx-bench-protocol = { path = "crates/protocol" }
 wgpu = { git = "https://github.com/gfx-rs/wgpu.git", rev = "bde709122f8320571ab1733ab055dcb54415a483" }
 
