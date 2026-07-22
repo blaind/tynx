@@ -102,6 +102,16 @@ def smoke_test(expected: str) -> None:
     if not hasattr(tynx, "Session"):
         raise SystemExit("installed wheel does not export Session")
 
+    mask = tynx.Tensor([-1.0, 2.0]) > 0.0
+    selected = tynx.where(mask, tynx.Tensor([10.0, 20.0]), 0.0)
+    if selected.tolist() != [0.0, 20.0]:
+        raise SystemExit(f"unexpected where result: {selected.tolist()}")
+
+    indices = tynx.Tensor([[1, 0]], dtype="int64")
+    gathered = tynx.Tensor([[3.0, 4.0]]).gather(1, indices)
+    if gathered.tolist() != [[4.0, 3.0]]:
+        raise SystemExit(f"unexpected gather result: {gathered.tolist()}")
+
     print("installed wheel smoke test passed")
 
 
