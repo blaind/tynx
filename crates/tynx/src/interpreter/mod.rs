@@ -12,6 +12,7 @@ mod convolution;
 mod cumsum;
 mod dropout;
 mod extrema;
+mod eye_like;
 mod gather;
 mod hardmax;
 mod integer;
@@ -107,6 +108,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Elu(node) => unary::elu(node, env, device),
         Node::Equal(node) => comparison::equal(node, env, device),
         Node::Erf(node) => unary::erf(node, env, device),
+        Node::EyeLike(node) => eye_like::eye_like(node, env, device),
         Node::Exp(node) => unary::exp(node, env, device),
         Node::Expand(node) => broadcasting::expand(node, env, device),
         Node::Floor(node) => unary::floor(node, env, device),
