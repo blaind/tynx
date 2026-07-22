@@ -28,12 +28,14 @@ fn main() -> BenchResult<()> {
     let case = load_case()?;
     let (backend, device, device_name) = device();
 
-    match case.id.as_str() {
-        "sign-11" => run_sign(case, backend, device, device_name),
-        "matmul-64x64" => run_matmul64(case, backend, device, device_name),
-        "matmul-256x256" => run_matmul_dynamic(case, backend, device, device_name),
-        "matmul-add-relu-256x256" => run_matmul_add_relu(case, backend, device, device_name),
-        id => Err(format!("burn AOT runner does not embed case '{id}'").into()),
+    match case.model.as_str() {
+        "models/sign.onnx.hex" => run_sign(case, backend, device, device_name),
+        "models/matmul64.onnx.hex" => run_matmul64(case, backend, device, device_name),
+        "models/matmul_dynamic.onnx.hex" => run_matmul_dynamic(case, backend, device, device_name),
+        "models/matmul_add_relu_dynamic.onnx.hex" => {
+            run_matmul_add_relu(case, backend, device, device_name)
+        }
+        model => Err(format!("burn AOT runner does not embed model '{model}'").into()),
     }
 }
 

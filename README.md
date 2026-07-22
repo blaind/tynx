@@ -45,6 +45,13 @@ backend, is enabled by default and also works on `wasm32-unknown-unknown`.
 WGPU/WebGPU, browser WebGPU, Vulkan, and CUDA feature wiring is being carried over and is not part
 of the current default build.
 
+## Benchmarks
+
+Tynx includes a reproducible benchmark suite comparing its runtime with burn-onnx AOT and ONNX
+Runtime. See the [benchmark suite](benchmarks/README.md) for the workloads, methodology, and local
+commands. [CI benchmark runs](https://github.com/blaind/tynx/actions/workflows/benchmarks.yml)
+publish job summaries and downloadable JSON results.
+
 ## Relationship to Burn
 
 Tynx is built on Burn and complements [burn-onnx](https://github.com/tracel-ai/burn-onnx):
