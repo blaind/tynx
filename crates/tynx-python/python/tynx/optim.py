@@ -43,8 +43,10 @@ class _GroupedOptimizer(Generic[_Native]):
                 group = cast(OptimizerParameterGroup, item)
                 unknown = set(group).difference((*self._option_names, "params"))
                 if unknown:
+                    supported = ("params", *self._option_names)
                     raise ValueError(
-                        f"{self._name} parameter group has unsupported options {sorted(unknown)!r}"
+                        f"{self._name} parameter group has unsupported options {sorted(unknown)!r}; "
+                        f"supported options are {list(supported)!r}"
                     )
                 if "params" not in group:
                     raise ValueError(f"{self._name} parameter group is missing 'params'")

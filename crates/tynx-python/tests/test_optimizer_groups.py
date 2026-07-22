@@ -56,7 +56,10 @@ def test_parameter_groups_reject_cross_group_duplicates_and_unknown_options() ->
         tynx.optim.Adam(
             [{"params": [parameter]}, {"params": [parameter]}],
         )
-    with pytest.raises(ValueError, match="unsupported options"):
+    with pytest.raises(
+        ValueError,
+        match=r"unsupported options \['learning_rate'\].*supported options.*'lr'.*'momentum'",
+    ):
         tynx.optim.SGD([{"params": [parameter], "learning_rate": 0.1}], lr=0.1)
 
 
