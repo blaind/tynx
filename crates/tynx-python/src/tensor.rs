@@ -15,7 +15,7 @@ use std::{
 };
 
 use pyo3::{
-    exceptions::{PyTypeError, PyValueError},
+    exceptions::{PyRuntimeError, PyTypeError, PyValueError},
     prelude::*,
     types::{PyAny, PyTuple},
 };
@@ -115,6 +115,12 @@ impl LeafState {
 }
 
 impl PyTensor {
+    fn reject_in_place(&self, operation: &str) -> PyResult<()> {
+        Err(PyRuntimeError::new_err(format!(
+            "in-place arithmetic ({operation}) is not supported; use an explicit assignment or an optimizer step"
+        )))
+    }
+
     pub(crate) fn from_inner(inner: DynTensor) -> Self {
         Self {
             source: TensorSource::Owned(Box::new(TensorValue::Float(inner))),
@@ -716,6 +722,10 @@ impl PyTensor {
         self.arithmetic(other, DynTensor::add_broadcast, DynTensor::add_scalar)
     }
 
+    fn __iadd__(&self, _other: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.reject_in_place("+=")
+    }
+
     fn __sub__(&self, other: &Bound<'_, PyAny>) -> PyResult<Self> {
         self.arithmetic(other, DynTensor::sub_broadcast, DynTensor::sub_scalar)
     }
@@ -725,12 +735,20 @@ impl PyTensor {
         self.unary(|input| Ok(input.negated().add_scalar(scalar)))
     }
 
+    fn __isub__(&self, _other: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.reject_in_place("-=")
+    }
+
     fn __mul__(&self, other: &Bound<'_, PyAny>) -> PyResult<Self> {
         self.arithmetic(other, DynTensor::mul_broadcast, DynTensor::mul_scalar)
     }
 
     fn __rmul__(&self, other: &Bound<'_, PyAny>) -> PyResult<Self> {
         self.arithmetic(other, DynTensor::mul_broadcast, DynTensor::mul_scalar)
+    }
+
+    fn __imul__(&self, _other: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.reject_in_place("*=")
     }
 
     fn __truediv__(&self, other: &Bound<'_, PyAny>) -> PyResult<Self> {
@@ -742,8 +760,16 @@ impl PyTensor {
         self.unary(|input| Ok(input.reciprocal().mul_scalar(scalar)))
     }
 
+    fn __itruediv__(&self, _other: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.reject_in_place("/=")
+    }
+
     fn __matmul__(&self, other: PyRef<'_, Self>) -> PyResult<Self> {
         self.binary(&other, DynTensor::matmul)
+    }
+
+    fn __imatmul__(&self, _other: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.reject_in_place("@=")
     }
 
     fn __neg__(&self) -> PyResult<Self> {
