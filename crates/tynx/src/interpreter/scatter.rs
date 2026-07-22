@@ -1,13 +1,47 @@
 //! ONNX scatter operator execution.
 
 use burn::tensor::{Device, IndexingUpdateOp, TensorData};
-use onnx_ir::node::{
-    scatter_elements::{ScatterElementsNode, ScatterElementsReduction},
-    scatter_nd::{ScatterNDNode, ScatterNDReduction},
+use onnx_ir::{
+    ModelProto,
+    node::{
+        scatter_elements::{ScatterElementsNode, ScatterElementsReduction},
+        scatter_nd::{ScatterNDNode, ScatterNDReduction},
+    },
 };
+use protobuf::Message;
 
 use super::{Env, gather, resolve, shape};
 use crate::{Result, TynxError, Value};
+
+// Scatter was renamed to ScatterElements in opset 11 without changing the
+// update semantics used by the legacy operator. Rewrite it before onnx-ir
+// parsing so the typed ScatterElements processor retains the axis attribute.
+pub(super) fn prepare_model(data: &[u8]) -> Result<(Vec<u8>, bool)> {
+    let mut model =
+        ModelProto::parse_from_bytes(data).map_err(|error| TynxError::Parse(error.to_string()))?;
+    let Some(graph) = model.graph.as_mut() else {
+        return Ok((Vec::new(), false));
+    };
+    let mut changed = false;
+    for node in &mut graph.node {
+        if node.op_type == "Scatter" {
+            node.op_type = "ScatterElements".to_string();
+            changed = true;
+        }
+    }
+    if !changed {
+        return Ok((Vec::new(), false));
+    }
+    for opset in &mut model.opset_import {
+        if (opset.domain.is_empty() || opset.domain == "ai.onnx") && opset.version < 11 {
+            opset.version = 11;
+        }
+    }
+    model
+        .write_to_bytes()
+        .map(|bytes| (bytes, true))
+        .map_err(|error| TynxError::Parse(error.to_string()))
+}
 
 pub(super) fn scatter_elements(
     node: &ScatterElementsNode,

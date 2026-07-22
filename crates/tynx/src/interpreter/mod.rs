@@ -60,7 +60,21 @@ use crate::{Result, TynxError, Value};
 pub type Env = HashMap<String, Value>;
 
 pub(crate) fn prepare_model(data: &[u8]) -> Result<(Vec<u8>, bool)> {
-    convolution::prepare_model(data)
+    let (convolution_data, convolution_changed) = convolution::prepare_model(data)?;
+    let prepared = if convolution_changed {
+        convolution_data.as_slice()
+    } else {
+        data
+    };
+    let (scatter_data, scatter_changed) = scatter::prepare_model(prepared)?;
+
+    if scatter_changed {
+        Ok((scatter_data, true))
+    } else if convolution_changed {
+        Ok((convolution_data, true))
+    } else {
+        Ok((Vec::new(), false))
+    }
 }
 
 pub(crate) fn restore_dynamic_conv_inputs(data: &[u8], graph: &mut OnnxGraph) -> Result<()> {
