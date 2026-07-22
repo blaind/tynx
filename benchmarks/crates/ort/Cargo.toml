@@ -1,0 +1,18 @@
+[package]
+name = "ort-bench"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+default = ["cpu"]
+cpu = ["ort/copy-dylibs", "ort/download-binaries", "ort/tls-native"]
+cuda = ["ort/cuda", "ort/load-dynamic"]
+
+[dependencies]
+ort = { version = "=2.0.0-rc.12", default-features = false, features = ["api-24", "std"] }
+tynx-bench-protocol.workspace = true
+
+[lints]
+workspace = true

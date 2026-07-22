@@ -1,0 +1,49 @@
+name: Benchmarks
+
+on:
+  workflow_dispatch:
+    inputs:
+      warmup:
+        description: Warmup iterations
+        default: "20"
+        required: true
+      iterations:
+        description: Timed iterations
+        default: "200"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  cpu:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: always
+      TYNX_BENCH_DEVICE: github-hosted-ubuntu
+      TYNX_BENCH_WARMUP: ${{ inputs.warmup }}
+      TYNX_BENCH_ITERATIONS: ${{ inputs.iterations }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: benchmarks
+          workspaces: benchmarks -> target
+      - name: Record environment
+        run: |
+          mkdir -p benchmarks/results
+          lscpu > benchmarks/results/system.txt
+          rustc --version --verbose >> benchmarks/results/system.txt
+      - name: Benchmark Tynx CPU
+        run: cargo run --manifest-path benchmarks/Cargo.toml --locked --release -p tynx-bench > benchmarks/results/tynx-cpu.json
+      - name: Benchmark burn-onnx AOT CPU
+        run: cargo run --manifest-path benchmarks/Cargo.toml --locked --release -p burn-aot-bench > benchmarks/results/burn-aot-cpu.json
+      - name: Benchmark ONNX Runtime CPU
+        run: cargo run --manifest-path benchmarks/Cargo.toml --locked --release -p ort-bench > benchmarks/results/ort-cpu.json
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: benchmark-results
+          path: benchmarks/results
