@@ -26,6 +26,29 @@ def test_tensor_metadata_and_host_conversion() -> None:
     assert tensor.tolist() == [[1.0, 2.0], [3.0, 4.0]]
     assert tynx.Tensor(3.5).shape == (1,)
     assert tynx.Tensor([3.5]).item() == pytest.approx(3.5)
+    assert len(tensor) == 2
+    assert tynx.Tensor(tensor).tolist() == tensor.tolist()
+    assert tynx.Tensor(range(3)).tolist() == [0.0, 1.0, 2.0]
+
+    integers = tynx.Tensor([1, 2], dtype="int64")
+    assert tynx.Tensor(integers).dtype == "int64"
+
+
+def test_tensor_python_numeric_protocols() -> None:
+    values = tynx.Tensor([-2.0, 3.0])
+
+    assert abs(values).tolist() == [2.0, 3.0]
+    assert (values**2).tolist() == pytest.approx([4.0, 9.0])
+    assert (2 ** tynx.Tensor([1.0, 3.0])).tolist() == pytest.approx([2.0, 8.0])
+
+
+def test_tensor_matmul_supports_vector_cases() -> None:
+    vector = tynx.Tensor([1.0, 2.0])
+    matrix = tynx.Tensor([[3.0, 4.0], [5.0, 6.0]])
+
+    assert (matrix @ vector).tolist() == pytest.approx([11.0, 17.0])
+    assert (vector @ matrix).tolist() == pytest.approx([13.0, 16.0])
+    assert (vector @ vector).tolist() == pytest.approx([5.0])
 
 
 def test_tensor_shape_mismatches_raise_value_error_before_dispatch() -> None:
@@ -1293,7 +1316,7 @@ def test_tensor_backward_accumulates_leaf_gradients() -> None:
     assert value.grad is None
 
 
-@pytest.mark.parametrize("operator", ["add", "sub", "mul", "truediv", "matmul"])
+@pytest.mark.parametrize("operator", ["add", "sub", "mul", "truediv", "matmul", "pow"])
 def test_tensor_inplace_arithmetic_fails_instead_of_losing_leaf_gradients(
     operator: str,
 ) -> None:
@@ -1309,8 +1332,10 @@ def test_tensor_inplace_arithmetic_fails_instead_of_losing_leaf_gradients(
             value *= other
         elif operator == "truediv":
             value /= other
-        else:
+        elif operator == "matmul":
             value @= other
+        else:
+            value **= other
 
     assert value.is_leaf
     assert value.requires_grad

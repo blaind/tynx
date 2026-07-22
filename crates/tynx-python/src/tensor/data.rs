@@ -3,7 +3,7 @@
 use pyo3::{
     exceptions::{PyTypeError, PyValueError},
     prelude::*,
-    types::{PyAny, PyBool, PyList, PyListMethods, PyTuple, PyTupleMethods},
+    types::{PyAny, PyBool, PyList, PyListMethods, PyRange, PyTuple, PyTupleMethods},
 };
 use tynx_core::{Device, DynBool, DynInt, DynTensor, TensorData};
 
@@ -215,7 +215,10 @@ fn parse_value<T>(
     dtype: &str,
     extract: impl Copy + Fn(&Bound<'_, PyAny>) -> PyResult<T>,
 ) -> PyResult<Vec<usize>> {
-    if !value.is_instance_of::<PyList>() && !value.is_instance_of::<PyTuple>() {
+    if !value.is_instance_of::<PyList>()
+        && !value.is_instance_of::<PyTuple>()
+        && !value.is_instance_of::<PyRange>()
+    {
         values.push(extract(value).map_err(|_| {
             PyTypeError::new_err(format!(
                 "{dtype} Tensor data must contain compatible scalar values"
@@ -225,6 +228,10 @@ fn parse_value<T>(
     }
     if let Ok(list) = value.cast::<PyList>() {
         return parse_sequence(list.iter(), values, dtype, extract);
+    }
+    if let Ok(range) = value.cast::<PyRange>() {
+        let items = range.try_iter()?.collect::<PyResult<Vec<_>>>()?;
+        return parse_sequence(items.into_iter(), values, dtype, extract);
     }
     let tuple = value.cast::<PyTuple>()?;
     parse_sequence(tuple.iter(), values, dtype, extract)
