@@ -349,9 +349,7 @@ impl Sgd {
         }
 
         let updated_count = updates.len();
-        for (parameter, value) in updates {
-            parameter.replace_value(value)?;
-        }
+        ParameterSlot::replace_values_atomic(&updates)?;
         self.momentum_buffers = next_momentum;
         Ok(updated_count)
     }

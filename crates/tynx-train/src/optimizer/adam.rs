@@ -522,9 +522,7 @@ impl AdamEngine {
         }
 
         let updated_count = updates.len();
-        for (parameter, value) in updates {
-            parameter.replace_value(value)?;
-        }
+        ParameterSlot::replace_values_atomic(&updates)?;
         self.state = next_state;
         Ok(updated_count)
     }

@@ -46,6 +46,10 @@ pub enum TynxError {
     /// A shape or index computation was invalid.
     #[error("shape error: {0}")]
     Shape(String),
+
+    /// Mutable model state is already participating in another serialized operation.
+    #[error("state is busy: {0}")]
+    StateBusy(String),
 }
 
 impl From<onnx_ir::Error> for TynxError {
@@ -72,6 +76,9 @@ mod tests {
             error.to_string(),
             "tensor rank 7 exceeds the maximum supported rank 6"
         );
+
+        let error = TynxError::StateBusy("parameter publication".to_string());
+        assert_eq!(error.to_string(), "state is busy: parameter publication");
     }
 
     #[test]

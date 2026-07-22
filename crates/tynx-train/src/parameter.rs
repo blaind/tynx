@@ -2,6 +2,7 @@
 
 use std::{
     cell::RefCell,
+    collections::HashSet,
     hash::{Hash, Hasher},
     rc::Rc,
     sync::atomic::{AtomicU64, Ordering},
@@ -197,14 +198,46 @@ impl ParameterSlot {
     /// Shape, dtype, device, and trainability remain unchanged. The replacement is detached before
     /// publication, the value generation advances, and the next read creates the new leaf.
     pub fn replace_value(&self, value: DynTensor) -> Result<()> {
-        let mut state = self.state.borrow_mut();
-        let next_contract = contract_for(&value, state.contract.trainable);
-        if next_contract != state.contract {
-            return Err(contract_mismatch(&state.contract, &next_contract));
+        Self::replace_values_atomic(&[(self.clone(), value)])
+    }
+
+    /// Atomically replace a set of compatible slot values.
+    ///
+    /// Every distinct destination is acquired and validated before any value is published. Holding
+    /// all mutable borrows through publication serializes readers in the initial single-threaded
+    /// facade and prevents inference from observing a partially applied optimizer update. A slot
+    /// already participating in another state operation returns [`TynxError::StateBusy`].
+    pub fn replace_values_atomic(updates: &[(Self, DynTensor)]) -> Result<()> {
+        let mut seen = HashSet::new();
+        let mut prepared = Vec::with_capacity(updates.len());
+
+        for (slot, value) in updates {
+            if !seen.insert(slot.id()) {
+                return Err(TynxError::TypeMismatch(format!(
+                    "duplicate atomic value destination for parameter {}",
+                    slot.id().get()
+                )));
+            }
+            let state = slot.state.try_borrow_mut().map_err(|_| {
+                TynxError::StateBusy(format!(
+                    "parameter {} is already borrowed during atomic value publication",
+                    slot.id().get()
+                ))
+            })?;
+            let next_contract = contract_for(value, state.contract.trainable);
+            if next_contract != state.contract {
+                return Err(contract_mismatch(&state.contract, &next_contract));
+            }
+            let generation = next_generation(state.value_generation, "value")?;
+            let value = off_tape(value.clone(), &state.contract.device);
+            prepared.push((state, value, generation));
         }
-        state.value = off_tape(value, &state.contract.device);
-        state.value_generation = next_generation(state.value_generation, "value")?;
-        state.leaf = None;
+
+        for (mut state, value, generation) in prepared {
+            state.value = value;
+            state.value_generation = generation;
+            state.leaf = None;
+        }
         Ok(())
     }
 
@@ -392,6 +425,71 @@ mod tests {
             slot.value().into_data().iter::<f32>().collect::<Vec<_>>(),
             [3.0, 4.0]
         );
+    }
+
+    #[test]
+    fn atomic_value_publication_updates_every_slot_together() {
+        let device = Device::autodiff(Device::default());
+        let first = ParameterSlot::new(None, tensor(vec![1.0], &[1], &device), true).unwrap();
+        let second = ParameterSlot::new(None, tensor(vec![2.0], &[1], &device), true).unwrap();
+
+        ParameterSlot::replace_values_atomic(&[
+            (first.clone(), tensor(vec![3.0], &[1], &device)),
+            (second.clone(), tensor(vec![4.0], &[1], &device)),
+        ])
+        .unwrap();
+
+        assert_eq!(
+            first.value().into_data().iter::<f32>().collect::<Vec<_>>(),
+            [3.0]
+        );
+        assert_eq!(
+            second.value().into_data().iter::<f32>().collect::<Vec<_>>(),
+            [4.0]
+        );
+        assert_eq!(first.value_generation(), 1);
+        assert_eq!(second.value_generation(), 1);
+    }
+
+    #[test]
+    fn atomic_value_publication_rejects_before_mutating_any_slot() {
+        let device = Device::autodiff(Device::default());
+        let first = ParameterSlot::new(None, tensor(vec![1.0], &[1], &device), true).unwrap();
+        let second = ParameterSlot::new(None, tensor(vec![2.0], &[1], &device), true).unwrap();
+
+        let error = ParameterSlot::replace_values_atomic(&[
+            (first.clone(), tensor(vec![3.0], &[1], &device)),
+            (second.clone(), tensor(vec![4.0, 5.0], &[2], &device)),
+        ])
+        .unwrap_err();
+
+        assert!(error.to_string().contains("use rebind"));
+        assert_eq!(
+            first.value().into_data().iter::<f32>().collect::<Vec<_>>(),
+            [1.0]
+        );
+        assert_eq!(
+            second.value().into_data().iter::<f32>().collect::<Vec<_>>(),
+            [2.0]
+        );
+        assert_eq!(first.value_generation(), 0);
+        assert_eq!(second.value_generation(), 0);
+    }
+
+    #[test]
+    fn atomic_value_publication_reports_busy_state() {
+        let device = Device::autodiff(Device::default());
+        let slot = ParameterSlot::new(None, tensor(vec![1.0], &[1], &device), true).unwrap();
+        let _active_state_operation = slot.state.borrow_mut();
+
+        let error = ParameterSlot::replace_values_atomic(&[(
+            slot.clone(),
+            tensor(vec![2.0], &[1], &device),
+        )])
+        .unwrap_err();
+
+        assert!(matches!(error, TynxError::StateBusy(_)));
+        assert!(error.to_string().contains("already borrowed"));
     }
 
     #[test]
