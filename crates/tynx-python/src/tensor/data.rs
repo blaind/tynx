@@ -406,10 +406,19 @@ where
     T: Copy + IntoPyObject<'py>,
     <T as IntoPyObject<'py>>::Error: Into<PyErr>,
 {
+    if shape[0] == 0 {
+        return Ok(PyList::empty(py).into_any().unbind());
+    }
     if shape.len() == 1 {
         return Ok(PyList::new(py, values.iter().copied())?.into_any().unbind());
     }
     let stride = shape[1..].iter().product::<usize>();
+    if stride == 0 {
+        let children = (0..shape[0])
+            .map(|_| nested_list(py, &values[0..0], &shape[1..]))
+            .collect::<PyResult<Vec<_>>>()?;
+        return Ok(PyList::new(py, children)?.into_any().unbind());
+    }
     let children = values
         .chunks_exact(stride)
         .map(|chunk| nested_list(py, chunk, &shape[1..]))

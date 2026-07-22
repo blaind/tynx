@@ -760,6 +760,38 @@ impl PyTensor {
         self.source.value().dims()[0]
     }
 
+    /// Select values using integers, ordinary slices, tuples, and ellipsis.
+    fn __getitem__(&self, key: &Bound<'_, PyAny>) -> PyResult<Self> {
+        self.capture_unsupported("Tensor.__getitem__ indexing")?;
+        let value = self.source.value();
+        let spec = indexing::basic_index(key, &value.dims())?;
+        let tracking = is_grad_enabled();
+        match value {
+            TensorValue::Float(_) => {
+                let output = self
+                    .operation_input(tracking, "Tensor.__getitem__")?
+                    .slice(&spec.slices)
+                    .reshape(spec.output_shape)
+                    .map_err(to_python_error)?;
+                if tracking {
+                    Ok(Self::from_operation(output, &[self]))
+                } else {
+                    Ok(Self::from_inner(output))
+                }
+            }
+            TensorValue::Int(value) => value
+                .slice(&spec.slices)
+                .reshape(spec.output_shape)
+                .map(Self::from_int_inner)
+                .map_err(to_python_error),
+            TensorValue::Bool(value) => value
+                .slice(&spec.slices)
+                .reshape(spec.output_shape)
+                .map(|value| Self::from_value(TensorValue::Bool(value)))
+                .map_err(to_python_error),
+        }
+    }
+
     fn __bool__(&self, py: Python<'_>) -> PyResult<bool> {
         self.capture_unsupported("tensor-dependent Python control flow")?;
         if self.numel() != 1 {
