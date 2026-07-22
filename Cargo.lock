@@ -5222,6 +5222,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "tynx-train"
+version = "0.1.0"
+dependencies = [
+ "burn",
+ "tynx",
+]
+
+[[package]]
 name = "tynx-wasm"
 version = "0.1.0"
 dependencies = [
