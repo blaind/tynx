@@ -46,6 +46,7 @@ mod softmax;
 mod spatial;
 mod spatial_layout;
 mod split;
+mod stft;
 mod svm_regressor;
 mod trilu;
 mod unary;
@@ -262,6 +263,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::SpaceToDepth(node) => spatial_layout::space_to_depth(node, env, device),
         Node::Split(node) => split::split(node, env, device),
         Node::Sqrt(node) => unary::sqrt(node, env, device),
+        Node::Stft(node) => stft::stft_node(node, env, device),
         Node::Squeeze(node) => shape::squeeze(node, env, device),
         Node::Sub(node) => binary::sub(node, env, device),
         Node::Sum(node) => variadic::sum(node, env, device),
