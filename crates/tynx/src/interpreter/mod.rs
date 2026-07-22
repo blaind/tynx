@@ -45,6 +45,7 @@ mod softmax;
 mod spatial;
 mod spatial_layout;
 mod split;
+mod svm_regressor;
 mod trilu;
 mod unary;
 mod variadic;
@@ -263,6 +264,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Sub(node) => binary::sub(node, env, device),
         Node::Sum(node) => variadic::sum(node, env, device),
         Node::Swish(node) => unary::swish(node, env, device),
+        Node::SVMRegressor(node) => svm_regressor::svm_regressor(node, env, device),
         Node::Tan(node) => unary::tan(node, env, device),
         Node::Tanh(node) => unary::tanh(node, env, device),
         Node::ThresholdedRelu(node) => unary::thresholded_relu(node, env, device),
