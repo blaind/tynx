@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from contextlib import suppress
 from os import PathLike
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol, Union, cast
+from typing import TYPE_CHECKING, Optional, Protocol, Union, cast, overload
 
 from ._tynx import Tensor
 from .nn.state import (
@@ -34,18 +34,40 @@ class _Optimizer(Protocol):
     def load_state_dict(self, state_dict: dict[str, object]) -> None: ...
 
 
-def save_checkpoint(path: _Path, model: object, optimizer: _Optimizer) -> None:
-    """Atomically save detached model and optimizer state under stable names."""
-    model_state = get_state_dict(model)
+@overload
+def save_checkpoint(path: _Path, model: object, optimizer: Optional[_Optimizer] = None) -> None: ...
+
+
+@overload
+def save_checkpoint(path: object, model: _Path, optimizer: None = None) -> None: ...
+
+
+@overload
+def save_checkpoint(path: object, model: _Optimizer, optimizer: _Path) -> None: ...
+
+
+def save_checkpoint(
+    path: object,
+    model: object,
+    optimizer: object = None,
+) -> None:
+    """Atomically save model state and optional optimizer state.
+
+    Both ``save_checkpoint(path, model, optimizer)`` and the PyTorch-shaped
+    ``save_checkpoint(model, optimizer, path)`` order are accepted. For weights-only
+    checkpoints, use either ``save_checkpoint(path, model)`` or
+    ``save_checkpoint(model, path)``.
+    """
+    target, source_model, source_optimizer = _normalize_save_arguments(path, model, optimizer)
+    model_state = get_state_dict(source_model)
     if not model_state:
         raise ValueError("cannot save checkpoint: model has no parameters or buffers")
     payload: dict[str, _Encoded] = {
         "format": _CHECKPOINT_FORMAT,
         "version": _CHECKPOINT_VERSION,
         "model": _encode(dict(model_state)),
-        "optimizer": _encode(optimizer.state_dict()),
+        "optimizer": _encode(None if source_optimizer is None else source_optimizer.state_dict()),
     }
-    target = Path(path)
     serialized = json.dumps(payload, allow_nan=True, separators=(",", ":"), sort_keys=True)
     descriptor, temporary_name = tempfile.mkstemp(
         dir=target.parent,
@@ -68,7 +90,7 @@ def save_checkpoint(path: _Path, model: object, optimizer: _Optimizer) -> None:
 def load_checkpoint(
     path: _Path,
     model: object,
-    optimizer: _Optimizer,
+    optimizer: Optional[_Optimizer] = None,
     strict: bool = True,
 ) -> LoadStateResult:
     """Restore a combined checkpoint without publishing partially validated state."""
@@ -76,19 +98,56 @@ def load_checkpoint(
     model_state = _decode_state_dictionary(_required(payload, "model"), "model")
     if not model_state:
         raise ValueError("cannot load checkpoint: model state is empty")
-    optimizer_state = _decode_optimizer_dictionary(_required(payload, "optimizer"))
+    encoded_optimizer = _required(payload, "optimizer")
+    optimizer_state = None if optimizer is None else _decode_optimizer_dictionary(encoded_optimizer)
 
     current, prepared, result = _prepare_state_dict_load(model, model_state, strict)
-    previous_optimizer = optimizer.state_dict()
     previous_model = get_state_dict(model)
-    optimizer.load_state_dict(optimizer_state)
+    previous_optimizer = None if optimizer is None else optimizer.state_dict()
+    if optimizer is not None:
+        assert optimizer_state is not None
+        optimizer.load_state_dict(optimizer_state)
     try:
         _apply_prepared_state(current, prepared)
     except BaseException:
         load_state_dict(model, previous_model)
-        optimizer.load_state_dict(previous_optimizer)
+        if optimizer is not None:
+            assert previous_optimizer is not None
+            optimizer.load_state_dict(previous_optimizer)
         raise
     return result
+
+
+def _normalize_save_arguments(
+    first: object,
+    second: object,
+    third: object,
+) -> tuple[Path, object, Optional[_Optimizer]]:
+    source_optimizer: object
+    if isinstance(first, (str, os.PathLike)):
+        path = Path(first)
+        source_model = second
+        source_optimizer = third
+    elif isinstance(third, (str, os.PathLike)):
+        path = Path(third)
+        source_model = first
+        source_optimizer = second
+    elif isinstance(second, (str, os.PathLike)) and third is None:
+        path = Path(second)
+        source_model = first
+        source_optimizer = None
+    else:
+        raise TypeError(
+            "save_checkpoint expects (path, model[, optimizer]) or (model[, optimizer], path)"
+        )
+
+    if isinstance(source_model, (str, os.PathLike)):
+        raise TypeError("save_checkpoint model must be a model object, not a path")
+    if source_optimizer is not None:
+        state_dict = getattr(source_optimizer, "state_dict", None)
+        if not callable(state_dict):
+            raise TypeError("save_checkpoint optimizer must provide state_dict()")
+    return path, source_model, cast(Optional[_Optimizer], source_optimizer)
 
 
 def _read_payload(path: _Path) -> dict[str, _Encoded]:
@@ -185,6 +244,8 @@ def _decode_state_dictionary(value: _Encoded, field: str) -> dict[str, Tensor]:
 
 
 def _decode_optimizer_dictionary(value: _Encoded) -> dict[str, object]:
+    if value is None:
+        raise ValueError("checkpoint does not contain optimizer state")
     decoded = _decode(value, True)
     if not isinstance(decoded, dict):
         raise ValueError("checkpoint field 'optimizer' must be a dictionary")
