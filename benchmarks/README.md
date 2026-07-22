@@ -72,6 +72,14 @@ operation-heavy eager function with its exact-signature native graph replay:
 python benchmarks/python-capture.py
 ```
 
+The whole-step capture benchmark compares the complete eager and captured
+`zero_grad -> forward -> loss -> backward -> SGD step` boundary using independently initialized,
+identical authored MLPs:
+
+```sh
+python benchmarks/python-training-capture.py
+```
+
 ## Training
 
 The training suite compares an imported Tynx model with burn-onnx generated AOT Rust using the
