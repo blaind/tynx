@@ -210,6 +210,11 @@ pub enum BinaryOp {
     Minimum,
     /// Elementwise maximum.
     Maximum,
+    /// Detached Normal sampling with an optional explicit seed.
+    NormalSample {
+        /// Optional seed applied before every execution.
+        seed: Option<u64>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -411,10 +416,16 @@ impl GraphBuilder {
         for output in &outputs {
             self.require_value(*output)?;
         }
+        let differentiable = node_differentiability(&self.nodes);
+        let output_differentiability = outputs
+            .iter()
+            .map(|output| differentiable[output.index()])
+            .collect();
         Ok(Graph {
             nodes: self.nodes,
             input_signatures: self.input_signatures,
             outputs,
+            output_differentiability,
             effects: self.effects,
         })
     }
@@ -443,12 +454,39 @@ impl GraphBuilder {
     }
 }
 
+fn node_differentiability(nodes: &[Node]) -> Vec<bool> {
+    let mut differentiable = Vec::with_capacity(nodes.len());
+    for node in nodes {
+        let value = match node {
+            Node::Input(_) => true,
+            Node::Parameter(guard) => guard.contract.trainable(),
+            Node::Unary { op, input } => match op {
+                UnaryOp::CategoricalSample { .. } => false,
+                _ => differentiable[input.index()],
+            },
+            Node::Binary { op, left, right } => match op {
+                BinaryOp::NormalSample { .. } => false,
+                _ => differentiable[left.index()] || differentiable[right.index()],
+            },
+            Node::Gather { input, .. } => differentiable[input.index()],
+            Node::Operation { inputs, guards, .. } => {
+                inputs.iter().any(|input| differentiable[input.index()])
+                    || guards.iter().any(|guard| guard.contract.trainable())
+            }
+            Node::OperationOutput { operation, .. } => differentiable[operation.index()],
+        };
+        differentiable.push(value);
+    }
+    differentiable
+}
+
 /// Immutable captured graph executable wholly in Rust.
 #[derive(Debug, Clone)]
 pub struct Graph {
     nodes: Vec<Node>,
     input_signatures: Vec<TensorSignature>,
     outputs: Vec<ValueId>,
+    output_differentiability: Vec<bool>,
     effects: Vec<PositionedEffect>,
 }
 
@@ -461,6 +499,11 @@ impl Graph {
     /// Return the number of recorded operation and source nodes.
     pub fn node_count(&self) -> usize {
         self.nodes.len()
+    }
+
+    /// Return whether each graph output may retain a differentiable input or parameter path.
+    pub fn output_differentiability(&self) -> &[bool] {
+        &self.output_differentiability
     }
 
     /// Return stable parameter slots read by this graph, deduplicated in first-use order.
@@ -757,6 +800,23 @@ fn execute_unary(op: &UnaryOp, input: Value) -> Result<Value> {
 fn execute_binary(op: BinaryOp, left: Value, right: Value) -> Result<Value> {
     let left = left.into_tensor()?;
     let right = right.into_tensor()?;
+    if let BinaryOp::NormalSample { seed } = op {
+        let left = left.detach();
+        let right = right.detach();
+        let device = left.device();
+        if let Some(seed) = seed {
+            device.seed(seed);
+        }
+        let noise = DynTensor::random(
+            &left.dims(),
+            Distribution::Normal(0.0, 1.0),
+            &device,
+            DType::F32,
+        )?;
+        return left
+            .add_broadcast(right.mul_broadcast(noise)?)
+            .map(|sample| Value::Tensor(sample.detach()));
+    }
     let output = match op {
         BinaryOp::Add => left.add_broadcast(right),
         BinaryOp::Subtract => left.sub_broadcast(right),
@@ -766,6 +826,7 @@ fn execute_binary(op: BinaryOp, left: Value, right: Value) -> Result<Value> {
         BinaryOp::Power => left.powf_broadcast(right),
         BinaryOp::Minimum => left.min_broadcast(right),
         BinaryOp::Maximum => left.max_broadcast(right),
+        BinaryOp::NormalSample { .. } => unreachable!("handled before binary dispatch"),
     }?;
     Ok(Value::Tensor(output))
 }

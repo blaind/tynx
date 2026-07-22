@@ -1,7 +1,7 @@
 //! Native random-state and sampling operations shared by Python distributions and layers.
 
 use pyo3::{exceptions::PyValueError, prelude::*};
-use tynx_capture::UnaryOp;
+use tynx_capture::{BinaryOp, UnaryOp};
 use tynx_core::{DType, Device, Distribution, DynTensor};
 
 use crate::{grad_mode::is_grad_enabled, tensor::PyTensor, to_python_error};
@@ -18,21 +18,23 @@ pub(crate) fn normal_sample_py(
     scale: PyRef<'_, PyTensor>,
     seed: Option<u64>,
 ) -> PyResult<PyTensor> {
-    loc.capture_unsupported("random Normal sampling")?;
-    scale.capture_unsupported("random Normal sampling")?;
-    let loc = loc.detached_float_value("Normal.sample")?;
-    let scale = scale.detached_float_value("Normal.sample")?;
-    let device = loc.device();
+    let loc_value = loc.detached_float_value("Normal.sample")?;
+    let scale_value = scale.detached_float_value("Normal.sample")?;
+    let device = loc_value.device();
     if let Some(seed) = seed {
         device.seed(seed);
     }
-    let dims = loc.dims();
+    let dims = loc_value.dims();
     let noise = DynTensor::random(&dims, Distribution::Normal(0.0, 1.0), &device, DType::F32)
         .map_err(to_python_error)?;
-    let sample = loc
-        .add_broadcast(scale.mul_broadcast(noise).map_err(to_python_error)?)
+    let sample = loc_value
+        .add_broadcast(scale_value.mul_broadcast(noise).map_err(to_python_error)?)
         .map_err(to_python_error)?;
-    Ok(PyTensor::from_inner(sample.detach()))
+    PyTensor::from_inner(sample.detach()).with_recorded_binary(
+        &loc,
+        &scale,
+        BinaryOp::NormalSample { seed },
+    )
 }
 
 #[pyfunction(name = "_categorical_sample")]

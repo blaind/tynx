@@ -311,6 +311,30 @@ def test_captured_categorical_sampling_advances_and_matches_eager_rng() -> None:
     assert sample.replay_count == 5
 
 
+def test_captured_normal_sampling_advances_matches_eager_and_stays_detached() -> None:
+    loc = tynx.Tensor([0.0] * 32, requires_grad=True)
+    scale = tynx.Tensor([1.0] * 32, requires_grad=True)
+    tynx.manual_seed(161803)
+    eager = [tynx.distributions.Normal(loc, scale).sample() for _ in range(6)]
+    calls = 0
+
+    @tynx.compile(fullgraph=True)
+    def sample(mean: tynx.Tensor, stddev: tynx.Tensor) -> tynx.Tensor:
+        nonlocal calls
+        calls += 1
+        return tynx.distributions.Normal(mean, stddev).sample()
+
+    tynx.manual_seed(161803)
+    captured = [sample(loc, scale) for _ in range(6)]
+
+    assert [value.tolist() for value in captured] == [value.tolist() for value in eager]
+    assert len({tuple(value.tolist()) for value in captured}) > 1
+    assert all(not value.requires_grad for value in captured)
+    assert calls == 1
+    assert sample.compile_count == 1
+    assert sample.replay_count == 5
+
+
 def test_declared_static_arguments_guard_separate_graphs() -> None:
     calls = 0
 
