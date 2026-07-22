@@ -641,6 +641,54 @@ def test_authored_sequential_mlp_converges_without_a_trainer() -> None:
     assert tynx.nn.functional.mse_loss(model(inputs), targets).item() < 1e-4
 
 
+def test_layer_norm_values_affine_gradients_and_parameter_discovery() -> None:
+    layer = tynx.nn.LayerNorm(2)
+    input = tynx.Tensor([[1.0, 3.0], [2.0, 4.0]], requires_grad=True)
+
+    output = layer(input)
+
+    assert output.tolist()[0] == pytest.approx([-0.999995, 0.999995], abs=1e-6)
+    assert output.tolist()[1] == pytest.approx([-0.999995, 0.999995], abs=1e-6)
+    assert [name for name, _ in layer.named_parameters()] == ["bias", "weight"]
+    output.sum().backward()
+    assert input.grad is not None
+    assert input.grad.tolist()[0] == pytest.approx([0.0, 0.0], abs=1e-6)
+    assert layer.weight is not None
+    assert layer.weight.grad is not None
+    assert layer.weight.grad.tolist() == pytest.approx([-1.99999, 1.99999], abs=1e-5)
+    assert layer.bias is not None
+    assert layer.bias.grad is not None
+    assert layer.bias.grad.tolist() == pytest.approx([2.0, 2.0])
+
+
+def test_layer_norm_supports_multi_axis_and_non_affine_modes() -> None:
+    layer = tynx.nn.LayerNorm((2, 2), elementwise_affine=False)
+    input = tynx.Tensor([[[1.0, 2.0], [3.0, 4.0]]])
+
+    output = layer(input)
+
+    assert output.shape == (1, 2, 2)
+    assert output.mean((1, 2)).item() == pytest.approx(0.0, abs=1e-6)
+    assert layer.weight is None
+    assert layer.bias is None
+    assert layer.parameters() == []
+
+
+def test_layer_norm_validates_configuration_shape_and_dtype() -> None:
+    with pytest.raises(ValueError, match="non-empty"):
+        tynx.nn.LayerNorm(())
+    with pytest.raises(ValueError, match="positive integers"):
+        tynx.nn.LayerNorm((2, 0))
+    with pytest.raises(ValueError, match="non-negative"):
+        tynx.nn.LayerNorm(2, eps=-1.0)
+    with pytest.raises(TypeError, match="must be bool"):
+        tynx.nn.LayerNorm(2, elementwise_affine=1)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="trailing shape"):
+        tynx.nn.LayerNorm(3)(tynx.Tensor([[1.0, 2.0]]))
+    with pytest.raises(TypeError, match="float32"):
+        tynx.nn.LayerNorm(2)(tynx.Tensor([[1, 2]], dtype="int64"))
+
+
 def test_tensor_eager_operators() -> None:
     left = tynx.Tensor([[1.0, 2.0], [3.0, 4.0]])
     right = tynx.Tensor([[2.0, 0.5], [1.0, 2.0]])
