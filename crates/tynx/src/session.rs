@@ -8,8 +8,9 @@ use std::{
 };
 
 use burn::tensor::Device;
-use onnx_ir::OnnxGraphBuilder;
 use onnx_ir::ir::{Argument, Node, OnnxGraph};
+use onnx_ir::{ModelProto, OnnxGraphBuilder};
+use protobuf::Message;
 
 use crate::{
     Env, InitializerId, Result, TynxError, Value, execute, initializer::env_key,
@@ -20,6 +21,7 @@ use crate::{
 #[derive(Debug, Clone)]
 pub struct Session {
     graph: Arc<OnnxGraph>,
+    outputs: Arc<Vec<Argument>>,
 }
 
 /// A parsed model whose embedded values have been materialized on one device.
@@ -68,6 +70,7 @@ impl Session {
 
     /// Load a model from bytes with optional graph simplification.
     pub fn from_bytes_with(data: &[u8], simplify: bool) -> Result<Self> {
+        let declared_output_names = declared_output_names(data)?;
         let (prepared, changed) = crate::interpreter::prepare_model(data)?;
         let parse_data = if changed { prepared.as_slice() } else { data };
         let mut graph = OnnxGraphBuilder::new()
@@ -78,8 +81,27 @@ impl Session {
         }
         crate::interpreter::preserve_attributes(data, &mut graph)?;
 
+        if declared_output_names.len() != graph.outputs.len() {
+            return Err(TynxError::Parse(format!(
+                "ONNX graph declares {} outputs but the parsed graph exposes {}",
+                declared_output_names.len(),
+                graph.outputs.len()
+            )));
+        }
+        let outputs = graph
+            .outputs
+            .iter()
+            .cloned()
+            .zip(declared_output_names)
+            .map(|(mut output, name)| {
+                output.name = name;
+                output
+            })
+            .collect();
+
         Ok(Self {
             graph: Arc::new(graph),
+            outputs: Arc::new(outputs),
         })
     }
 
@@ -95,7 +117,24 @@ impl Session {
 
     /// Return the model's declared outputs.
     pub fn outputs(&self) -> &[Argument] {
-        &self.graph.outputs
+        &self.outputs
+    }
+
+    /// Resolve one declared output name to its processed graph value name.
+    pub fn internal_output_name(&self, public_name: &str) -> Option<&str> {
+        self.outputs
+            .iter()
+            .zip(self.graph.outputs.iter())
+            .find(|(public, _)| public.name == public_name)
+            .map(|(_, internal)| internal.name.as_str())
+    }
+
+    /// Iterate declared and processed output names as `(public, internal)` pairs.
+    pub fn output_name_mapping(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.outputs
+            .iter()
+            .zip(self.graph.outputs.iter())
+            .map(|(public, internal)| (public.name.as_str(), internal.name.as_str()))
     }
 
     /// Materialize all unique embedded graph values on `device` for repeated inference.
@@ -129,7 +168,23 @@ impl Session {
     /// running a model more than once.
     pub fn run(&self, device: &Device, mut env: Env) -> Result<Env> {
         run_graph(&self.graph, &mut env, device)?;
-        collect_outputs(&self.graph, &env)
+        self.collect_outputs(&env)
+    }
+
+    /// Collect internal execution values under the model's declared output names.
+    pub fn collect_outputs(&self, env: &Env) -> Result<Env> {
+        self.graph
+            .outputs
+            .iter()
+            .zip(self.outputs.iter())
+            .map(|(internal, public)| {
+                let value = env
+                    .get(&internal.name)
+                    .cloned()
+                    .ok_or_else(|| TynxError::MissingValue(internal.name.clone()))?;
+                Ok((public.name.clone(), value))
+            })
+            .collect()
     }
 }
 
@@ -179,7 +234,7 @@ impl PreparedSession {
             &self.initializers,
             &self.plan,
         )?;
-        collect_outputs(&self.session.graph, &env)
+        self.session.collect_outputs(&env)
     }
 
     fn validate_input_devices(&self, env: &Env) -> Result<()> {
@@ -279,18 +334,18 @@ impl ExecutionPlan {
     }
 }
 
-fn collect_outputs(graph: &OnnxGraph, env: &Env) -> Result<Env> {
-    graph
-        .outputs
+fn declared_output_names(data: &[u8]) -> Result<Vec<String>> {
+    let model =
+        ModelProto::parse_from_bytes(data).map_err(|error| TynxError::Parse(error.to_string()))?;
+    let graph = model
+        .graph
+        .as_ref()
+        .ok_or_else(|| TynxError::Parse("ONNX model has no graph".to_string()))?;
+    Ok(graph
+        .output
         .iter()
-        .map(|output| {
-            let value = env
-                .get(&output.name)
-                .cloned()
-                .ok_or_else(|| TynxError::MissingValue(output.name.clone()))?;
-            Ok((output.name.clone(), value))
-        })
-        .collect()
+        .map(|output| output.name.clone())
+        .collect())
 }
 
 fn run_graph_prepared(
@@ -355,11 +410,22 @@ fn execute_and_insert(node: &Node, env: &mut Env, device: &Device) -> Result<()>
 
 #[cfg(test)]
 mod tests {
-    use onnx_ir::{DType, Node, node::identity::IdentityNodeBuilder};
+    use onnx_ir::{
+        DType, GraphProto, ModelProto, Node, TypeProto, ValueInfoProto,
+        node::identity::IdentityNodeBuilder,
+    };
+    use protobuf::{Message, MessageField};
 
     use crate::{Scalar, TynxError, Value};
 
     use super::*;
+
+    fn session_from_graph(graph: OnnxGraph) -> Session {
+        Session {
+            outputs: Arc::new(graph.outputs.clone()),
+            graph: Arc::new(graph),
+        }
+    }
 
     #[test]
     fn reports_invalid_model_bytes() {
@@ -378,9 +444,7 @@ mod tests {
         graph.inputs = identity.inputs.clone();
         graph.outputs = identity.outputs.clone();
         graph.nodes.push(Node::Identity(identity));
-        let session = Session {
-            graph: Arc::new(graph),
-        };
+        let session = session_from_graph(graph);
         let mut inputs = Env::new();
         inputs.insert("x".to_string(), Value::Scalar(Scalar::I64(42)));
 
@@ -402,9 +466,7 @@ mod tests {
         let mut graph = OnnxGraph::default();
         graph.outputs = identity.outputs.clone();
         graph.nodes.push(Node::Identity(identity));
-        let session = Session {
-            graph: Arc::new(graph),
-        };
+        let session = session_from_graph(graph);
         let prepared = session.prepare(&Device::default()).unwrap();
 
         assert_eq!(prepared.initializer_count(), 1);
@@ -434,9 +496,7 @@ mod tests {
         let mut graph = OnnxGraph::default();
         graph.outputs = identity.outputs.clone();
         graph.nodes.push(Node::Identity(identity));
-        let session = Session {
-            graph: Arc::new(graph),
-        };
+        let session = session_from_graph(graph);
         let prepared = Arc::new(session.prepare(&Device::default()).unwrap());
 
         let threads = (0..2)
@@ -465,9 +525,7 @@ mod tests {
         graph.inputs = identity.inputs.clone();
         graph.outputs = identity.outputs.clone();
         graph.nodes.push(Node::Identity(identity));
-        let session = Session {
-            graph: Arc::new(graph),
-        };
+        let session = session_from_graph(graph);
         let prepared = session.prepare(&Device::default()).unwrap();
         let mut inputs = Env::new();
         inputs.insert(
@@ -516,5 +574,57 @@ mod tests {
 
         assert_eq!(dead_after_first, ["x"]);
         assert_eq!(dead_after_second, ["middle"]);
+    }
+
+    #[test]
+    fn preserves_declared_output_names_after_identity_simplification() {
+        let data = identity_model_bytes("ids", "out");
+
+        let session = Session::from_bytes(&data).unwrap();
+        let mut inputs = Env::new();
+        inputs.insert("ids".to_string(), Value::Scalar(Scalar::I64(42)));
+        let outputs = session.run(&Device::default(), inputs).unwrap();
+
+        assert_eq!(
+            session
+                .outputs()
+                .iter()
+                .map(|output| output.name.as_str())
+                .collect::<Vec<_>>(),
+            ["out"]
+        );
+        assert!(outputs.contains_key("out"));
+        assert!(!outputs.contains_key("ids"));
+        assert_eq!(session.internal_output_name("out"), Some("ids"));
+        assert_eq!(
+            session.output_name_mapping().collect::<Vec<_>>(),
+            [("out", "ids")]
+        );
+    }
+
+    fn identity_model_bytes(input_name: &str, output_name: &str) -> Vec<u8> {
+        let mut graph = GraphProto::new();
+        graph.input.push(value_info(input_name));
+        graph.output.push(value_info(output_name));
+        graph.node.push(Default::default());
+        graph.node[0].op_type = "Identity".to_string();
+        graph.node[0].input = vec![input_name.to_string()];
+        graph.node[0].output = vec![output_name.to_string()];
+
+        let mut model = ModelProto::new();
+        model.ir_version = 8;
+        model.graph = MessageField::some(graph);
+        model.opset_import.push(Default::default());
+        model.opset_import[0].version = 13;
+        model.write_to_bytes().unwrap()
+    }
+
+    fn value_info(name: &str) -> ValueInfoProto {
+        let mut value = ValueInfoProto::new();
+        value.name = name.to_string();
+        let mut ty = TypeProto::new();
+        ty.mut_tensor_type().elem_type = 7;
+        value.type_ = MessageField::some(ty);
+        value
     }
 }

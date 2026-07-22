@@ -253,6 +253,36 @@ impl TrainabilityReport {
         report
     }
 
+    pub(crate) fn remap_outputs(&mut self, internal_to_public: &HashMap<String, String>) {
+        let public_name = |name: &str| {
+            internal_to_public
+                .get(name)
+                .cloned()
+                .unwrap_or_else(|| name.to_string())
+        };
+
+        for output in &mut self.selected_outputs {
+            *output = public_name(output);
+        }
+        self.output_parameters = std::mem::take(&mut self.output_parameters)
+            .into_iter()
+            .map(|(output, parameters)| (public_name(&output), parameters))
+            .collect();
+        for issue in &mut self.backward_issues {
+            issue.output = public_name(&issue.output);
+        }
+        for message in self.warnings.iter_mut().chain(self.errors.iter_mut()) {
+            for (internal, public) in internal_to_public {
+                if internal != public {
+                    *message = message.replace(
+                        &format!("requested output '{internal}'"),
+                        &format!("requested output '{public}'"),
+                    );
+                }
+            }
+        }
+    }
+
     /// Return initializer reports in first-consumer graph order.
     pub fn initializers(&self) -> &[InitializerReport] {
         &self.initializers
