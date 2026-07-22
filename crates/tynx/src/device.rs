@@ -1,12 +1,44 @@
 //! Process-default device selection with GPU-to-CPU fallback.
 
+use std::sync::Mutex;
+
+static LAST_DEVICE_ERROR: Mutex<Option<String>> = Mutex::new(None);
+
+#[cfg(any(
+    test,
+    all(
+        any(feature = "wgpu", feature = "vulkan"),
+        feature = "flex",
+        not(target_family = "wasm")
+    )
+))]
+fn record_device_error(message: String) {
+    if let Ok(mut error) = LAST_DEVICE_ERROR.lock() {
+        // Preserve the first failure: later validation errors may only be consequences of it.
+        if error.is_none() {
+            *error = Some(message);
+        }
+    }
+}
+
+/// Take the first pending asynchronous device error, if one was reported.
+///
+/// Reading clears the stored error. This is primarily useful for GPU memory pressure, which wgpu
+/// can report from a device thread after the Python or Rust call that queued the allocation has
+/// returned.
+pub fn take_device_error() -> Option<String> {
+    LAST_DEVICE_ERROR.lock().ok()?.take()
+}
+
 #[cfg(all(
     any(feature = "wgpu", feature = "vulkan"),
     feature = "flex",
     not(target_family = "wasm")
 ))]
 mod probe {
-    use std::sync::OnceLock;
+    use std::sync::{Arc, OnceLock};
+
+    use super::record_device_error;
 
     static DEFAULT_DEVICE_USABLE: OnceLock<bool> = OnceLock::new();
 
@@ -23,6 +55,27 @@ mod probe {
             }
             usable
         })
+    }
+
+    pub(super) fn configure_default_device() {
+        static CONFIGURED: OnceLock<()> = OnceLock::new();
+        CONFIGURED.get_or_init(|| {
+            let device = burn::backend::wgpu::WgpuDevice::default();
+            #[cfg(feature = "vulkan")]
+            let setup = burn::backend::wgpu::init_setup::<burn::backend::wgpu::graphics::Vulkan>(
+                &device,
+                Default::default(),
+            );
+            #[cfg(all(not(feature = "vulkan"), feature = "wgpu"))]
+            let setup = burn::backend::wgpu::init_setup::<
+                burn::backend::wgpu::graphics::AutoGraphicsApi,
+            >(&device, Default::default());
+
+            setup.device.on_uncaptured_error(Arc::new(|error| {
+                record_device_error(error.to_string());
+                log::error!("asynchronous wgpu device error: {error}");
+            }));
+        });
     }
 
     /// Ask wgpu for the adapter the GPU device server would request, without entering the
@@ -64,13 +117,14 @@ pub fn default_device() -> burn::tensor::Device {
         if !probe::default_device_usable() {
             return burn::tensor::Device::flex();
         }
+        probe::configure_default_device();
     }
     burn::tensor::Device::default()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::default_device;
+    use super::{default_device, record_device_error, take_device_error};
 
     #[test]
     fn default_device_never_panics() {
@@ -80,5 +134,15 @@ mod tests {
             (&device, burn::tensor::DType::F32),
         );
         assert_eq!(tensor.into_data().to_vec::<f32>().unwrap(), vec![2.0]);
+    }
+
+    #[test]
+    fn asynchronous_device_errors_can_be_observed_once() {
+        let _ = take_device_error();
+        record_device_error("Out of Memory".to_string());
+        record_device_error("cascading validation error".to_string());
+
+        assert_eq!(take_device_error().as_deref(), Some("Out of Memory"));
+        assert_eq!(take_device_error(), None);
     }
 }

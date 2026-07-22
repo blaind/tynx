@@ -18,9 +18,20 @@ impl PyDevice {
     }
 
     pub(crate) fn sync(&self) -> PyResult<()> {
-        self.inner.sync().map_err(|error| {
+        let synchronized = self.inner.sync();
+        raise_pending_device_error()?;
+        synchronized.map_err(|error| {
             PyRuntimeError::new_err(format!("device synchronization failed: {error}"))
         })
+    }
+}
+
+pub(crate) fn raise_pending_device_error() -> PyResult<()> {
+    match tynx_core::take_device_error() {
+        Some(error) => Err(PyRuntimeError::new_err(format!(
+            "asynchronous device error: {error}"
+        ))),
+        None => Ok(()),
     }
 }
 

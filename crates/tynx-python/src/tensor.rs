@@ -22,7 +22,11 @@ use pyo3::{
 use tynx_core::{Device, DynInt, DynTensor, Gradients};
 use tynx_train::ParameterSlot;
 
-use crate::{device::PyDevice, grad_mode::is_grad_enabled, to_python_error};
+use crate::{
+    device::{PyDevice, raise_pending_device_error},
+    grad_mode::is_grad_enabled,
+    to_python_error,
+};
 use comparison::{Comparison, MaskOperation};
 use data::TensorValue;
 use extrema::Extremum;
@@ -550,7 +554,9 @@ impl PyTensor {
 
     /// Copy tensor values to nested Python lists.
     fn tolist(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        self.source.value().tolist(py)
+        let result = self.source.value().tolist(py);
+        raise_pending_device_error()?;
+        result
     }
 
     /// Copy a one-element tensor to a Python scalar.
@@ -561,7 +567,9 @@ impl PyTensor {
                 self.source.value().dims()
             )));
         }
-        self.source.value().item(py)
+        let result = self.source.value().item(py);
+        raise_pending_device_error()?;
+        result
     }
 
     /// Return an off-tape tensor sharing the current numerical value.
@@ -646,6 +654,7 @@ impl PyTensor {
             target.accumulate(&gradients).map_err(to_python_error)?;
             target.mark_tape_consumed();
         }
+        raise_pending_device_error()?;
         Ok(())
     }
 
