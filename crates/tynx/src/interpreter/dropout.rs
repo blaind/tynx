@@ -1,12 +1,17 @@
 //! Inference-mode Dropout execution.
 
 use burn::tensor::Device;
-use onnx_ir::node::dropout::DropoutNode;
+use onnx_ir::node::dropout::{DropoutInput, DropoutNode};
 
 use super::{Env, resolve, shape};
-use crate::{DynBool, Result, Scalar, Value};
+use crate::{DynBool, Result, Scalar, TynxError, Value};
 
 pub(super) fn dropout(node: &DropoutNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
+    if training_mode(node, env, device)? && ratio(node, env, device)? != 0.0 {
+        return Err(TynxError::UnsupportedOp(
+            "Dropout training mode".to_string(),
+        ));
+    }
     let output = resolve::first(env, &node.name, &node.inputs, device)?;
     if node.outputs.len() == 1 {
         return Ok(vec![output]);
@@ -19,6 +24,32 @@ pub(super) fn dropout(node: &DropoutNode, env: &Env, device: &Device) -> Result<
         Value::Bool(DynBool::full(&dims, true, device)?)
     };
     Ok(vec![output, mask])
+}
+
+fn training_mode(node: &DropoutNode, env: &Env, device: &Device) -> Result<bool> {
+    if !node.inputs.get(2).is_some_and(|input| !input.is_optional()) {
+        return Ok(false);
+    }
+    match resolve::at(env, &node.name, &node.inputs, 2, device)? {
+        Value::Scalar(Scalar::Bool(value)) => Ok(value),
+        other => Err(TynxError::TypeMismatch(format!(
+            "Dropout training_mode must be a boolean scalar, got {other:?}"
+        ))),
+    }
+}
+
+fn ratio(node: &DropoutNode, env: &Env, device: &Device) -> Result<f64> {
+    match &node.config.prob {
+        DropoutInput::Static(value) => Ok(*value),
+        DropoutInput::Runtime(input) => {
+            match resolve::at(env, &node.name, &node.inputs, input.input_index, device)? {
+                Value::Scalar(value) => Ok(value.as_f64()),
+                other => Err(TynxError::TypeMismatch(format!(
+                    "Dropout ratio must be a numeric scalar, got {other:?}"
+                ))),
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -66,6 +97,26 @@ mod tests {
         assert_eq!(
             mask.into_data().iter::<bool>().collect::<Vec<_>>(),
             [true; 4]
+        );
+    }
+
+    #[test]
+    fn rejects_nonzero_training_dropout() {
+        let node = DropoutNodeBuilder::new("dropout")
+            .input_tensor("x", 1, DType::F32)
+            .input_scalar("ratio", DType::F32)
+            .input_scalar("training", DType::Bool(BoolStore::Native))
+            .output_tensor("y", 1, DType::F32)
+            .config(DropoutConfig::new(DropoutInput::Static(0.5)))
+            .build();
+        let mut env = Env::new();
+        env.insert("training".into(), Value::Scalar(Scalar::Bool(true)));
+
+        let error = dropout(&node, &env, &Device::default()).unwrap_err();
+
+        assert_eq!(
+            error,
+            TynxError::UnsupportedOp("Dropout training mode".to_string())
         );
     }
 }
