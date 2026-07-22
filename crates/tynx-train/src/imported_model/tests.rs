@@ -220,11 +220,83 @@ fn unsupported_slot_consumer_is_rejected_before_forward() {
     assert!(error.to_string().contains("Conv2d"));
 }
 
+#[test]
+fn imported_model_accepts_only_declared_dynamic_dimensions() {
+    let session = Session::from_bytes_with(&dynamic_batch_gemm_model_bytes(), false).unwrap();
+    let names = stable_names(&session, "head");
+    let device = Device::autodiff(Device::default());
+    let model = ImportedModel::from_session_with(
+        session,
+        device.clone(),
+        &TrainabilityOverrides::new(),
+        &names,
+    )
+    .unwrap();
+
+    for batch in [1, 3, 7] {
+        let output = model
+            .run(env_with_input(tensor(
+                vec![1.0; batch],
+                &[batch, 1],
+                &device,
+            )))
+            .unwrap()
+            .remove("y")
+            .unwrap()
+            .into_tensor()
+            .unwrap();
+        assert_eq!(output.dims(), [batch, 1]);
+    }
+
+    let error = model
+        .run(env_with_input(tensor(vec![1.0; 6], &[3, 2], &device)))
+        .unwrap_err();
+    assert!(error.to_string().contains("expects shape [?, 1]"));
+    assert!(error.to_string().contains("dimension 1 must be 1"));
+
+    let error = model
+        .run(env_with_input(tensor(vec![1.0; 3], &[3], &device)))
+        .unwrap_err();
+    assert!(error.to_string().contains("expects rank 2"));
+}
+
+#[test]
+fn imported_model_rejects_drift_in_fixed_batch_dimensions() {
+    let session = Session::from_bytes_with(&gemm_model_bytes(), false).unwrap();
+    let names = stable_names(&session, "head");
+    let device = Device::autodiff(Device::default());
+    let model = ImportedModel::from_session_with(
+        session,
+        device.clone(),
+        &TrainabilityOverrides::new(),
+        &names,
+    )
+    .unwrap();
+
+    let error = model
+        .run(env_with_input(tensor(vec![1.0; 2], &[2, 1], &device)))
+        .unwrap_err();
+    assert!(error.to_string().contains("expects shape [4, 1]"));
+    assert!(error.to_string().contains("dimension 0 must be 4"));
+}
+
 fn gemm_model_bytes() -> Vec<u8> {
     model_bytes(
         "Gemm",
         &[4, 1],
         &[4, 1],
+        vec![
+            tensor_proto("weight", &[1, 1], &[0.0]),
+            tensor_proto("bias", &[1], &[0.0]),
+        ],
+    )
+}
+
+fn dynamic_batch_gemm_model_bytes() -> Vec<u8> {
+    model_bytes_with_shapes(
+        "Gemm",
+        &[None, Some(1)],
+        &[None, Some(1)],
         vec![
             tensor_proto("weight", &[1, 1], &[0.0]),
             tensor_proto("bias", &[1], &[0.0]),
@@ -250,10 +322,21 @@ fn model_bytes(
     output_shape: &[usize],
     initializers: Vec<TensorProto>,
 ) -> Vec<u8> {
+    let input_shape = input_shape.iter().copied().map(Some).collect::<Vec<_>>();
+    let output_shape = output_shape.iter().copied().map(Some).collect::<Vec<_>>();
+    model_bytes_with_shapes(operator, &input_shape, &output_shape, initializers)
+}
+
+fn model_bytes_with_shapes(
+    operator: &str,
+    input_shape: &[Option<usize>],
+    output_shape: &[Option<usize>],
+    initializers: Vec<TensorProto>,
+) -> Vec<u8> {
     let mut graph = GraphProto::new();
     graph.name = "imported_training_test".to_string();
-    graph.input.push(value_info("x", input_shape));
-    graph.output.push(value_info("y", output_shape));
+    graph.input.push(value_info_with_shape("x", input_shape));
+    graph.output.push(value_info_with_shape("y", output_shape));
     graph.node.push(Default::default());
     let node = graph.node.last_mut().unwrap();
     node.name = "layer".to_string();
@@ -270,7 +353,7 @@ fn model_bytes(
     model.write_to_bytes().unwrap()
 }
 
-fn value_info(name: &str, dimensions: &[usize]) -> ValueInfoProto {
+fn value_info_with_shape(name: &str, dimensions: &[Option<usize>]) -> ValueInfoProto {
     let mut value = ValueInfoProto::new();
     value.name = name.to_string();
     let mut ty = TypeProto::new();
@@ -279,11 +362,11 @@ fn value_info(name: &str, dimensions: &[usize]) -> ValueInfoProto {
     let shape = tensor.shape.mut_or_insert_default();
     for dimension in dimensions {
         shape.dim.push(Default::default());
-        shape
-            .dim
-            .last_mut()
-            .unwrap()
-            .set_dim_value(*dimension as i64);
+        let output = shape.dim.last_mut().unwrap();
+        match dimension {
+            Some(dimension) => output.set_dim_value(*dimension as i64),
+            None => output.set_dim_param("batch".to_string()),
+        }
     }
     value.type_ = MessageField::some(ty);
     value

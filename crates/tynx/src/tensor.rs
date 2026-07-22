@@ -2381,6 +2381,18 @@ fn scalar_as_u64(value: crate::Scalar) -> u64 {
 }
 
 impl DynBool {
+    /// Return the tensor's boolean storage type.
+    pub fn dtype(&self) -> DType {
+        match self {
+            Self::R1(tensor) => tensor.dtype(),
+            Self::R2(tensor) => tensor.dtype(),
+            Self::R3(tensor) => tensor.dtype(),
+            Self::R4(tensor) => tensor.dtype(),
+            Self::R5(tensor) => tensor.dtype(),
+            Self::R6(tensor) => tensor.dtype(),
+        }
+    }
+
     /// Create a boolean tensor filled with one value.
     pub fn full(dims: &[usize], value: bool, device: &Device) -> Result<Self> {
         let dtype = DType::Bool(burn::tensor::BoolStore::Native);

@@ -3,7 +3,8 @@
 mod executor;
 
 use burn::tensor::Device;
-use tynx_core::{Env, Result, Session};
+use tynx_core::onnx_ir::ir::{ArgType, Argument, TensorType};
+use tynx_core::{Env, Result, Session, TynxError, Value};
 
 use crate::{
     ImportedState, InitializerNameOverrides, ParameterStore, TrainabilityOverrides,
@@ -105,8 +106,109 @@ impl ImportedModel {
 
     /// Run one eager forward, choosing whether parameters participate in autodiff.
     pub fn run_with_tracking(&self, env: Env, tracking: bool) -> Result<Env> {
+        validate_inputs(&self.session, &self.device, &env)?;
         executor::run(&self.session, &self.state, &self.device, env, tracking)
     }
+}
+
+fn validate_inputs(session: &Session, device: &Device, env: &Env) -> Result<()> {
+    for input in session.inputs() {
+        let value = env
+            .get(&input.name)
+            .ok_or_else(|| TynxError::MissingValue(input.name.clone()))?;
+        validate_input(input, device, value)?;
+    }
+    Ok(())
+}
+
+fn validate_input(input: &Argument, device: &Device, value: &Value) -> Result<()> {
+    match &input.ty {
+        ArgType::Tensor(expected) => validate_tensor_input(&input.name, expected, device, value),
+        ArgType::ScalarTensor(dtype) => validate_tensor_input(
+            &input.name,
+            &TensorType::new(*dtype, 1, Some(vec![Some(1)])),
+            device,
+            value,
+        ),
+        ArgType::ScalarNative(_) if matches!(value, Value::Scalar(_)) => Ok(()),
+        ArgType::Shape(rank) => match value {
+            Value::Shape(shape) if shape.len() == *rank => Ok(()),
+            Value::Shape(shape) => Err(TynxError::Shape(format!(
+                "imported input '{}' expects a shape of length {rank}, got length {}",
+                input.name,
+                shape.len()
+            ))),
+            other => Err(TynxError::TypeMismatch(format!(
+                "imported input '{}' expects {}, got {other:?}",
+                input.name, input.ty
+            ))),
+        },
+        _ => Err(TynxError::TypeMismatch(format!(
+            "imported input '{}' expects {}, got {value:?}",
+            input.name, input.ty
+        ))),
+    }
+}
+
+fn validate_tensor_input(
+    name: &str,
+    expected: &TensorType,
+    device: &Device,
+    value: &Value,
+) -> Result<()> {
+    let (actual_dtype, actual_shape, actual_device) = match value {
+        Value::Tensor(tensor) => (tensor.dtype(), tensor.dims(), tensor.device()),
+        Value::Int(tensor) => (tensor.dtype(), tensor.dims(), tensor.device()),
+        Value::Bool(tensor) => (tensor.dtype(), tensor.dims(), tensor.device()),
+        other => {
+            return Err(TynxError::TypeMismatch(format!(
+                "imported input '{name}' expects a tensor, got {other:?}"
+            )));
+        }
+    };
+    if actual_dtype != expected.dtype {
+        return Err(TynxError::TypeMismatch(format!(
+            "imported input '{name}' expects dtype {:?}, got {actual_dtype:?}",
+            expected.dtype
+        )));
+    }
+    if actual_device != *device || actual_device.is_autodiff() != device.is_autodiff() {
+        return Err(TynxError::DeviceMismatch {
+            name: name.to_string(),
+            expected: format!("{device:?}"),
+            actual: format!("{actual_device:?}"),
+        });
+    }
+    if actual_shape.len() != expected.rank {
+        return Err(TynxError::Shape(format!(
+            "imported input '{name}' expects rank {}, got shape {actual_shape:?}",
+            expected.rank
+        )));
+    }
+    if let Some(expected_shape) = &expected.static_shape {
+        for (axis, (expected_dimension, actual_dimension)) in
+            expected_shape.iter().zip(&actual_shape).enumerate()
+        {
+            if let Some(expected_dimension) = expected_dimension
+                && actual_dimension != expected_dimension
+            {
+                return Err(TynxError::Shape(format!(
+                    "imported input '{name}' expects shape {}, got {actual_shape:?}; dimension {axis} must be {expected_dimension}",
+                    display_shape(expected_shape)
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn display_shape(shape: &[Option<usize>]) -> String {
+    let dimensions = shape
+        .iter()
+        .map(|dimension| dimension.map_or_else(|| "?".to_string(), |value| value.to_string()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("[{dimensions}]")
 }
 
 fn analyze_session_outputs(
