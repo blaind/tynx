@@ -746,13 +746,13 @@ impl PyTensor {
     /// Sum values over all, one, or several dimensions.
     #[pyo3(signature = (dim=None, keepdim=false))]
     fn sum(&self, dim: Option<&Bound<'_, PyAny>>, keepdim: bool) -> PyResult<Self> {
-        self.reduce(dim, keepdim, DynTensor::sum_dims)
+        self.reduce(dim, keepdim, true)
     }
 
     /// Average values over all, one, or several dimensions.
     #[pyo3(signature = (dim=None, keepdim=false))]
     fn mean(&self, dim: Option<&Bound<'_, PyAny>>, keepdim: bool) -> PyResult<Self> {
-        self.reduce(dim, keepdim, DynTensor::mean_dims)
+        self.reduce(dim, keepdim, false)
     }
 
     /// Return value-only maxima over all, one, or several dimensions.
@@ -1175,15 +1175,28 @@ impl PyTensor {
         self.unary(|input| Ok(input.clip(min, max)))
     }
 
-    fn reduce(
-        &self,
-        dim: Option<&Bound<'_, PyAny>>,
-        keepdim: bool,
-        operation: impl FnOnce(DynTensor, &[usize]) -> DynTensor,
-    ) -> PyResult<Self> {
+    fn reduce(&self, dim: Option<&Bound<'_, PyAny>>, keepdim: bool, sum: bool) -> PyResult<Self> {
         let input_shape = self.source.value().dims();
         let spec = ReductionSpec::from_python(dim, &input_shape, keepdim)?;
-        self.unary(move |input| operation(input, &spec.dims).reshape(spec.output_shape))
+        let capture_op = if sum {
+            UnaryOp::Sum {
+                dims: spec.dims.clone(),
+                output_shape: spec.output_shape.clone(),
+            }
+        } else {
+            UnaryOp::Mean {
+                dims: spec.dims.clone(),
+                output_shape: spec.output_shape.clone(),
+            }
+        };
+        self.unary_captured(capture_op, move |input| {
+            let reduced = if sum {
+                input.sum_dims(&spec.dims)
+            } else {
+                input.mean_dims(&spec.dims)
+            };
+            reduced.reshape(spec.output_shape)
+        })
     }
 
     fn reduce_extreme(

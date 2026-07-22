@@ -6,10 +6,19 @@
 //! no Python callbacks: a frontend records tensor inputs, stable parameter-slot reads, and Tynx
 //! operations once, then [`Graph::run`] replays the complete graph in Rust.
 
-use std::collections::HashSet;
+use std::{collections::HashSet, fmt::Debug, rc::Rc};
 
 use tynx_core::{DType, Device, DynTensor, Result, TynxError};
-use tynx_train::{ParamId, ParameterContract, ParameterSlot};
+use tynx_train::{ParamId, ParameterContract, ParameterSlot, backward_slots};
+
+/// Rust-only optimizer action retained by a captured whole-step program.
+///
+/// Implementations may share native optimizer state with a language binding, but replay never
+/// invokes a Python callback.
+pub trait CapturedOptimizer: Debug {
+    /// Apply one update using gradients already accumulated in the retained parameter slots.
+    fn step(&self) -> Result<()>;
+}
 
 /// Identifier of a value produced by one graph node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -88,6 +97,20 @@ pub enum UnaryOp {
     Reshape(Vec<usize>),
     /// Permute all tensor axes.
     Permute(Vec<usize>),
+    /// Sum selected axes and apply the binding-visible output shape.
+    Sum {
+        /// Reduced axes.
+        dims: Vec<usize>,
+        /// Final shape after keepdim/rank-one-floor handling.
+        output_shape: Vec<usize>,
+    },
+    /// Average selected axes and apply the binding-visible output shape.
+    Mean {
+        /// Reduced axes.
+        dims: Vec<usize>,
+        /// Final shape after keepdim/rank-one-floor handling.
+        output_shape: Vec<usize>,
+    },
 }
 
 /// Binary operations supported by the initial runtime IR.
@@ -123,6 +146,22 @@ enum Node {
 }
 
 #[derive(Debug, Clone)]
+enum Effect {
+    ZeroGrad(Vec<ParameterSlot>),
+    Backward {
+        loss: ValueId,
+        parameters: Vec<ParameterSlot>,
+    },
+    OptimizerStep(Rc<dyn CapturedOptimizer>),
+}
+
+#[derive(Debug, Clone)]
+struct PositionedEffect {
+    before_node: usize,
+    effect: Effect,
+}
+
+#[derive(Debug, Clone)]
 struct ParameterGuard {
     slot: ParameterSlot,
     contract: ParameterContract,
@@ -152,6 +191,7 @@ impl ParameterGuard {
 pub struct GraphBuilder {
     nodes: Vec<Node>,
     input_signatures: Vec<TensorSignature>,
+    effects: Vec<PositionedEffect>,
 }
 
 impl GraphBuilder {
@@ -191,6 +231,23 @@ impl GraphBuilder {
         Ok(self.push(Node::Binary { op, left, right }))
     }
 
+    /// Record gradient clearing at the current execution position.
+    pub fn zero_grad(&mut self, parameters: Vec<ParameterSlot>) {
+        self.push_effect(Effect::ZeroGrad(parameters));
+    }
+
+    /// Record reverse-mode autodiff from a one-element loss at the current execution position.
+    pub fn backward(&mut self, loss: ValueId, parameters: Vec<ParameterSlot>) -> Result<()> {
+        self.require_value(loss)?;
+        self.push_effect(Effect::Backward { loss, parameters });
+        Ok(())
+    }
+
+    /// Record a native optimizer update at the current execution position.
+    pub fn optimizer_step(&mut self, optimizer: Rc<dyn CapturedOptimizer>) {
+        self.push_effect(Effect::OptimizerStep(optimizer));
+    }
+
     /// Finish the graph with one or more output values.
     pub fn finish(self, outputs: Vec<ValueId>) -> Result<Graph> {
         if outputs.is_empty() {
@@ -205,6 +262,7 @@ impl GraphBuilder {
             nodes: self.nodes,
             input_signatures: self.input_signatures,
             outputs,
+            effects: self.effects,
         })
     }
 
@@ -223,6 +281,13 @@ impl GraphBuilder {
         }
         Ok(())
     }
+
+    fn push_effect(&mut self, effect: Effect) {
+        self.effects.push(PositionedEffect {
+            before_node: self.nodes.len(),
+            effect,
+        });
+    }
 }
 
 /// Immutable captured graph executable wholly in Rust.
@@ -231,6 +296,7 @@ pub struct Graph {
     nodes: Vec<Node>,
     input_signatures: Vec<TensorSignature>,
     outputs: Vec<ValueId>,
+    effects: Vec<PositionedEffect>,
 }
 
 impl Graph {
@@ -264,7 +330,14 @@ impl Graph {
         self.validate_inputs(inputs)?;
 
         let mut values = Vec::with_capacity(self.nodes.len());
+        let mut effects = self.effects.iter().peekable();
         for (index, node) in self.nodes.iter().enumerate() {
+            while effects
+                .peek()
+                .is_some_and(|effect| effect.before_node == index)
+            {
+                execute_effect(&effects.next().expect("peeked effect").effect, &values)?;
+            }
             let value = match node {
                 Node::Input(input) => inputs[*input].clone(),
                 Node::Parameter(guard) => {
@@ -282,6 +355,10 @@ impl Graph {
             };
             debug_assert_eq!(values.len(), index);
             values.push(value);
+        }
+        for effect in effects {
+            debug_assert_eq!(effect.before_node, self.nodes.len());
+            execute_effect(&effect.effect, &values)?;
         }
 
         self.outputs
@@ -313,6 +390,21 @@ impl Graph {
     }
 }
 
+fn execute_effect(effect: &Effect, values: &[DynTensor]) -> Result<()> {
+    match effect {
+        Effect::ZeroGrad(parameters) => {
+            for parameter in parameters {
+                parameter.zero_grad();
+            }
+            Ok(())
+        }
+        Effect::Backward { loss, parameters } => {
+            backward_slots(&value(values, *loss)?, parameters).map(|_| ())
+        }
+        Effect::OptimizerStep(optimizer) => optimizer.step(),
+    }
+}
+
 fn value(values: &[DynTensor], id: ValueId) -> Result<DynTensor> {
     values
         .get(id.index())
@@ -331,6 +423,8 @@ fn execute_unary(op: &UnaryOp, input: DynTensor) -> Result<DynTensor> {
         UnaryOp::Gelu => Ok(input.gelu()),
         UnaryOp::Reshape(shape) => input.reshape(shape.clone()),
         UnaryOp::Permute(axes) => input.permute(axes.clone()),
+        UnaryOp::Sum { dims, output_shape } => input.sum_dims(dims).reshape(output_shape.clone()),
+        UnaryOp::Mean { dims, output_shape } => input.mean_dims(dims).reshape(output_shape.clone()),
     }
 }
 

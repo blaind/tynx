@@ -16,7 +16,7 @@ pub mod parameter;
 pub mod store;
 pub mod trainability;
 
-pub use autograd::{BackwardResult, backward};
+pub use autograd::{BackwardResult, backward, backward_slots};
 pub use backward_support::{BackwardCapability, BackwardSupportRegistry};
 pub use gradient::{clip_grad_norm, clip_grad_value};
 pub use imported_model::ImportedModel;

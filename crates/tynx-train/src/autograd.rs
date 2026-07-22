@@ -4,7 +4,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use tynx_core::{DynTensor, Gradients, Result, TynxError};
 
-use crate::ParameterStore;
+use crate::{ParameterSlot, ParameterStore};
 
 /// The raw Burn gradients and parameter-population summary from one backward pass.
 pub struct BackwardResult {
@@ -36,6 +36,27 @@ impl BackwardResult {
 /// resolves the current leaf cached by each slot, so callers must not replace parameter values
 /// between forward and backward.
 pub fn backward(loss: &DynTensor, parameters: &ParameterStore) -> Result<BackwardResult> {
+    backward_parameters(loss, parameters.trainable())
+}
+
+/// Run backward and accumulate gradients into a runtime list of parameter slots.
+///
+/// Repeated identities are accumulated once by the gradient container/slot identity contract. This
+/// form is intended for captured programs that already retain their stable slots and do not need a
+/// persisted name store.
+pub fn backward_slots(loss: &DynTensor, parameters: &[ParameterSlot]) -> Result<BackwardResult> {
+    backward_parameters(
+        loss,
+        parameters
+            .iter()
+            .filter(|parameter| parameter.contract().trainable()),
+    )
+}
+
+fn backward_parameters<'a>(
+    loss: &DynTensor,
+    parameters: impl IntoIterator<Item = &'a ParameterSlot>,
+) -> Result<BackwardResult> {
     let numel = loss.dims().into_iter().try_fold(1_usize, |count, dim| {
         count
             .checked_mul(dim)
@@ -57,7 +78,11 @@ pub fn backward(loss: &DynTensor, parameters: &ParameterStore) -> Result<Backwar
         )
     })?;
     let mut parameters_with_grad = 0;
-    for parameter in parameters.trainable() {
+    let mut seen = std::collections::HashSet::new();
+    for parameter in parameters {
+        if !seen.insert(parameter.id()) {
+            continue;
+        }
         if parameter.accumulate_grad(&gradients)? {
             parameters_with_grad += 1;
         }

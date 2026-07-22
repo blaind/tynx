@@ -1,6 +1,8 @@
 use burn::tensor::{DType, Device, TensorData};
-use tynx_capture::{BinaryOp, GraphBuilder, UnaryOp};
-use tynx_core::DynTensor;
+use std::{cell::RefCell, rc::Rc};
+
+use tynx_capture::{BinaryOp, CapturedOptimizer, GraphBuilder, UnaryOp};
+use tynx_core::{DynTensor, Result};
 use tynx_train::{ParameterSlot, ParameterStore, Sgd, backward};
 
 fn tensor(data: &[f32], shape: [usize; 2], device: &Device) -> DynTensor {
@@ -109,4 +111,70 @@ fn signatures_include_dtype_and_autodiff_device_capability() {
     assert_eq!(signature.shape(), [2, 2]);
     assert_eq!(signature.dtype(), DType::F32);
     assert!(signature.device().is_autodiff());
+}
+
+#[derive(Debug)]
+struct SharedSgd {
+    inner: RefCell<Sgd>,
+    parameters: Vec<ParameterSlot>,
+}
+
+impl CapturedOptimizer for SharedSgd {
+    fn step(&self) -> Result<()> {
+        self.inner
+            .borrow_mut()
+            .step_slots(&self.parameters)
+            .map(|_| ())
+    }
+}
+
+#[test]
+fn replays_ordered_zero_backward_and_optimizer_effects() {
+    let device = Device::autodiff(Device::default());
+    let input = tensor(&[2.0], [1, 1], &device);
+    let parameter = ParameterSlot::new(
+        Some("weight".to_string()),
+        tensor(&[1.0], [1, 1], &device),
+        true,
+    )
+    .unwrap();
+    let optimizer: Rc<dyn CapturedOptimizer> = Rc::new(SharedSgd {
+        inner: RefCell::new(Sgd::new(0.1).unwrap()),
+        parameters: vec![parameter.clone()],
+    });
+
+    let mut builder = GraphBuilder::new();
+    let x = builder.input(&input);
+    builder.zero_grad(vec![parameter.clone()]);
+    let weight = builder.parameter(parameter.clone());
+    let prediction = builder.binary(BinaryOp::Multiply, x, weight).unwrap();
+    let squared = builder
+        .binary(BinaryOp::Multiply, prediction, prediction)
+        .unwrap();
+    let loss = builder
+        .unary(
+            UnaryOp::Mean {
+                dims: vec![0, 1],
+                output_shape: vec![1],
+            },
+            squared,
+        )
+        .unwrap();
+    builder.backward(loss, vec![parameter.clone()]).unwrap();
+    builder.optimizer_step(optimizer);
+    let graph = builder.finish(vec![loss]).unwrap();
+
+    let first_loss = graph
+        .run(std::slice::from_ref(&input), true)
+        .unwrap()
+        .remove(0);
+    assert_eq!(values(first_loss), vec![4.0]);
+    assert!((values(parameter.value())[0] - 0.2).abs() < 1.0e-6);
+
+    let second_loss = graph
+        .run(std::slice::from_ref(&input), true)
+        .unwrap()
+        .remove(0);
+    assert!((values(second_loss)[0] - 0.16).abs() < 1.0e-6);
+    assert!((values(parameter.value())[0] - 0.04).abs() < 1.0e-6);
 }
