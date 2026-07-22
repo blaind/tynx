@@ -1,6 +1,6 @@
 //! Shared benchmark cases, timing, validation, and JSON reporting.
 
-use std::{env, error::Error, hint::black_box, time::Instant};
+use std::{env, error::Error, fs, hint::black_box, time::Instant};
 
 use serde::{Deserialize, Serialize};
 
@@ -25,6 +25,7 @@ pub struct Case {
     pub warmup: usize,
     pub iterations: usize,
     pub estimated_flops: Option<u64>,
+    pub batch_size: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -43,6 +44,8 @@ struct CaseSpec {
     warmup: usize,
     iterations: usize,
     estimated_flops: Option<u64>,
+    batch_size: Option<usize>,
+    required_feature: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -77,6 +80,17 @@ enum DataSpec {
         start: f32,
         step: f32,
     },
+    RepeatedExplicit {
+        values: Vec<f32>,
+    },
+    RepeatedLinear {
+        start: f32,
+        step: f32,
+        period: usize,
+    },
+    Reference {
+        path: String,
+    },
     Identity,
 }
 
@@ -100,6 +114,8 @@ pub struct Report {
     pub min_ms: f64,
     pub mean_ms: f64,
     pub throughput_per_second: f64,
+    pub batch_size: Option<usize>,
+    pub throughput_items_per_second: Option<f64>,
     pub estimated_gflops: Option<f64>,
     pub output_checksum: f64,
 }
@@ -112,14 +128,26 @@ pub fn load_cases() -> BenchResult<Vec<Case>> {
         Err(error) => return Err(error.into()),
     };
     let specs = match requested {
-        Some(requested) => vec![
-            registry
+        Some(requested) => {
+            let spec = registry
                 .cases
                 .into_iter()
                 .find(|case| case.id == requested)
-                .ok_or_else(|| format!("unknown benchmark case '{requested}'"))?,
-        ],
-        None => registry.cases,
+                .ok_or_else(|| format!("unknown benchmark case '{requested}'"))?;
+            if !feature_enabled(spec.required_feature.as_deref()) {
+                return Err(format!(
+                    "benchmark case '{requested}' requires the '{}' feature",
+                    spec.required_feature.as_deref().unwrap_or("unknown")
+                )
+                .into());
+            }
+            vec![spec]
+        }
+        None => registry
+            .cases
+            .into_iter()
+            .filter(|spec| feature_enabled(spec.required_feature.as_deref()))
+            .collect(),
     };
 
     specs
@@ -177,6 +205,7 @@ fn case_from_spec(spec: CaseSpec) -> BenchResult<Case> {
         warmup: spec.warmup,
         iterations: spec.iterations,
         estimated_flops: spec.estimated_flops,
+        batch_size: spec.batch_size,
     })
 }
 
@@ -191,6 +220,11 @@ pub fn model_bytes(case: &Case) -> BenchResult<Vec<u8>> {
             "../../../models/matmul_add_relu_dynamic.onnx.hex"
         )),
         "models/tiny_cnn.onnx" => Ok(include_bytes!("../../../models/tiny_cnn.onnx").to_vec()),
+        "external/mobilenetv2_100_opset16.onnx" => {
+            let path = env::var_os("TYNX_BENCH_MOBILENET_PATH")
+                .ok_or("TYNX_BENCH_MOBILENET_PATH is required for the MobileNetV2 benchmark")?;
+            Ok(fs::read(path)?)
+        }
         model => Err(format!("model '{model}' is not embedded in the benchmark harness").into()),
     }
 }
@@ -259,6 +293,10 @@ where
         min_ms: samples[0],
         mean_ms,
         throughput_per_second: 1_000.0 / median_ms,
+        batch_size: case.batch_size,
+        throughput_items_per_second: case
+            .batch_size
+            .map(|batch_size| batch_size as f64 * 1_000.0 / median_ms),
         estimated_gflops: case
             .estimated_flops
             .map(|flops| flops as f64 / (median_ms * 1_000_000.0)),
@@ -304,6 +342,25 @@ fn expand(spec: &TensorSpec) -> BenchResult<Vec<f32>> {
         DataSpec::Linear { start, step } => {
             (0..len).map(|index| start + *step * index as f32).collect()
         }
+        DataSpec::RepeatedExplicit { values } => {
+            if values.is_empty() || !len.is_multiple_of(values.len()) {
+                return Err("repeated explicit data must evenly divide the tensor shape".into());
+            }
+            values.iter().copied().cycle().take(len).collect()
+        }
+        DataSpec::RepeatedLinear {
+            start,
+            step,
+            period,
+        } => {
+            if *period == 0 || !len.is_multiple_of(*period) {
+                return Err("repeated linear period must evenly divide the tensor shape".into());
+            }
+            (0..len)
+                .map(|index| start + *step * (index % period) as f32)
+                .collect()
+        }
+        DataSpec::Reference { path } => reference_values(path)?,
         DataSpec::Identity => {
             if spec.shape.len() != 2 || spec.shape[0] != spec.shape[1] {
                 return Err("identity data requires a square rank-2 tensor".into());
@@ -325,6 +382,23 @@ fn expand(spec: &TensorSpec) -> BenchResult<Vec<f32>> {
         .into());
     }
     Ok(values)
+}
+
+fn feature_enabled(required: Option<&str>) -> bool {
+    match required {
+        None => true,
+        Some("mobilenet") => cfg!(feature = "mobilenet"),
+        Some(_) => false,
+    }
+}
+
+fn reference_values(path: &str) -> BenchResult<Vec<f32>> {
+    match path {
+        "models/mobilenetv2_100_opset16.expected.json" => Ok(serde_json::from_str(include_str!(
+            "../../../models/mobilenetv2_100_opset16.expected.json"
+        ))?),
+        path => Err(format!("unknown benchmark reference '{path}'").into()),
+    }
 }
 
 fn element_count(shape: &[usize]) -> BenchResult<usize> {
@@ -404,6 +478,8 @@ mod tests {
         let matmul1024 = load_case_named("matmul-1024x1024").unwrap();
         let multi_op = load_case_named("matmul-add-relu-256x256").unwrap();
         let tiny_cnn = load_case_named("tiny-cnn-32").unwrap();
+        let tiny_cnn_b128 = load_case_named("tiny-cnn-32-b128").unwrap();
+        let mobilenet = load_case_named("mobilenetv2-100-b1").unwrap();
 
         assert_eq!(sign.inputs[0].values.len(), 11);
         assert_eq!(model_bytes(&sign).unwrap().len(), 83);
@@ -426,13 +502,21 @@ mod tests {
         assert_eq!(tiny_cnn.inputs[0].shape, [1, 3, 32, 32]);
         assert_eq!(tiny_cnn.output_shape, [1, 10]);
         assert_eq!(tiny_cnn.estimated_flops, Some(1_032_512));
+        assert_eq!(tiny_cnn.batch_size, Some(1));
         assert!((tiny_cnn.expected.iter().sum::<f32>() - 1.0).abs() < 1e-6);
-        assert_eq!(model_bytes(&tiny_cnn).unwrap().len(), 7_232);
+        assert_eq!(model_bytes(&tiny_cnn).unwrap().len(), 7_242);
+        assert_eq!(tiny_cnn_b128.inputs[0].values.len(), 128 * 3 * 32 * 32);
+        assert_eq!(tiny_cnn_b128.expected.len(), 128 * 10);
+        assert_eq!(tiny_cnn_b128.batch_size, Some(128));
+        assert_eq!(tiny_cnn_b128.estimated_flops, Some(132_161_536));
+        assert_eq!(mobilenet.inputs[0].shape, [1, 3, 224, 224]);
+        assert_eq!(mobilenet.expected.len(), 1_000);
+        assert_eq!(mobilenet.estimated_flops, Some(601_548_544));
     }
 
     #[test]
     fn registry_contains_all_cases() {
-        assert_eq!(registry().unwrap().cases.len(), 7);
+        assert_eq!(registry().unwrap().cases.len(), 11);
     }
 
     #[test]
