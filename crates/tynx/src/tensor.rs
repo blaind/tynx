@@ -1,6 +1,6 @@
 //! Rank-erased tensor containers used by the runtime.
 
-use burn::tensor::{Bool, DType, Device, Int, Tensor, TensorData, activation};
+use burn::tensor::{Bool, DType, Device, Int, Slice, Tensor, TensorData, activation};
 
 use crate::error::{Result, TynxError};
 
@@ -487,6 +487,11 @@ impl DynTensor {
     /// Tile each dimension by the corresponding repeat count.
     pub fn repeat(self, repeats: &[usize]) -> Self {
         map_float!(self, |tensor| tensor.repeat(repeats))
+    }
+
+    /// Slice the tensor with one slice per dimension.
+    pub fn slice(self, slices: &[Slice]) -> Self {
+        map_float!(self, |tensor| tensor.slice(slices))
     }
 
     /// Permute the tensor dimensions.
@@ -1095,6 +1100,11 @@ impl DynInt {
         map_int!(self, |tensor| tensor.repeat(repeats))
     }
 
+    /// Slice the tensor with one slice per dimension.
+    pub fn slice(self, slices: &[Slice]) -> Self {
+        map_int!(self, |tensor| tensor.slice(slices))
+    }
+
     /// Permute the tensor dimensions.
     pub fn permute(self, axes: Vec<usize>) -> Result<Self> {
         if axes.len() != self.rank() {
@@ -1488,6 +1498,11 @@ impl DynBool {
     /// Tile each dimension by the corresponding repeat count.
     pub fn repeat(self, repeats: &[usize]) -> Self {
         map_bool!(self, |tensor| tensor.repeat(repeats))
+    }
+
+    /// Slice the tensor with one slice per dimension.
+    pub fn slice(self, slices: &[Slice]) -> Self {
+        map_bool!(self, |tensor| tensor.slice(slices))
     }
 
     /// Permute the tensor dimensions.

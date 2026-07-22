@@ -17,6 +17,7 @@ mod pow;
 mod reduction;
 mod resolve;
 mod shape;
+mod slice;
 mod softmax;
 mod spatial;
 mod unary;
@@ -137,6 +138,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::Sign(node) => unary::sign(node, env, device),
         Node::Sin(node) => unary::sin(node, env, device),
         Node::Sinh(node) => unary::sinh(node, env, device),
+        Node::Slice(node) => slice::slice(node, env, device),
         Node::Softplus(node) => unary::softplus(node, env, device),
         Node::Softmax(node) => softmax::softmax(node, env, device),
         Node::Softsign(node) => unary::softsign(node, env, device),
