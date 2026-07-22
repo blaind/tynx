@@ -13,7 +13,7 @@ use onnx_ir::node::{
 };
 
 use super::{Env, resolve};
-use crate::{Result, Value};
+use crate::{Result, Scalar, TynxError, Value};
 
 pub(super) fn relu(node: &ReluNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
     let input = resolve::first(env, &node.name, &node.inputs, device)?.into_tensor()?;
@@ -126,8 +126,17 @@ pub(super) fn floor(node: &FloorNode, env: &Env, device: &Device) -> Result<Vec<
 }
 
 pub(super) fn round(node: &RoundNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
-    let input = resolve::first(env, &node.name, &node.inputs, device)?.into_tensor()?;
-    Ok(vec![Value::Tensor(input.round())])
+    let input = resolve::first(env, &node.name, &node.inputs, device)?;
+    let output = match input {
+        Value::Tensor(input) => Value::Tensor(input.round()),
+        Value::Scalar(Scalar::F64(input)) => Value::Scalar(Scalar::F64(input.round_ties_even())),
+        other => {
+            return Err(TynxError::TypeMismatch(format!(
+                "Round expects floating-point input, got {other:?}"
+            )));
+        }
+    };
+    Ok(vec![output])
 }
 
 pub(super) fn reciprocal(node: &ReciprocalNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
@@ -945,6 +954,23 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(output, [-2.0, -2.0, 0.0, 0.0, 2.0, 2.0]);
+    }
+
+    #[test]
+    fn rounds_scalar_halfway_value_to_even() {
+        let node = RoundNodeBuilder::new("round")
+            .input_scalar("x", DType::F32)
+            .output_scalar("y", DType::F32)
+            .build();
+        let mut env = Env::new();
+        env.insert("x".into(), Value::Scalar(Scalar::F64(2.5)));
+
+        let output = round(&node, &env, &Device::default()).unwrap();
+
+        assert!(matches!(
+            output.as_slice(),
+            [Value::Scalar(Scalar::F64(value))] if *value == 2.0
+        ));
     }
 
     #[test]

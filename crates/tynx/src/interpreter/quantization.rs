@@ -128,7 +128,8 @@ fn quantize(
             input.div_broadcast(scale)?
         }
         other => return Err(quantization_type_error("scale", &other)),
-    };
+    }
+    .round();
 
     if let Some(zero) = zero {
         output = match zero {
@@ -141,7 +142,6 @@ fn quantize(
         };
     }
 
-    let output = output.round();
     if saturate {
         let (min, max) = quantized_range(dtype)?;
         Ok(output.clip(Some(min), Some(max)).to_int(dtype))
@@ -237,5 +237,23 @@ mod tests {
             output.into_data().iter::<u64>().collect::<Vec<_>>(),
             [0, 0, 2, 255]
         );
+    }
+
+    #[test]
+    fn rounds_before_adding_the_zero_point() {
+        let device = Device::default();
+        let input = DynTensor::from_data(TensorData::new(vec![0.5_f32], [1]), 1, &device).unwrap();
+
+        let output = quantize(
+            input,
+            Value::Scalar(Scalar::F64((5.0_f32 / 255.0_f32) as f64)),
+            Some(Value::Scalar(Scalar::U64(153))),
+            None,
+            DType::U8,
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(output.into_data().iter::<u64>().collect::<Vec<_>>(), [179]);
     }
 }

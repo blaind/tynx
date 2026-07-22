@@ -1,6 +1,6 @@
 //! Element-wise binary operators.
 
-use burn::tensor::{DType, Device, TensorData};
+use burn::tensor::{DType, Device, TensorData, bf16, f16};
 use onnx_ir::node::{
     arithmetic::{AddNode, DivNode, MulNode, SubNode},
     prelu::PReluNode,
@@ -10,19 +10,47 @@ use super::{Env, resolve};
 use crate::{DynInt, DynTensor, Result, Scalar, TynxError, Value};
 
 pub(super) fn add(node: &AddNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
-    numeric_binary(&node.name, &node.inputs, env, device, BinaryOp::Add)
+    numeric_binary(
+        &node.name,
+        &node.inputs,
+        &node.outputs[0],
+        env,
+        device,
+        BinaryOp::Add,
+    )
 }
 
 pub(super) fn sub(node: &SubNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
-    numeric_binary(&node.name, &node.inputs, env, device, BinaryOp::Sub)
+    numeric_binary(
+        &node.name,
+        &node.inputs,
+        &node.outputs[0],
+        env,
+        device,
+        BinaryOp::Sub,
+    )
 }
 
 pub(super) fn mul(node: &MulNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
-    numeric_binary(&node.name, &node.inputs, env, device, BinaryOp::Mul)
+    numeric_binary(
+        &node.name,
+        &node.inputs,
+        &node.outputs[0],
+        env,
+        device,
+        BinaryOp::Mul,
+    )
 }
 
 pub(super) fn div(node: &DivNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
-    numeric_binary(&node.name, &node.inputs, env, device, BinaryOp::Div)
+    numeric_binary(
+        &node.name,
+        &node.inputs,
+        &node.outputs[0],
+        env,
+        device,
+        BinaryOp::Div,
+    )
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -36,6 +64,7 @@ enum BinaryOp {
 fn numeric_binary(
     node_name: &str,
     inputs: &[onnx_ir::Argument],
+    output: &onnx_ir::Argument,
     env: &Env,
     device: &Device,
     operation: BinaryOp,
@@ -65,9 +94,10 @@ fn numeric_binary(
             let left = scalar_int_tensor(left, right.dtype(), device)?;
             Value::Int(int_binary(left, right, operation)?)
         }
-        (Value::Scalar(left), Value::Scalar(right)) => {
-            Value::Scalar(scalar_binary(left, right, operation)?)
-        }
+        (Value::Scalar(left), Value::Scalar(right)) => Value::Scalar(scalar_to_dtype(
+            scalar_binary(left, right, operation)?,
+            output.ty.elem_type(),
+        )),
         (Value::Shape(left), Value::Shape(right)) => {
             Value::Shape(shape_binary(left, right, operation)?)
         }
@@ -84,6 +114,15 @@ fn numeric_binary(
         }
     };
     Ok(vec![output])
+}
+
+fn scalar_to_dtype(scalar: Scalar, dtype: DType) -> Scalar {
+    match (scalar, dtype) {
+        (Scalar::F64(value), DType::F32) => Scalar::F64((value as f32) as f64),
+        (Scalar::F64(value), DType::F16) => Scalar::F64(f16::from_f64(value).to_f64()),
+        (Scalar::F64(value), DType::BF16) => Scalar::F64(bf16::from_f64(value).to_f64()),
+        (scalar, _) => scalar,
+    }
 }
 
 fn float_binary(left: DynTensor, right: DynTensor, operation: BinaryOp) -> Result<DynTensor> {
@@ -340,6 +379,26 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(output, [1.0, 2.0, 3.0, 4.0]);
+    }
+
+    #[test]
+    fn scalar_arithmetic_preserves_declared_float_width() {
+        let node = DivNodeBuilder::new("div")
+            .input_scalar("left", DType::F32)
+            .input_scalar("right", DType::F32)
+            .output_scalar("quotient", DType::F32)
+            .build();
+        let mut env = Env::new();
+        env.insert("left".into(), Value::Scalar(Scalar::F64(1.0)));
+        env.insert("right".into(), Value::Scalar(Scalar::F64(10.0)));
+
+        let output = div(&node, &env, &Device::default()).unwrap();
+
+        assert!(matches!(
+            output.as_slice(),
+            [Value::Scalar(Scalar::F64(value))]
+                if *value == (1.0_f32 / 10.0_f32) as f64
+        ));
     }
 
     #[test]
