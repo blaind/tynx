@@ -1,0 +1,19 @@
+[package]
+name = "tynx-bench"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+default = ["flex"]
+flex = ["burn/flex", "tynx/flex"]
+wgpu = ["burn/autotune", "burn/fusion", "burn/webgpu"]
+
+[dependencies]
+burn.workspace = true
+tynx = { path = "../../../crates/tynx", default-features = false }
+tynx-bench-protocol.workspace = true
+
+[lints]
+workspace = true
