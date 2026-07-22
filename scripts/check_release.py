@@ -8,7 +8,6 @@ import email
 import importlib.metadata
 import json
 import subprocess
-import sys
 import zipfile
 from pathlib import Path
 
@@ -32,7 +31,9 @@ def workspace_version() -> str:
         text=True,
     )
     packages = json.loads(result.stdout)["packages"]
-    return next(package["version"] for package in packages if package["name"] == PACKAGE)
+    return next(
+        package["version"] for package in packages if package["name"] == PACKAGE
+    )
 
 
 def check_tag(tag: str) -> None:
@@ -54,6 +55,7 @@ def wheel_metadata(wheel: Path) -> email.message.Message:
 
 
 def check_wheels(wheels: list[Path], expected: str, max_mib: int) -> None:
+    wheels = [wheel for wheel in wheels if wheel.is_file()]
     if not wheels:
         raise SystemExit("no wheels built")
 
@@ -65,7 +67,9 @@ def check_wheels(wheels: list[Path], expected: str, max_mib: int) -> None:
                 f"{wheel}: metadata version {metadata_version!r} != expected {expected!r}"
             )
         if not wheel.name.startswith(f"tynx-{expected}-"):
-            raise SystemExit(f"{wheel}: filename does not contain expected version {expected}")
+            raise SystemExit(
+                f"{wheel}: filename does not contain expected version {expected}"
+            )
 
         size = wheel.stat().st_size
         if size > max_bytes:
