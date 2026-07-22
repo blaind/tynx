@@ -1,6 +1,8 @@
 """Composable eager neural-network functions."""
 
-from typing import Literal, Optional, Union
+from typing import Literal as _Literal
+from typing import Optional as _Optional
+from typing import Union as _Union
 
 from .._tynx import (
     Tensor,
@@ -12,17 +14,17 @@ from .._tynx import (
     maximum,
 )
 
-Reduction = Literal["none", "mean", "sum"]
-IntOrPair = Union[int, tuple[int, int]]
+_Reduction = _Literal["none", "mean", "sum"]
+_IntOrPair = _Union[int, tuple[int, int]]
 
 
 def conv2d(
     input: Tensor,
     weight: Tensor,
-    bias: Optional[Tensor] = None,
-    stride: IntOrPair = 1,
-    padding: IntOrPair = 0,
-    dilation: IntOrPair = 1,
+    bias: _Optional[Tensor] = None,
+    stride: _IntOrPair = 1,
+    padding: _IntOrPair = 0,
+    dilation: _IntOrPair = 1,
     groups: int = 1,
 ) -> Tensor:
     """Apply a two-dimensional convolution to an NCHW input."""
@@ -41,10 +43,10 @@ def conv2d(
 
 def max_pool2d(
     input: Tensor,
-    kernel_size: IntOrPair,
-    stride: Optional[IntOrPair] = None,
-    padding: IntOrPair = 0,
-    dilation: IntOrPair = 1,
+    kernel_size: _IntOrPair,
+    stride: _Optional[_IntOrPair] = None,
+    padding: _IntOrPair = 0,
+    dilation: _IntOrPair = 1,
     ceil_mode: bool = False,
 ) -> Tensor:
     """Apply two-dimensional max pooling to an NCHW input."""
@@ -61,12 +63,12 @@ def max_pool2d(
 
 def avg_pool2d(
     input: Tensor,
-    kernel_size: IntOrPair,
-    stride: Optional[IntOrPair] = None,
-    padding: IntOrPair = 0,
+    kernel_size: _IntOrPair,
+    stride: _Optional[_IntOrPair] = None,
+    padding: _IntOrPair = 0,
     ceil_mode: bool = False,
     count_include_pad: bool = True,
-    divisor_override: Optional[int] = None,
+    divisor_override: _Optional[int] = None,
 ) -> Tensor:
     """Apply two-dimensional average pooling to an NCHW input."""
     if divisor_override is not None:
@@ -82,7 +84,7 @@ def avg_pool2d(
     )
 
 
-def adaptive_avg_pool2d(input: Tensor, output_size: IntOrPair) -> Tensor:
+def adaptive_avg_pool2d(input: Tensor, output_size: _IntOrPair) -> Tensor:
     """Pool an NCHW input to an explicit spatial size."""
     return _adaptive_avg_pool2d(input, _pair(output_size, "output_size", positive=True))
 
@@ -90,8 +92,8 @@ def adaptive_avg_pool2d(input: Tensor, output_size: IntOrPair) -> Tensor:
 def embedding(
     input: Tensor,
     weight: Tensor,
-    padding_idx: Optional[int] = None,
-    max_norm: Optional[float] = None,
+    padding_idx: _Optional[int] = None,
+    max_norm: _Optional[float] = None,
     norm_type: float = 2.0,
     scale_grad_by_freq: bool = False,
     sparse: bool = False,
@@ -115,14 +117,14 @@ def embedding(
     return _embedding(input, weight, padding_idx)
 
 
-def mse_loss(input: Tensor, target: Tensor, reduction: Reduction = "mean") -> Tensor:
+def mse_loss(input: Tensor, target: Tensor, reduction: _Reduction = "mean") -> Tensor:
     """Return elementwise, mean, or summed squared error for exactly matching shapes."""
     _require_same_shape(input, target, "mse_loss")
     error = input - target
     return _reduce(error * error, reduction)
 
 
-def cross_entropy(input: Tensor, target: Tensor, reduction: Reduction = "mean") -> Tensor:
+def cross_entropy(input: Tensor, target: Tensor, reduction: _Reduction = "mean") -> Tensor:
     """Return cross entropy for rank-2 logits and rank-1 int64 class targets."""
     if input.dtype != "float32" or input.ndim != 2:
         raise ValueError(
@@ -140,7 +142,7 @@ def cross_entropy(input: Tensor, target: Tensor, reduction: Reduction = "mean") 
 def binary_cross_entropy_with_logits(
     input: Tensor,
     target: Tensor,
-    reduction: Reduction = "mean",
+    reduction: _Reduction = "mean",
 ) -> Tensor:
     """Return stable binary cross entropy from logits for exactly matching float32 tensors."""
     _require_same_shape(input, target, "binary_cross_entropy_with_logits")
@@ -158,7 +160,7 @@ def _require_same_shape(input: Tensor, target: Tensor, operation: str) -> None:
         )
 
 
-def _reduce(input: Tensor, reduction: Reduction) -> Tensor:
+def _reduce(input: Tensor, reduction: _Reduction) -> Tensor:
     if reduction == "none":
         return input
     if reduction == "mean":
@@ -168,7 +170,7 @@ def _reduce(input: Tensor, reduction: Reduction) -> Tensor:
     raise ValueError(f"reduction must be 'none', 'mean', or 'sum', got {reduction!r}")
 
 
-def _pair(value: IntOrPair, name: str, *, positive: bool) -> tuple[int, int]:
+def _pair(value: _IntOrPair, name: str, *, positive: bool) -> tuple[int, int]:
     pair = (value, value) if type(value) is int else value
     minimum = 1 if positive else 0
     if (
@@ -187,7 +189,7 @@ def _bool(value: bool, name: str) -> bool:
     return value
 
 
-def _padding_index(value: Optional[int], rows: int) -> Optional[int]:
+def _padding_index(value: _Optional[int], rows: int) -> _Optional[int]:
     if value is None:
         return None
     if type(value) is not int or not -rows <= value < rows:

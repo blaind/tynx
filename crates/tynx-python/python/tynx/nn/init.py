@@ -1,11 +1,12 @@
 """Native-RNG parameter initialization helpers."""
 
-import math
-from typing import Literal, Optional
+import math as _math
+from typing import Literal as _Literal
+from typing import Optional as _Optional
 
 from .._tynx import Tensor, full, rand, randn, where
 
-FanMode = Literal["fan_in", "fan_out"]
+_FanMode = _Literal["fan_in", "fan_out"]
 
 
 def constant_(tensor: Tensor, value: float) -> Tensor:
@@ -52,11 +53,11 @@ def trunc_normal_(
 ) -> Tensor:
     """Fill from a normal distribution truncated to the inclusive interval ``[a, b]``."""
     _require_float_tensor(tensor)
-    if not all(math.isfinite(value) for value in (mean, std)):
+    if not all(_math.isfinite(value) for value in (mean, std)):
         raise ValueError("trunc_normal_ mean and std must be finite")
     if std <= 0:
         raise ValueError(f"trunc_normal_ requires std > 0, got {std}")
-    if math.isnan(a) or math.isnan(b) or a >= b:
+    if _math.isnan(a) or _math.isnan(b) or a >= b:
         raise ValueError(f"trunc_normal_ requires a < b, got {a} >= {b}")
 
     probability = _normal_cdf((b - mean) / std) - _normal_cdf((a - mean) / std)
@@ -78,45 +79,45 @@ def trunc_normal_(
 def xavier_uniform_(tensor: Tensor, gain: float = 1.0) -> Tensor:
     """Fill using Glorot uniform initialization."""
     fan_in, fan_out = _calculate_fan_in_and_fan_out(tensor)
-    std = gain * math.sqrt(2.0 / float(fan_in + fan_out))
-    bound = math.sqrt(3.0) * std
+    std = gain * _math.sqrt(2.0 / float(fan_in + fan_out))
+    bound = _math.sqrt(3.0) * std
     return uniform_(tensor, -bound, bound)
 
 
 def xavier_normal_(tensor: Tensor, gain: float = 1.0) -> Tensor:
     """Fill using Glorot normal initialization."""
     fan_in, fan_out = _calculate_fan_in_and_fan_out(tensor)
-    std = gain * math.sqrt(2.0 / float(fan_in + fan_out))
+    std = gain * _math.sqrt(2.0 / float(fan_in + fan_out))
     return normal_(tensor, 0.0, std)
 
 
 def kaiming_uniform_(
     tensor: Tensor,
     a: float = 0.0,
-    mode: FanMode = "fan_in",
+    mode: _FanMode = "fan_in",
     nonlinearity: str = "leaky_relu",
 ) -> Tensor:
     """Fill using He uniform initialization."""
     fan = _calculate_correct_fan(tensor, mode)
     gain = calculate_gain(nonlinearity, a)
-    std = gain / math.sqrt(float(fan))
-    bound = math.sqrt(3.0) * std
+    std = gain / _math.sqrt(float(fan))
+    bound = _math.sqrt(3.0) * std
     return uniform_(tensor, -bound, bound)
 
 
 def kaiming_normal_(
     tensor: Tensor,
     a: float = 0.0,
-    mode: FanMode = "fan_in",
+    mode: _FanMode = "fan_in",
     nonlinearity: str = "leaky_relu",
 ) -> Tensor:
     """Fill using He normal initialization."""
     fan = _calculate_correct_fan(tensor, mode)
     gain = calculate_gain(nonlinearity, a)
-    return normal_(tensor, 0.0, gain / math.sqrt(float(fan)))
+    return normal_(tensor, 0.0, gain / _math.sqrt(float(fan)))
 
 
-def calculate_gain(nonlinearity: str, param: Optional[float] = None) -> float:
+def calculate_gain(nonlinearity: str, param: _Optional[float] = None) -> float:
     """Return the recommended scaling factor for an activation."""
     if nonlinearity in {
         "linear",
@@ -132,12 +133,12 @@ def calculate_gain(nonlinearity: str, param: Optional[float] = None) -> float:
     if nonlinearity == "tanh":
         return 5.0 / 3.0
     if nonlinearity == "relu":
-        return math.sqrt(2.0)
+        return _math.sqrt(2.0)
     if nonlinearity == "leaky_relu":
         slope = 0.01 if param is None else param
         if isinstance(slope, bool) or not isinstance(slope, (int, float)):
             raise ValueError(f"negative_slope {slope!r} is not a valid number")
-        return math.sqrt(2.0 / (1.0 + float(slope) ** 2))
+        return _math.sqrt(2.0 / (1.0 + float(slope) ** 2))
     if nonlinearity == "selu":
         return 3.0 / 4.0
     raise ValueError(f"unsupported nonlinearity {nonlinearity!r}")
@@ -149,11 +150,11 @@ def _calculate_fan_in_and_fan_out(tensor: Tensor) -> tuple[int, int]:
             "fan-in and fan-out require a tensor with at least two dimensions, "
             f"got shape {tensor.shape}"
         )
-    receptive_field_size = math.prod(tensor.shape[2:])
+    receptive_field_size = _math.prod(tensor.shape[2:])
     return tensor.shape[1] * receptive_field_size, tensor.shape[0] * receptive_field_size
 
 
-def _calculate_correct_fan(tensor: Tensor, mode: FanMode) -> int:
+def _calculate_correct_fan(tensor: Tensor, mode: _FanMode) -> int:
     if mode not in {"fan_in", "fan_out"}:
         raise ValueError(f"mode must be 'fan_in' or 'fan_out', got {mode!r}")
     fan_in, fan_out = _calculate_fan_in_and_fan_out(tensor)
@@ -166,13 +167,13 @@ def _require_float_tensor(tensor: Tensor) -> None:
 
 
 def _normal_cdf(value: float) -> float:
-    return (1.0 + math.erf(value / math.sqrt(2.0))) / 2.0
+    return (1.0 + _math.erf(value / _math.sqrt(2.0))) / 2.0
 
 
 def _rejection_rounds(probability: float) -> int:
     if probability >= 1.0:
         return 1
-    rounds = math.ceil(math.log(1e-7) / math.log1p(-probability))
+    rounds = _math.ceil(_math.log(1e-7) / _math.log1p(-probability))
     if rounds > 128:
         raise ValueError(
             "trunc_normal_ interval is too narrow for the bounded native rejection sampler"
