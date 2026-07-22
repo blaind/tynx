@@ -1,5 +1,6 @@
 //! Python tensor dtype parsing, typed device storage, and host conversion.
 
+use numpy::{PyArrayDyn, PyReadonlyArrayDyn, ndarray::ArrayD};
 use pyo3::{
     exceptions::{PyTypeError, PyValueError},
     prelude::*,
@@ -19,9 +20,13 @@ pub(super) enum TensorValue {
 impl TensorValue {
     pub(super) fn from_python(
         data: &Bound<'_, PyAny>,
-        dtype: &str,
+        dtype: Option<&str>,
         device: &Device,
     ) -> PyResult<Self> {
+        if let Some(value) = Self::from_numpy(data, dtype, device)? {
+            return Ok(value);
+        }
+        let dtype = dtype.unwrap_or("float32");
         match dtype {
             "float32" => {
                 let (values, shape) = parse(data, "float32", |value| value.extract::<f32>())?;
@@ -54,11 +59,68 @@ impl TensorValue {
         }
     }
 
+    fn from_numpy(
+        data: &Bound<'_, PyAny>,
+        dtype: Option<&str>,
+        device: &Device,
+    ) -> PyResult<Option<Self>> {
+        if !data.hasattr("__array_interface__")? {
+            return Ok(None);
+        }
+        data.py().import("numpy")?;
+
+        macro_rules! extract {
+            ($element:ty, $dtype:literal, $kind:ident, $constructor:ident) => {
+                if let Ok(array) = data.extract::<PyReadonlyArrayDyn<'_, $element>>() {
+                    if let Some(requested) = dtype
+                        && requested != $dtype
+                    {
+                        return Err(PyTypeError::new_err(format!(
+                            "NumPy array dtype {} must match requested Tensor dtype {requested}",
+                            $dtype
+                        )));
+                    }
+                    let array = array.as_array();
+                    let mut shape = array.shape().to_vec();
+                    if shape.is_empty() {
+                        shape.push(1);
+                    }
+                    if array.is_empty() {
+                        return Err(PyValueError::new_err(
+                            "Tensor data cannot contain an empty NumPy array",
+                        ));
+                    }
+                    let values = array.iter().copied().collect::<Vec<_>>();
+                    return $constructor::from_data(
+                        TensorData::new(values, shape.clone()),
+                        shape.len(),
+                        device,
+                    )
+                    .map(Self::$kind)
+                    .map(Some)
+                    .map_err(to_python_error);
+                }
+            };
+        }
+
+        extract!(f32, "float32", Float, DynTensor);
+        extract!(i64, "int64", Int, DynInt);
+        extract!(bool, "bool", Bool, DynBool);
+        match dtype {
+            Some(dtype) => Err(PyTypeError::new_err(format!(
+                "NumPy array dtype must match requested Tensor dtype {dtype}"
+            ))),
+            None => Err(PyTypeError::new_err(
+                "unsupported NumPy dtype; expected float32, int64, or bool",
+            )),
+        }
+    }
+
     pub(super) fn float_from_python(
         data: &Bound<'_, PyAny>,
         device: &Device,
     ) -> PyResult<DynTensor> {
-        match Self::from_python(data, "float32", device)? {
+        match Self::from_python(data, Some("float32"), device)? {
             Self::Float(value) => Ok(value),
             _ => unreachable!("the float32 parser always creates a floating-point tensor"),
         }
@@ -200,6 +262,26 @@ impl TensorValue {
                 .to_owned()
                 .into_any()
                 .unbind()),
+        }
+    }
+
+    pub(super) fn numpy(self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        py.import("numpy")?;
+        let shape = self.dims();
+        macro_rules! convert {
+            ($value:expr, $element:ty) => {{
+                let values = $value.into_data().iter::<$element>().collect::<Vec<_>>();
+                let array = ArrayD::from_shape_vec(shape, values)
+                    .map_err(|error| PyValueError::new_err(error.to_string()))?;
+                Ok(PyArrayDyn::<$element>::from_owned_array(py, array)
+                    .into_any()
+                    .unbind())
+            }};
+        }
+        match self {
+            Self::Float(value) => convert!(value, f32),
+            Self::Int(value) => convert!(value, i64),
+            Self::Bool(value) => convert!(value, bool),
         }
     }
 }

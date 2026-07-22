@@ -548,7 +548,7 @@ impl PyTensor {
             }
             value
         } else {
-            TensorValue::from_python(data, dtype.unwrap_or("float32"), &device)?
+            TensorValue::from_python(data, dtype, &device)?
         };
         if requires_grad {
             return Ok(Self::from_leaf(value.float("requires_grad=True")?));
@@ -618,6 +618,13 @@ impl PyTensor {
     /// Copy tensor values to nested Python lists.
     fn tolist(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let result = self.source.value().tolist(py);
+        raise_pending_device_error()?;
+        result
+    }
+
+    /// Copy tensor values to a NumPy array with the matching dtype and shape.
+    fn numpy(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let result = self.source.value().numpy(py);
         raise_pending_device_error()?;
         result
     }
