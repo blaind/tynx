@@ -1,7 +1,7 @@
 """Base class for Tynx-authored layers."""
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ..._tynx import Buffer, Parameter, Tensor
 
@@ -17,11 +17,11 @@ class Module:
     def __init__(self) -> None:
         self.training = True
 
-    def forward(self, input: Tensor) -> Tensor:
+    def forward(self, *args: Any, **kwargs: Any) -> Tensor:
         raise NotImplementedError
 
-    def __call__(self, input: Tensor) -> Tensor:
-        return self.forward(input)
+    def __call__(self, *args: Any, **kwargs: Any) -> Tensor:
+        return self.forward(*args, **kwargs)
 
     def parameters(self) -> list[Parameter]:
         from ..state import get_parameters
