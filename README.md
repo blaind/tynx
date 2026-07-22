@@ -13,7 +13,7 @@ optimizer = tx.optim.Adam(model.parameters(), lr=3e-4)
 
 for x, target in loader:
     optimizer.zero_grad()
-    loss = model(x).cross_entropy(target)
+    loss = tx.nn.functional.cross_entropy(model(x), target)
     loss.backward()
     optimizer.step()
 ```
@@ -39,9 +39,12 @@ Rust, Python, and the browser.
 
 ```sh
 pip install tynx            # Python: CPU + wgpu GPU, ~15 MB
-cargo add tynx              # Rust: inference core
-cargo add tynx -F training  # Rust: + autodiff, parameters, optimizers
+cargo add tynx --git https://github.com/blaind/tynx
 ```
+
+The runtime crates remain git-only while Burn dependencies are pinned. See the
+[Python training API](docs/python-training.md) for the supported surface and explicit differences
+from PyTorch and tinygrad.
 
 ## Backends
 

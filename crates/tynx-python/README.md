@@ -6,16 +6,20 @@ lightweight neural network runtime built on [Burn](https://github.com/tracel-ai/
 Tynx loads ONNX models at runtime with no code generation step, runs on CPU and GPU through Burn
 backends, and is growing into a full eager training library with a PyTorch-shaped API.
 
-This is an early alpha. What works in this release:
+This is an early alpha. The current training surface includes:
 
-- eager tensors with autograd: arithmetic, matmul, activations, reductions, `backward()`,
-  `.grad`, `no_grad()`;
-- `Parameter` values for building trainable modules;
-- loading ONNX models and inspecting their inputs and outputs.
+- eager float32 autograd plus int64 targets and boolean masks;
+- authored `nn` layers, composable losses, SGD/Adam/AdamW, parameter groups, and checkpoints;
+- callable trainable ONNX models with stable parameters, multiple inputs/outputs, and structured
+  trainability reports;
+- Categorical and Normal distributions for deployed RL workloads;
+- opt-in model and whole-training-step capture with native backward, optimizer, imported-model, and
+  random-state replay;
+- NumPy interchange and Flex CPU or WGPU execution from the same package.
 
-Model execution from Python, NumPy interop, layers, and optimizers land in upcoming releases.
-See the [repository](https://github.com/blaind/tynx) for the roadmap, benchmarks, and the Rust
-API.
+The complete support table and differences from PyTorch/tinygrad are documented in the
+[Python training API](https://github.com/blaind/tynx/blob/main/docs/python-training.md). Runnable
+examples cover [authored training, imported fine-tuning, and captured PPO](https://github.com/blaind/tynx/tree/main/examples).
 
 ```python
 import tynx
@@ -26,8 +30,8 @@ loss.backward()
 print(x.grad.tolist())
 ```
 
-Opt-in model capture records a supported Tensor-only forward on its first call and replays the
-graph wholly in Rust on matching calls:
+Opt-in capture records supported Tensor code on its first call and replays the graph wholly in Rust
+on matching calls. It may cover a forward or the complete backward/optimizer step:
 
 ```python
 @tynx.compile(fullgraph=True, static_argnames=("activation",))
@@ -41,11 +45,15 @@ graph. Unsupported operations fall back for the whole function by default or rai
 `fullgraph=True`. Closure variables, globals, and arbitrary object attributes are frozen at trace
 time, so changing values must be passed as Tensor inputs or declared static arguments.
 
-Loading a model needs an ONNX file on disk; any exported `.onnx` works:
+Load an ONNX file for inference with `Session`, or request a slot-backed trainable model with
+`load(..., trainable="auto")`:
 
 ```python
 session = tynx.Session("model.onnx")
 print(session.inputs, session.outputs)
+
+model = tynx.load("model.onnx", trainable="auto")
+model.require_trainable()
 ```
 
 ## License
