@@ -462,6 +462,15 @@ impl PyTensor {
         Self::from_value(self.source.value().detach())
     }
 
+    /// Replace stable Parameter/Buffer state from a compatible tensor without changing identity.
+    fn copy_(&self, source: PyRef<'_, Self>) -> PyResult<()> {
+        let slot = self.parameter_slot().ok_or_else(|| {
+            PyTypeError::new_err("copy_ target must be a stable Parameter or Buffer")
+        })?;
+        let value = source.source.value().detach().float("copy_")?;
+        slot.replace_value(value).map_err(to_python_error)
+    }
+
     /// Clear this leaf tensor's accumulated gradient.
     fn zero_grad(&self) {
         match &self.source {

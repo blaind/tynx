@@ -1,14 +1,24 @@
 """Narrow, deterministic state discovery for ordinary Python model objects."""
 
+from collections.abc import Mapping
+from dataclasses import dataclass
 from types import FunctionType, MethodType, ModuleType
 from typing import Generic, TypeVar, Union, cast
 
-from .._tynx import Buffer, Parameter
+from .._tynx import Buffer, Parameter, Tensor
 
 _Path = tuple[str, ...]
 _State = TypeVar("_State", Parameter, Buffer)
 _StateValue = Union[Parameter, Buffer]
 _RelativeState = tuple[_Path, _State]
+
+
+@dataclass(frozen=True)
+class LoadStateResult:
+    """Missing and unexpected names returned by a non-strict state load."""
+
+    missing_keys: tuple[str, ...]
+    unexpected_keys: tuple[str, ...]
 
 
 def get_parameters(obj: object) -> list[Parameter]:
@@ -45,6 +55,53 @@ def get_buffer_aliases(obj: object) -> dict[str, tuple[str, ...]]:
     return {name: aliases.get(id(buffer), ()) for name, buffer, _ in canonical}
 
 
+def get_state_dict(obj: object) -> dict[str, Tensor]:
+    """Return detached snapshots of all canonical parameters and buffers."""
+    return {name: state.detach() for name, state in _named_state(obj).items()}
+
+
+def load_state_dict(
+    obj: object,
+    state_dict: Mapping[str, Tensor],
+    strict: bool = True,
+) -> LoadStateResult:
+    """Load compatible snapshots into existing state identities by canonical name."""
+    if type(strict) is not bool:
+        raise TypeError(f"strict must be a bool, got {type(strict).__qualname__}")
+    current = _named_state(obj)
+    supplied: dict[str, Tensor] = {}
+    for name, value in state_dict.items():
+        if not isinstance(name, str):
+            raise TypeError(f"state_dict keys must be strings, got {type(name).__qualname__}")
+        if not isinstance(value, Tensor):
+            raise TypeError(
+                f"state_dict value for {name!r} must be a Tensor, got {type(value).__qualname__}"
+            )
+        supplied[name] = value
+
+    missing = tuple(sorted(set(current) - set(supplied)))
+    unexpected = tuple(sorted(set(supplied) - set(current)))
+    result = LoadStateResult(missing_keys=missing, unexpected_keys=unexpected)
+    if strict and (missing or unexpected):
+        raise ValueError(
+            f"state_dict key mismatch: missing={list(missing)!r}, unexpected={list(unexpected)!r}"
+        )
+
+    prepared: dict[str, Tensor] = {}
+    for name in sorted(set(current) & set(supplied)):
+        target = current[name]
+        source = supplied[name]
+        if source.shape != target.shape or source.dtype != target.dtype:
+            raise ValueError(
+                f"state_dict value for {name!r} has shape {source.shape} and dtype {source.dtype}; "
+                f"expected shape {target.shape} and dtype {target.dtype}"
+            )
+        prepared[name] = source.detach()
+    for name, source in prepared.items():
+        current[name].copy_(source)
+    return result
+
+
 def train(obj: object, mode: bool = True) -> object:
     """Set every reachable Tynx module to training or evaluation mode."""
     if type(mode) is not bool:
@@ -66,6 +123,19 @@ def _parameter_names(
     obj: object,
 ) -> tuple[list[tuple[str, Parameter, int]], dict[int, tuple[str, ...]]]:
     return _state_names(obj, Parameter)
+
+
+def _named_state(obj: object) -> dict[str, _StateValue]:
+    combined: dict[str, _StateValue] = {}
+    for name, state in named_parameters(obj):
+        if name in combined:
+            raise ValueError(f"parameter and buffer share the canonical state name {name!r}")
+        combined[name] = state
+    for name, buffer in named_buffers(obj):
+        if name in combined:
+            raise ValueError(f"parameter and buffer share the canonical state name {name!r}")
+        combined[name] = buffer
+    return dict(sorted(combined.items()))
 
 
 def _state_names(
@@ -255,11 +325,14 @@ def _walk_objects(root: object) -> list[object]:
 
 
 __all__ = [
+    "LoadStateResult",
     "eval",
     "get_buffer_aliases",
     "get_buffers",
     "get_parameter_aliases",
     "get_parameters",
+    "get_state_dict",
+    "load_state_dict",
     "named_buffers",
     "named_parameters",
     "train",

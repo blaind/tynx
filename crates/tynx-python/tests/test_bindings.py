@@ -723,6 +723,100 @@ def test_buffer_discovery_is_separate_cycle_safe_and_alias_aware() -> None:
     assert tynx.nn.state.get_buffer_aliases(module) == {"left": ("right",)}
 
 
+def test_state_dict_snapshots_and_loads_existing_parameter_and_buffer_slots() -> None:
+    class Stateful(tynx.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.weight = tynx.Parameter([1.0])
+            self.running = tynx.Buffer([2.0])
+
+        def forward(self, input: tynx.Tensor) -> tynx.Tensor:
+            return input * self.weight + self.running
+
+    module = Stateful()
+    weight_identity = id(module.weight)
+    buffer_identity = id(module.running)
+    snapshot = module.state_dict()
+
+    module.weight.copy_(tynx.Tensor([5.0]))
+    module.running.copy_(tynx.Tensor([7.0]))
+
+    assert snapshot["weight"].tolist() == pytest.approx([1.0])
+    assert snapshot["running"].tolist() == pytest.approx([2.0])
+    result = module.load_state_dict(snapshot)
+    assert result.missing_keys == ()
+    assert result.unexpected_keys == ()
+    assert id(module.weight) == weight_identity
+    assert id(module.running) == buffer_identity
+    assert module.weight.tolist() == pytest.approx([1.0])
+    assert module.running.tolist() == pytest.approx([2.0])
+
+
+def test_state_dict_non_strict_results_and_validation_precede_mutation() -> None:
+    class Pair(tynx.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.left = tynx.Parameter([1.0])
+            self.right = tynx.Parameter([2.0])
+
+        def forward(self, input: tynx.Tensor) -> tynx.Tensor:
+            return input * self.left + self.right
+
+    module = Pair()
+
+    with pytest.raises(ValueError, match="key mismatch"):
+        module.load_state_dict({"left": tynx.Tensor([9.0])})
+    assert module.left.tolist() == pytest.approx([1.0])
+
+    with pytest.raises(ValueError, match="expected shape"):
+        module.load_state_dict({"left": tynx.Tensor([9.0]), "right": tynx.Tensor([8.0, 7.0])})
+    assert module.left.tolist() == pytest.approx([1.0])
+    assert module.right.tolist() == pytest.approx([2.0])
+
+    result = module.load_state_dict(
+        {"left": tynx.Tensor([3.0]), "extra": tynx.Tensor([4.0])}, strict=False
+    )
+    assert result.missing_keys == ("right",)
+    assert result.unexpected_keys == ("extra",)
+    assert module.left.tolist() == pytest.approx([3.0])
+    assert module.right.tolist() == pytest.approx([2.0])
+
+
+def test_state_dict_detaches_all_sources_before_swap_and_preserves_optimizer_identity() -> None:
+    class Pair(tynx.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.left = tynx.Parameter([1.0])
+            self.right = tynx.Parameter([2.0])
+
+        def forward(self, input: tynx.Tensor) -> tynx.Tensor:
+            return input * self.left + self.right
+
+    module = Pair()
+    optimizer = tynx.optim.SGD([module.left], lr=0.1)
+
+    module.load_state_dict({"left": module.right, "right": module.left})
+
+    assert module.left.tolist() == pytest.approx([2.0])
+    assert module.right.tolist() == pytest.approx([1.0])
+    module.left.backward()
+    optimizer.step()
+    assert module.left.tolist() == pytest.approx([1.9])
+
+
+def test_stable_state_copy_and_state_dict_types_are_validated() -> None:
+    with pytest.raises(TypeError, match="stable Parameter or Buffer"):
+        tynx.Tensor([1.0]).copy_(tynx.Tensor([2.0]))
+    with pytest.raises(TypeError, match="float32"):
+        tynx.Buffer([1.0]).copy_(tynx.Tensor([2], dtype="int64"))
+    with pytest.raises(TypeError, match="must be a Tensor"):
+        tynx.nn.state.load_state_dict(
+            tynx.nn.Linear(1, 1),
+            {"weight": [1.0]},  # type: ignore[dict-item]
+            strict=False,
+        )
+
+
 def test_tensor_eager_operators() -> None:
     left = tynx.Tensor([[1.0, 2.0], [3.0, 4.0]])
     right = tynx.Tensor([[2.0, 0.5], [1.0, 2.0]])

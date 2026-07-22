@@ -1,6 +1,12 @@
 """Base class for Tynx-authored layers."""
 
+from collections.abc import Mapping
+from typing import TYPE_CHECKING
+
 from ..._tynx import Buffer, Parameter, Tensor
+
+if TYPE_CHECKING:
+    from ..state import LoadStateResult
 
 
 class Module:
@@ -36,6 +42,18 @@ class Module:
         from ..state import named_buffers
 
         return named_buffers(self)
+
+    def state_dict(self) -> dict[str, Tensor]:
+        from ..state import get_state_dict
+
+        return get_state_dict(self)
+
+    def load_state_dict(
+        self, state_dict: Mapping[str, Tensor], strict: bool = True
+    ) -> "LoadStateResult":
+        from ..state import load_state_dict
+
+        return load_state_dict(self, state_dict, strict)
 
     def train(self, mode: bool = True) -> "Module":
         from ..state import train
