@@ -1294,12 +1294,21 @@ impl PyTensor {
     ) -> PyResult<Self> {
         let input_shape = self.source.value().dims();
         let spec = ReductionSpec::from_python(dim, &input_shape, keepdim)?;
+        let reduce_all = dim.is_none() && input_shape.len() > 1;
+        let reduction_dims = if reduce_all {
+            vec![0]
+        } else {
+            spec.dims.clone()
+        };
         let tracking = is_grad_enabled();
         match self.source.value() {
             TensorValue::Float(_) => {
-                let input = self.operation_input(tracking, extremum.name())?;
+                let mut input = self.operation_input(tracking, extremum.name())?;
+                if reduce_all {
+                    input = input.reshape(vec![self.numel()]).map_err(to_python_error)?;
+                }
                 let inner = extremum
-                    .float_reduce(input, &spec.dims)
+                    .float_reduce(input, &reduction_dims)
                     .and_then(|value| value.reshape(spec.output_shape))
                     .map_err(to_python_error)?;
                 Ok(if tracking {
@@ -1308,8 +1317,14 @@ impl PyTensor {
                     Self::from_inner(inner)
                 })
             }
-            value => extrema::reduce(value.detach(), &spec.dims, spec.output_shape, extremum)
-                .map(Self::from_value),
+            value => {
+                let mut value = value.detach();
+                if reduce_all {
+                    value = value.reshape(vec![self.numel()])?;
+                }
+                extrema::reduce(value, &reduction_dims, spec.output_shape, extremum)
+                    .map(Self::from_value)
+            }
         }
     }
 
