@@ -1,0 +1,86 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  WHEEL_MAX_MIB: 20
+
+jobs:
+  wheels:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            manylinux: "2_28"
+          - os: macos-14
+          - os: windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          args: --profile dist --features wgpu -m crates/tynx-python/Cargo.toml --out dist
+          manylinux: ${{ matrix.manylinux || 'auto' }}
+      - name: Enforce wheel size budget
+        shell: bash
+        run: |
+          python - <<'EOF'
+          import glob, os, sys
+          limit = int(os.environ["WHEEL_MAX_MIB"]) * 1024 * 1024
+          wheels = glob.glob("dist/*.whl")
+          if not wheels:
+              sys.exit("no wheels built")
+          failed = False
+          for wheel in wheels:
+              size = os.path.getsize(wheel)
+              print(f"{wheel}: {size / 1024 / 1024:.1f} MiB")
+              if size > limit:
+                  print(f"  exceeds the {os.environ['WHEEL_MAX_MIB']} MiB budget")
+                  failed = True
+          sys.exit(1 if failed else 0)
+          EOF
+      - name: Smoke test wheel
+        shell: bash
+        run: |
+          python -m pip install dist/*.whl
+          python -c "import tynx; print(tynx.Session)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}
+          path: dist/*.whl
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: wheels
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check tag matches workspace version
+        run: |
+          version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          test "v$version" = "$GITHUB_REF_NAME" || {
+            echo "tag $GITHUB_REF_NAME does not match workspace version $version"
+            exit 1
+          }
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.whl
