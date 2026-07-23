@@ -1587,6 +1587,38 @@ def test_no_grad_is_nested_and_restores_tracking() -> None:
     assert (value * value).requires_grad
 
 
+def test_no_grad_can_decorate_functions() -> None:
+    value = tynx.Tensor([2.0], requires_grad=True)
+
+    @tynx.no_grad()
+    def inference(input: tynx.Tensor) -> tynx.Tensor:
+        assert not tynx.is_grad_enabled()
+        return input * input
+
+    output = inference(value)
+
+    assert inference.__name__ == "inference"
+    assert not output.requires_grad
+    assert tynx.is_grad_enabled()
+
+
+def test_no_grad_decorated_instance_method_binds_self() -> None:
+    class Inference:
+        @tynx.no_grad()
+        def forward(self, input: tynx.Tensor) -> tynx.Tensor:
+            assert not tynx.is_grad_enabled()
+            return input * input
+
+    value = tynx.Tensor([2.0], requires_grad=True)
+    inference = Inference()
+
+    output = inference.forward(value)
+
+    assert inference.forward.__name__ == "forward"
+    assert not output.requires_grad
+    assert tynx.is_grad_enabled()
+
+
 def test_parameter_is_a_named_trainable_tensor() -> None:
     parameter = tynx.Parameter([2.0], name="weight")
 
