@@ -75,13 +75,30 @@ class Categorical:
 class Normal:
     """Elementwise normal distribution with differentiable parameters."""
 
-    def __init__(self, loc: _Union[Tensor, float], scale: _Union[Tensor, float]) -> None:
+    def __init__(
+        self,
+        loc: _Union[Tensor, float],
+        scale: _Union[Tensor, float],
+        *,
+        validate_args: bool = False,
+    ) -> None:
+        """Construct a Normal distribution.
+
+        Scalar scales are always validated. Set ``validate_args=True`` to validate a
+        tensor-valued scale too; that explicit check reads the tensor on the host.
+        """
+        if not isinstance(validate_args, bool):
+            raise TypeError("Normal validate_args must be a bool")
+        if not isinstance(scale, Tensor) and not scale > 0.0:
+            raise ValueError(f"Normal scale must be greater than zero, got {scale!r}")
         if not isinstance(loc, Tensor):
             loc = scale.detach() * 0.0 + loc if isinstance(scale, Tensor) else Tensor([loc])
         if not isinstance(scale, Tensor):
             scale = loc.detach() * 0.0 + scale
         if loc.dtype != "float32" or scale.dtype != "float32":
             raise TypeError("Normal loc and scale must be float32 Tensors")
+        if validate_args and scale.numel > 0 and not scale.min().item() > 0.0:
+            raise ValueError("Normal scale must contain only values greater than zero")
         self.loc = loc
         self.scale = scale
 
