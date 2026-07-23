@@ -1075,11 +1075,24 @@ def test_layer_norm_supports_multi_axis_and_non_affine_modes() -> None:
     assert layer.parameters() == []
 
 
+def test_layer_norm_accepts_list_normalized_shape() -> None:
+    layer = tynx.nn.LayerNorm([2, 2], elementwise_affine=False)
+    input = tynx.Tensor([[[1.0, 2.0], [3.0, 4.0]]])
+
+    output = layer(input)
+
+    assert layer.normalized_shape == (2, 2)
+    assert output.shape == input.shape
+    assert output.mean((1, 2)).item() == pytest.approx(0.0, abs=1e-6)
+
+
 def test_layer_norm_validates_configuration_shape_and_dtype() -> None:
     with pytest.raises(ValueError, match="non-empty"):
         tynx.nn.LayerNorm(())
     with pytest.raises(ValueError, match="positive integers"):
         tynx.nn.LayerNorm((2, 0))
+    with pytest.raises(TypeError, match="int or a list/tuple"):
+        tynx.nn.LayerNorm("2")  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="non-negative"):
         tynx.nn.LayerNorm(2, eps=-1.0)
     with pytest.raises(TypeError, match="must be bool"):
