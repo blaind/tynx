@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+
 import pytest
 import tynx
 
@@ -76,3 +80,43 @@ def test_dtype_and_device_validation_is_explicit() -> None:
         tynx.Device("cuda")  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="unsupported Tensor dtype"):
         tynx.Tensor([1.0]).cast("float64")  # type: ignore[arg-type]
+
+
+def test_invalid_burn_device_fails_cleanly_during_import() -> None:
+    environment = os.environ.copy()
+    environment["BURN_DEVICE"] = "bogus"
+
+    result = subprocess.run(
+        [sys.executable, "-c", "import tynx"],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "unsupported BURN_DEVICE value" in result.stderr
+    assert "bogus" in result.stderr
+    assert "ValueError" in result.stderr
+    assert "PanicException" not in result.stderr
+    assert "panicked at" not in result.stderr
+
+
+def test_flex_burn_device_remains_supported() -> None:
+    environment = os.environ.copy()
+    environment["BURN_DEVICE"] = "flex"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import tynx; print(tynx.get_default_device()); print(tynx.ones(1).item())",
+        ],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert "Flex(Cpu)" in result.stdout
+    assert result.stdout.rstrip().endswith("1.0")
