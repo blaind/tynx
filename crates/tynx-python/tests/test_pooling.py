@@ -34,6 +34,33 @@ def test_avg_pool2d_forward_and_backward() -> None:
     assert value.grad.tolist() == [[[[0.25, 0.5, 0.25], [0.5, 1.0, 0.5], [0.25, 0.5, 0.25]]]]
 
 
+def test_compile_replays_pooling_and_gradients() -> None:
+    calls = 0
+
+    @tynx.compile(fullgraph=True)
+    def pooled(input: tynx.Tensor) -> tuple[tynx.Tensor, tynx.Tensor, tynx.Tensor]:
+        nonlocal calls
+        calls += 1
+        return (
+            F.max_pool2d(input, 2, stride=1),
+            F.avg_pool2d(input, 2, stride=1),
+            F.adaptive_avg_pool2d(input, (1, 1)),
+        )
+
+    first = pooled(_input())
+    second_input = _input(requires_grad=True)
+    second = pooled(second_input)
+    (second[0].sum() + second[1].sum() + second[2].sum()).backward()
+
+    assert [output.tolist() for output in second] == [output.tolist() for output in first]
+    assert second_input.grad is not None
+    assert second_input.grad.shape == second_input.shape
+    assert calls == 1
+    assert pooled.compile_count == 1
+    assert pooled.fallback_count == 0
+    assert pooled.replay_count == 1
+
+
 def test_pooling_nondefault_padding_ceil_and_adaptive_modes() -> None:
     small = tynx.Tensor([[[[1.0, 2.0], [3.0, 4.0]]]])
 

@@ -193,6 +193,37 @@ pub enum UnaryOp {
         /// Final shape after keepdim/rank-one-floor handling.
         output_shape: Vec<usize>,
     },
+    /// Rank-4 NCHW max pooling.
+    MaxPool2d {
+        /// Spatial kernel size.
+        kernel_size: [usize; 2],
+        /// Spatial stride.
+        stride: [usize; 2],
+        /// Symmetric spatial padding.
+        padding: [usize; 2],
+        /// Spatial dilation.
+        dilation: [usize; 2],
+        /// Whether to use ceiling output-size calculation.
+        ceil_mode: bool,
+    },
+    /// Rank-4 NCHW average pooling.
+    AvgPool2d {
+        /// Spatial kernel size.
+        kernel_size: [usize; 2],
+        /// Spatial stride.
+        stride: [usize; 2],
+        /// Symmetric spatial padding.
+        padding: [usize; 2],
+        /// Whether padded values contribute to the divisor.
+        count_include_pad: bool,
+        /// Whether to use ceiling output-size calculation.
+        ceil_mode: bool,
+    },
+    /// Rank-4 NCHW adaptive average pooling.
+    AdaptiveAvgPool2d {
+        /// Exact spatial output size.
+        output_size: [usize; 2],
+    },
     /// Training-mode Dropout driven by the device's advancing native RNG stream.
     Dropout(f64),
     /// Detached categorical sampling using Gumbel-max over the final dimension.
@@ -951,6 +982,27 @@ fn execute_unary(op: &UnaryOp, input: Value) -> Result<Value> {
         UnaryOp::Slice { .. } => unreachable!("handled before float unary dispatch"),
         UnaryOp::Sum { dims, output_shape } => input.sum_dims(dims).reshape(output_shape.clone()),
         UnaryOp::Mean { dims, output_shape } => input.mean_dims(dims).reshape(output_shape.clone()),
+        UnaryOp::MaxPool2d {
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            ceil_mode,
+        } => input.max_pool2d(*kernel_size, *stride, *padding, *dilation, *ceil_mode),
+        UnaryOp::AvgPool2d {
+            kernel_size,
+            stride,
+            padding,
+            count_include_pad,
+            ceil_mode,
+        } => input.avg_pool2d(
+            *kernel_size,
+            *stride,
+            *padding,
+            *count_include_pad,
+            *ceil_mode,
+        ),
+        UnaryOp::AdaptiveAvgPool2d { output_size } => input.adaptive_avg_pool2d(*output_size),
         UnaryOp::Dropout(probability) => {
             if *probability == 1.0 {
                 Ok(input.mul_scalar(0.0))

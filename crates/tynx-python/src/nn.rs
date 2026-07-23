@@ -1,6 +1,7 @@
 //! Native differentiable neural-network operations used by Python layers and functionals.
 
 use pyo3::{exceptions::PyTypeError, prelude::*};
+use tynx_capture::UnaryOp;
 use tynx_core::Value;
 
 use crate::{
@@ -71,7 +72,6 @@ pub(crate) fn max_pool2d_py(
     dilation: (usize, usize),
     ceil_mode: bool,
 ) -> PyResult<PyTensor> {
-    input.capture_unsupported("max_pool2d")?;
     let tracking = is_grad_enabled();
     let output = input
         .operation_float_value(tracking, "max_pool2d")?
@@ -83,11 +83,21 @@ pub(crate) fn max_pool2d_py(
             ceil_mode,
         )
         .map_err(to_python_error)?;
-    Ok(if tracking {
+    let result = if tracking {
         PyTensor::from_operation(output, &[&input])
     } else {
         PyTensor::from_inner(output)
-    })
+    };
+    result.with_recorded_unary(
+        &input,
+        UnaryOp::MaxPool2d {
+            kernel_size: [kernel_size.0, kernel_size.1],
+            stride: [stride.0, stride.1],
+            padding: [padding.0, padding.1],
+            dilation: [dilation.0, dilation.1],
+            ceil_mode,
+        },
+    )
 }
 
 #[pyfunction(name = "_avg_pool2d")]
@@ -100,7 +110,6 @@ pub(crate) fn avg_pool2d_py(
     ceil_mode: bool,
     count_include_pad: bool,
 ) -> PyResult<PyTensor> {
-    input.capture_unsupported("avg_pool2d")?;
     let tracking = is_grad_enabled();
     let output = input
         .operation_float_value(tracking, "avg_pool2d")?
@@ -112,11 +121,21 @@ pub(crate) fn avg_pool2d_py(
             ceil_mode,
         )
         .map_err(to_python_error)?;
-    Ok(if tracking {
+    let result = if tracking {
         PyTensor::from_operation(output, &[&input])
     } else {
         PyTensor::from_inner(output)
-    })
+    };
+    result.with_recorded_unary(
+        &input,
+        UnaryOp::AvgPool2d {
+            kernel_size: [kernel_size.0, kernel_size.1],
+            stride: [stride.0, stride.1],
+            padding: [padding.0, padding.1],
+            count_include_pad,
+            ceil_mode,
+        },
+    )
 }
 
 #[pyfunction(name = "_adaptive_avg_pool2d")]
@@ -124,17 +143,22 @@ pub(crate) fn adaptive_avg_pool2d_py(
     input: PyRef<'_, PyTensor>,
     output_size: (usize, usize),
 ) -> PyResult<PyTensor> {
-    input.capture_unsupported("adaptive_avg_pool2d")?;
     let tracking = is_grad_enabled();
     let output = input
         .operation_float_value(tracking, "adaptive_avg_pool2d")?
         .adaptive_avg_pool2d([output_size.0, output_size.1])
         .map_err(to_python_error)?;
-    Ok(if tracking {
+    let result = if tracking {
         PyTensor::from_operation(output, &[&input])
     } else {
         PyTensor::from_inner(output)
-    })
+    };
+    result.with_recorded_unary(
+        &input,
+        UnaryOp::AdaptiveAvgPool2d {
+            output_size: [output_size.0, output_size.1],
+        },
+    )
 }
 
 #[pyfunction(name = "_embedding")]
