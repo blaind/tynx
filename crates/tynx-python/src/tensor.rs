@@ -11,6 +11,7 @@ mod selection;
 mod shape;
 
 use std::{
+    any::Any,
     cell::{Cell, RefCell},
     mem,
     ops::{Deref, DerefMut},
@@ -48,6 +49,17 @@ pub(crate) use factory::{
     rand_py, randint_py, randn_like_py, randn_py, zeros_like_py, zeros_py,
 };
 use reduction::ReductionSpec;
+
+fn accelerated_panic_to_runtime_error(payload: Box<dyn Any + Send>) -> PyErr {
+    let message = payload
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| payload.downcast_ref::<&str>().copied())
+        .unwrap_or("unknown accelerated backend failure");
+    PyRuntimeError::new_err(format!(
+        "accelerated operation failed; the fusion stream was reset: {message}"
+    ))
+}
 
 /// Eager device tensor with optional floating-point autodiff state.
 ///
@@ -1207,7 +1219,8 @@ impl PyTensor {
     /// Copy tensor values to nested Python lists.
     fn tolist(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         self.capture_unsupported("Tensor.tolist() host reads")?;
-        let result = self.source.value().tolist(py);
+        let result = catch_unwind(AssertUnwindSafe(|| self.source.value().tolist(py)))
+            .map_err(accelerated_panic_to_runtime_error)?;
         raise_pending_device_error()?;
         result
     }
@@ -1215,7 +1228,8 @@ impl PyTensor {
     /// Copy tensor values to a NumPy array with the matching dtype and shape.
     fn numpy(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         self.capture_unsupported("Tensor.numpy() host reads")?;
-        let result = self.source.value().numpy(py);
+        let result = catch_unwind(AssertUnwindSafe(|| self.source.value().numpy(py)))
+            .map_err(accelerated_panic_to_runtime_error)?;
         raise_pending_device_error()?;
         result
     }
@@ -1229,7 +1243,8 @@ impl PyTensor {
                 self.source.value().dims()
             )));
         }
-        let result = self.source.value().item(py);
+        let result = catch_unwind(AssertUnwindSafe(|| self.source.value().item(py)))
+            .map_err(accelerated_panic_to_runtime_error)?;
         raise_pending_device_error()?;
         result
     }

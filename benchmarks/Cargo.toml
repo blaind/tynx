@@ -37,3 +37,13 @@ unsafe_code = "forbid"
 dbg_macro = "deny"
 todo = "deny"
 unimplemented = "deny"
+
+[patch."https://github.com/tracel-ai/burn"]
+burn-cubecl-fusion = { path = "../vendor/repos/burn/crates/burn-cubecl-fusion" }
+burn-fusion = { path = "../vendor/repos/burn/crates/burn-fusion" }
+
+[patch."https://github.com/tracel-ai/cubecl"]
+cubecl-wgpu = { path = "../vendor/repos/cubecl/crates/cubecl-wgpu" }
+
+[patch."https://github.com/tracel-ai/cubek"]
+cubek-reduce = { path = "../vendor/repos/cubek/crates/cubek-reduce" }

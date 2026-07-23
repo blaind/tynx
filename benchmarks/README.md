@@ -80,6 +80,53 @@ identical authored MLPs:
 python benchmarks/python-training-capture.py
 ```
 
+The GPU probes force materialization inside every timed sample so lazy execution cannot
+dead-code-eliminate the measured work. `probe_lazy.py` deliberately demonstrates why unread graph
+timings are not throughput measurements. Torch/cuDNN comparisons are included when the active
+Python environment provides a CUDA-enabled PyTorch:
+
+```sh
+BURN_DEVICE=wgpu python benchmarks/probe_reductions.py
+BURN_DEVICE=wgpu python benchmarks/bench_fusion.py
+BURN_DEVICE=wgpu python benchmarks/probe_lazy.py
+BURN_DEVICE=wgpu python benchmarks/regression_sweep.py
+BURN_DEVICE=wgpu python benchmarks/bench_conv.py
+```
+
+Use `--check` on the reduction, fusion, and regression-sweep probes for torch-free acceptance
+checks. On Linux, pin the process to a known-fast host CPU (for example `taskset -c 0`) when
+comparing sub-millisecond medians; the GPU work is unchanged, but scheduler placement measurably
+affects the host wait path.
+
+The convolution probe uses a dependent chain and amortizes one final scalar sentinel reduction over
+the chain. It reports both the normal convolution and a correctness-checked explicit
+im2col-plus-matmul experiment. On the RTX 5090, explicit im2col reaches only 0.222 TFLOPS on
+`8x128x28x28`, far below the 15 TFLOPS ship threshold, so this f32 lowering is parked rather than
+used in production.
+
+### Pinned external GPU references
+
+These constants let local gates remain torch-free. They are externally measured comparison points,
+not claims about the current Tynx result. Refresh them only when the reference hardware or software
+changes.
+
+- Hardware: NVIDIA GeForce RTX 5090
+- Driver: 580.173.02
+- PyTorch: 2.13.0+cu132
+
+| Workload | External PyTorch/cuDNN reference |
+| --- | ---: |
+| 64M f32 scalar sum | 0.19 ms |
+| 64M f32 add | 1558 GB/s |
+| f32 matmul | 61–63 TFLOPS |
+| tf32 matmul | 98–112 TFLOPS |
+| fp16 matmul | 219 TFLOPS |
+| f32/tf32 conv, benchmark shapes | 28–42 TFLOPS |
+| fp16 channels-last conv, benchmark shapes | 79–87 TFLOPS |
+
+All probes emit JSON. Record the GPU, driver, backend, host affinity, and power state with any
+published result.
+
 ## Training
 
 The training suite compares an imported Tynx model with burn-onnx generated AOT Rust using the

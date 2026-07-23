@@ -1,5 +1,18 @@
 # Contributing
 
+## Patched dependencies
+
+Before using Cargo, Maturin, or the separate benchmark workspace in a fresh checkout, prepare the
+ignored Burn, CubeCL, and CubeK clones:
+
+```sh
+cargo vendor-patches
+```
+
+This standalone bootstrap command checks out the revisions pinned by the project and applies the
+reviewed patches under `vendor/`. It is safe to run again; it rejects revision drift and unrelated
+changes instead of resetting a dependency checkout.
+
 ## ONNX conformance
 
 The ignored conformance test uses the official ONNX node cases pinned to the same Burn-ONNX

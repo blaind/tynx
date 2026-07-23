@@ -225,7 +225,11 @@ fn tensor(values: Vec<f32>, shape: &[usize], device: &Device) -> BenchResult<Dyn
 }
 
 fn imported_model(session: Session, device: Device) -> BenchResult<ImportedModel> {
-    let report = TrainabilityReport::analyze_initializers(session.graph());
+    let report = TrainabilityReport::analyze_initializers_with_names(
+        session.graph(),
+        &TrainabilityOverrides::new(),
+        session.initializer_names(),
+    );
     let mut names = InitializerNameOverrides::new();
     for initializer in report.trainable_parameters() {
         let usage = initializer
@@ -293,4 +297,26 @@ fn device() -> (&'static str, Device, Option<String>) {
 
 fn elapsed_ms(started: Instant) -> f64 {
     started.elapsed().as_secs_f64() * 1_000.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn initializer_override_names_survive_processed_session_round_trip() {
+        let session = Session::from_bytes_with(&training_mlp_model().unwrap(), false).unwrap();
+        let model = imported_model(session, Device::autodiff(Device::flex())).unwrap();
+        let mut names = model
+            .parameters()
+            .named()
+            .map(|(name, _)| name.to_string())
+            .collect::<Vec<_>>();
+        names.sort();
+
+        assert_eq!(
+            names,
+            ["gemm1.bias", "gemm1.weight", "gemm2.bias", "gemm2.weight"]
+        );
+    }
 }

@@ -1,2 +1,3 @@
 [alias]
 xtask = "run --package xtask --"
+vendor-patches = "run --manifest-path tools/vendor-patches/Cargo.toml --"

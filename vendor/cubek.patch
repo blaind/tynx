@@ -1,0 +1,86 @@
+--- a/crates/cubek-reduce/src/components/instructions/argmax.rs
++++ b/crates/cubek-reduce/src/components/instructions/argmax.rs
+@@ -71,7 +71,13 @@
+         #[comptime] reduce_step: ReduceStep,
+     ) {
+         let coordinate = item.args.item();
+-        let item = item.elements;
++        // Match Burn's floating arg-reduction semantics without a separate full-tensor mask:
++        // NaN compares unequal to itself and is treated as positive infinity.
++        let item = select_many(
++            item.elements.equal(&item.elements),
++            item.elements,
++            Vector::new(P::EI::max_value()),
++        );
+ 
+         let (candidate_item, candidate_coordinate) = match reduce_step {
+             ReduceStep::Plane => {
+--- a/crates/cubek-reduce/Cargo.toml
++++ b/crates/cubek-reduce/Cargo.toml
+@@ -6,13 +6,14 @@
+ ]
+ categories = ["science", "mathematics", "algorithms"]
+ description = "CubeK: Reduce Kernels"
+-edition.workspace = true
++edition = "2024"
+ keywords = []
+-license.workspace = true
++license = "MIT OR Apache-2.0"
+ name = "cubek-reduce"
+-readme.workspace = true
++readme = "README.md"
+ repository = "https://github.com/tracel-ai/cubek/tree/main/crates/cubek-reduce"
+-version.workspace = true
++rust-version = "1.92"
++version = "0.3.0-pre.1"
+ 
+ [features]
+ default = ["std", "cubecl/default"]
+@@ -29,18 +30,20 @@
+ benchmarks = ["cpu-reference", "cubecl/test-runtime"]
+ 
+ [dependencies]
+-cubecl = { workspace = true }
+-cubek-std = { path = "../cubek-std", version = "=0.3.0-pre.1", default-features = false }
+-cubek-test-utils = { path = "./../cubek-test-utils/", version = "=0.3.0-pre.1", default-features = false, optional = true }
++cubecl = { git = "https://github.com/tracel-ai/cubecl", rev = "ba103c7f118524652647338dec09abf69a24a53e", default-features = false }
++cubek-std = { git = "https://github.com/tracel-ai/cubek", rev = "e6a634f1bd0c3a72325228d308462ec0c5c96456", version = "=0.3.0-pre.1", default-features = false }
++cubek-test-utils = { git = "https://github.com/tracel-ai/cubek", rev = "e6a634f1bd0c3a72325228d308462ec0c5c96456", version = "=0.3.0-pre.1", default-features = false, optional = true }
+ 
+ num-traits = "0.2.19"
+-pretty_assertions = { workspace = true, optional = true }
+-serde = { workspace = true }
+-half = { workspace = true }
+-thiserror = { workspace = true }
++pretty_assertions = { version = "1.4", optional = true }
++serde = { version = "1.0.204", default-features = false, features = ["derive", "alloc"] }
++half = { version = "2.5", default-features = false, features = ["alloc", "num-traits", "serde"] }
++thiserror = { version = "2", default-features = false }
+ 
+ [dev-dependencies]
+-cubecl = { workspace = true, features = ["test-runtime"] }
+-cubecl-common = { workspace = true }
++cubecl = { git = "https://github.com/tracel-ai/cubecl", rev = "ba103c7f118524652647338dec09abf69a24a53e", default-features = false, features = ["test-runtime"] }
++cubecl-common = { git = "https://github.com/tracel-ai/cubecl", rev = "ba103c7f118524652647338dec09abf69a24a53e", default-features = false }
+ cubek-reduce = { path = ".", features = ["cpu-reference"] }
+-cubek-test-utils = { path = "./../cubek-test-utils/", version = "=0.3.0-pre.1" }
++cubek-test-utils = { git = "https://github.com/tracel-ai/cubek", rev = "e6a634f1bd0c3a72325228d308462ec0c5c96456", version = "=0.3.0-pre.1" }
++
++[workspace]
+--- a/crates/cubek-reduce/src/components/instructions/argmin.rs
++++ b/crates/cubek-reduce/src/components/instructions/argmin.rs
+@@ -73,7 +73,13 @@
+         #[comptime] reduce_step: ReduceStep,
+     ) {
+         let coordinate = item.args.item();
+-        let item = item.elements;
++        // Match Burn's floating arg-reduction semantics without a separate full-tensor mask:
++        // NaN compares unequal to itself and is treated as negative infinity.
++        let item = select_many(
++            item.elements.equal(&item.elements),
++            item.elements,
++            Vector::new(P::EI::min_value()),
++        );
+ 
+         let (candidate_item, candidate_coordinate) = match reduce_step {
+             ReduceStep::Plane => {

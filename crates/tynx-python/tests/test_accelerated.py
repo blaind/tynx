@@ -3,6 +3,8 @@
 import gc
 import math
 import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import cast
 
@@ -73,6 +75,36 @@ def test_accelerated_fused_broadcast_where_backward() -> None:
     assert otherwise.grad.tolist() == [[0.0], [2.0]]
 
 
+def test_accelerated_large_scalar_reduction_fast_paths_are_correct() -> None:
+    device = _accelerated_device()
+    values = tynx.ones(1024, 1024)
+
+    assert values.sum().item() == pytest.approx(1024 * 1024)
+    assert values.mean().item() == pytest.approx(1.0)
+    assert values.max().item() == pytest.approx(1.0)
+    assert values.min().item() == pytest.approx(1.0)
+    tynx.synchronize(device)
+
+
+def test_accelerated_large_arg_extreme_keeps_exact_indices_above_f32_range() -> None:
+    device = _accelerated_device()
+    elements = 64_000_000
+    expected = 50_000_001
+    values = tynx.cat(
+        [
+            tynx.zeros(expected),
+            tynx.full((1,), float("nan")),
+            tynx.zeros(elements - expected - 1),
+        ]
+    )
+
+    # Stage-one coordinates are row-local f32 values, but the absolute position must be
+    # reconstructed as an integer; 50,000,001 cannot be represented exactly by f32.
+    assert values.argmax().item() == expected
+    assert values.argmin().item() == expected
+    tynx.synchronize(device)
+
+
 def test_accelerated_multidimensional_extrema_avoid_i64_mask_reductions() -> None:
     device = _accelerated_device()
     value = tynx.Tensor([[3.0, -2.0, 7.0], [1.0, 7.0, 0.0]])
@@ -114,7 +146,40 @@ def test_accelerated_int64_extrema_avoid_backend_reduction_kernel() -> None:
     assert vector.max().item() == maximum
     assert vector.min(dim=0).tolist() == [minimum]
     assert vector.min().item() == minimum
+
+    # The CubeCL arg-reduction trigger used to panic burn-fusion and poison every subsequent op.
+    arg_value = tynx.Tensor([[1, 9], [3, 2]], dtype="int64")
+    assert arg_value.argmax(dim=1).tolist() == [1, 0]
+    assert arg_value.argmin(dim=1).tolist() == [0, 1]
+    assert (tynx.Tensor([1.0]) + 2.0).tolist() == [3.0]
     tynx.synchronize(device)
+
+
+def test_accelerated_i64_arg_extreme_does_not_poison_process_exit() -> None:
+    _accelerated_device()
+    script = """
+import tynx
+
+value = tynx.Tensor([[1, 9], [3, 2]], dtype="int64")
+try:
+    assert value.argmax(dim=1).tolist() == [1, 0]
+    assert value.argmin(dim=1).tolist() == [0, 1]
+except RuntimeError:
+    # A backend failure is allowed to surface once, but it must remain catchable.
+    pass
+assert (tynx.Tensor([1.0]) + 2.0).tolist() == [3.0]
+tynx.synchronize()
+"""
+    process = subprocess.run(
+        [sys.executable, "-c", script],
+        env=os.environ.copy(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert process.returncode == 0, process.stderr
+    assert "Ordering is bigger than operations" not in process.stderr
+    assert "CallError" not in process.stderr
 
 
 def test_accelerated_boolean_construction_and_factories_avoid_bool_scalars() -> None:

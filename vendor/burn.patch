@@ -1,0 +1,238 @@
+--- a/crates/burn-fusion/src/stream/multi.rs
++++ b/crates/burn-fusion/src/stream/multi.rs
+@@ -7,6 +7,8 @@
+ use crate::{FusionRuntime, UnfusedOp};
+ use burn_ir::{HandleContainer, OperationIr, TensorId};
+ use hashbrown::{HashMap, HashSet};
++#[cfg(feature = "std")]
++use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+ 
+ /// Keep track of multiple concurrent lazy streams of operations.
+ ///
+@@ -229,10 +231,11 @@
+         };
+ 
+         stream.queue.variables.remove(&ir.id);
+-
+-        if stream.queue.variables.is_empty() {
+-            self.streams.remove(&id);
+-        }
++        // Keep the empty stream's processor alive. Materializing a short-lived result used to
++        // remove it here, so the next eager call rebuilt exploration state and alternated between
++        // cached/re-explored segments (a fixed ~0.20 ms latency mode on WGPU). Queues and live
++        // variables are already empty; retaining one processor per participating thread is small
++        // and preserves stable execution-plan selection across materialization boundaries.
+ 
+         #[cfg(feature = "memory-checks")]
+         self.memory_checks.check(&self.streams, handles);
+@@ -242,17 +245,40 @@
+ 
+     /// Drain a stream.
+     pub fn drain(&mut self, handles: &mut HandleContainer<R::FusionHandle>, id: StreamId) {
+-        id.executes(|| {
+-            if let Some(stream) = self.streams.get_mut(&id) {
+-                let num_executed = stream.queue.global.len();
+-                stream.processor.process(
+-                    Segment::new(&mut stream.queue, handles, id),
+-                    &mut self.optimizations,
+-                    ExecutionMode::Sync,
+-                );
+-                stream.cursor += num_executed as u64;
++        // `no_std` invokes the closure after construction and therefore needs a mutable
++        // binding; the std branch moves it into `catch_unwind`.
++        #[allow(unused_mut)]
++        let mut drain = || {
++            id.executes(|| {
++                if let Some(stream) = self.streams.get_mut(&id) {
++                    let num_executed = stream.queue.global.len();
++                    stream.processor.process(
++                        Segment::new(&mut stream.queue, handles, id),
++                        &mut self.optimizations,
++                        ExecutionMode::Sync,
++                    );
++                    stream.cursor += num_executed as u64;
++                }
++            });
++        };
++
++        #[cfg(feature = "std")]
++        if let Err(payload) = catch_unwind(AssertUnwindSafe(drain)) {
++            // A failed optimizer/backend call can leave both the processor and
++            // cached execution plans out of sync with the remaining operation
++            // queue. Discard that segment before the next submission.
++            self.streams.remove(&id);
++            self.shared_sources.clear();
++            self.optimizations = ExecutionPlanStore::new();
++            for stream in self.streams.values_mut() {
++                stream.processor = Processor::new(R::fusers(self.device.clone()));
+             }
+-        });
++            resume_unwind(payload);
++        }
++
++        #[cfg(not(feature = "std"))]
++        drain();
++
+         #[cfg(feature = "test-util")]
+         crate::inspect::emit_handle_snapshot(id, handles.handle_ids().copied());
+     }
+--- a/crates/burn-cubecl-fusion/src/optim/reduce/fuser.rs
++++ b/crates/burn-cubecl-fusion/src/optim/reduce/fuser.rs
+@@ -208,11 +208,12 @@
+                     NumericOperationIr::ProdDim(op) => {
+                         self.on_reduce(op, ReduceInstruction::Prod);
+                     }
+-                    NumericOperationIr::ArgMax(op) => {
+-                        self.on_reduce(op, ReduceInstruction::ArgMax);
+-                    }
+-                    NumericOperationIr::ArgMin(op) => {
+-                        self.on_reduce(op, ReduceInstruction::ArgMin);
++                    NumericOperationIr::ArgMax(_) | NumericOperationIr::ArgMin(_) => {
++                        // CubeK's standard row arg reducer is substantially faster and has stable
++                        // strategy selection. The fused reducer promotes after repeated captures
++                        // and regresses the 64M hierarchical first stage from ~0.4 ms to ~5.5 ms.
++                        self.fuser.close();
++                        self.fuser_read_fallback.close();
+                     }
+                     NumericOperationIr::MinDim(op) => {
+                         self.on_reduce(op, ReduceInstruction::Min);
+@@ -238,11 +239,9 @@
+                     NumericOperationIr::ProdDim(op) => {
+                         self.on_reduce(op, ReduceInstruction::Prod);
+                     }
+-                    NumericOperationIr::ArgMax(op) => {
+-                        self.on_reduce(op, ReduceInstruction::ArgMax);
+-                    }
+-                    NumericOperationIr::ArgMin(op) => {
+-                        self.on_reduce(op, ReduceInstruction::ArgMin);
++                    NumericOperationIr::ArgMax(_) | NumericOperationIr::ArgMin(_) => {
++                        self.fuser.close();
++                        self.fuser_read_fallback.close();
+                     }
+                     NumericOperationIr::MinDim(op) => {
+                         self.on_reduce(op, ReduceInstruction::Min);
+--- a/crates/burn-fusion/Cargo.toml
++++ b/crates/burn-fusion/Cargo.toml
+@@ -2,17 +2,14 @@
+ authors = ["nathanielsimard <nathaniel.simard.42@gmail.com>"]
+ categories = ["science"]
+ description = "Kernel fusion backend decorator for the Burn framework"
+-edition.workspace = true
++edition = "2024"
+ keywords = ["deep-learning", "machine-learning", "data"]
+-license.workspace = true
++license = "MIT OR Apache-2.0"
+ name = "burn-fusion"
+-readme.workspace = true
++readme = "README.md"
+ repository = "https://github.com/tracel-ai/burn/tree/main/crates/burn-fusion"
+ documentation = "https://docs.rs/burn-fusion"
+-version.workspace = true
+-
+-[lints]
+-workspace = true
++version = "0.22.0-pre.1"
+ 
+ [features]
+ default = ["std", "tracing"]
+@@ -31,18 +28,20 @@
+ test-util = ["std"]
+ 
+ [dependencies]
+-burn-backend = { workspace = true, features = ["default"] }
+-burn-std = { workspace = true, features = ["default"] }
+-burn-ir = { workspace = true, features = ["default"] }
+-tracing = { workspace = true, optional = true, features = ["attributes"] }
+-smallvec = { workspace = true }
+-
+-hashbrown = { workspace = true }
+-derive-new = { workspace = true }
+-spin = { workspace = true }
+-log = { workspace = true }
+-serde = { workspace = true }
++burn-backend = { git = "https://github.com/tracel-ai/burn", rev = "78f10aec1ca6c6ffb1edd17a0fa131ae59ad5403", default-features = false, features = ["default"] }
++burn-std = { git = "https://github.com/tracel-ai/burn", rev = "78f10aec1ca6c6ffb1edd17a0fa131ae59ad5403", default-features = false, features = ["default"] }
++burn-ir = { git = "https://github.com/tracel-ai/burn", rev = "78f10aec1ca6c6ffb1edd17a0fa131ae59ad5403", default-features = false, features = ["default"] }
++tracing = { version = "0.1.44", default-features = false, optional = true, features = ["attributes"] }
++smallvec = { version = "1", features = ["const_generics", "const_new"] }
++
++hashbrown = "0.16"
++derive-new = { version = "0.7.0", default-features = false }
++spin = { version = "0.10.0", features = ["rwlock"] }
++log = { version = "0.4.29", default-features = false }
++serde = { version = "1.0.228", default-features = false, features = ["derive", "alloc"] }
+ 
+ [package.metadata.docs.rs]
+ features = ["doc"]
+ rustdoc-args = ["--cfg", "docsrs"]
++
++[workspace]
+--- a/crates/burn-cubecl-fusion/Cargo.toml
++++ b/crates/burn-cubecl-fusion/Cargo.toml
+@@ -3,16 +3,13 @@
+ categories = ["science"]
+ description = "Provide optimizations that can be used with cubecl based backends."
+ documentation = "https://docs.rs/burn-cubecl-fusion"
+-edition.workspace = true
++edition = "2024"
+ keywords = ["deep-learning", "machine-learning", "gpu"]
+-license.workspace = true
++license = "MIT OR Apache-2.0"
+ name = "burn-cubecl-fusion"
+-readme.workspace = true
++readme = "README.md"
+ repository = "https://github.com/tracel-ai/burn/tree/main/crates/burn-cubecl-fusion"
+-version.workspace = true
+-
+-[lints]
+-workspace = true
++version = "0.22.0-pre.1"
+ 
+ [features]
+ default = ["autotune", "std", "cubecl/default", "burn-fusion/default"]
+@@ -29,30 +26,32 @@
+ ]
+ 
+ [dependencies]
+-burn-fusion = { workspace = true }
+-burn-ir = { workspace = true }
+-burn-std = { workspace = true, features = ["default"] }
+-cubecl = { workspace = true }
+-cubek = { workspace = true, features = [
++burn-fusion = { path = "../burn-fusion", version = "0.22.0-pre.1", default-features = false }
++burn-ir = { git = "https://github.com/tracel-ai/burn", rev = "78f10aec1ca6c6ffb1edd17a0fa131ae59ad5403", version = "0.22.0-pre.1", default-features = false }
++burn-std = { git = "https://github.com/tracel-ai/burn", rev = "78f10aec1ca6c6ffb1edd17a0fa131ae59ad5403", version = "0.22.0-pre.1", default-features = false, features = ["default"] }
++cubecl = { git = "https://github.com/tracel-ai/cubecl", rev = "ba103c7f118524652647338dec09abf69a24a53e", default-features = false }
++cubek = { git = "https://github.com/tracel-ai/cubek", rev = "e6a634f1bd0c3a72325228d308462ec0c5c96456", default-features = false, features = [
+     "matmul",
+     "reduce",
+     "quantization",
+     "stdlib",
+ ] }
+-half = { workspace = true, optional = true }
++half = { version = "2.7.1", features = ["alloc", "num-traits", "serde"], default-features = false, optional = true }
+ 
+ # Needed for the cubecl dtype helpers (`burn_backend::cubecl::*`).
+-burn-backend = { workspace = true, features = ["cubecl"] }
++burn-backend = { git = "https://github.com/tracel-ai/burn", rev = "78f10aec1ca6c6ffb1edd17a0fa131ae59ad5403", version = "0.22.0-pre.1", default-features = false, features = ["cubecl"] }
+ 
+-derive-new = { workspace = true }
+-hashbrown = { workspace = true }
+-serde = { workspace = true }
+-spin = { workspace = true }
++derive-new = { version = "0.7.0", default-features = false }
++hashbrown = "0.16"
++serde = { version = "1.0.228", default-features = false, features = ["derive", "alloc"] }
++spin = { version = "0.10.0", features = ["rwlock"] }
+ 
+ [dev-dependencies]
+-cubecl = { workspace = true, features = ["test-runtime"] }
+-half = { workspace = true }
++cubecl = { git = "https://github.com/tracel-ai/cubecl", rev = "ba103c7f118524652647338dec09abf69a24a53e", default-features = false, features = ["test-runtime"] }
++half = { version = "2.7.1", features = ["alloc", "num-traits", "serde"], default-features = false }
+ 
+ [package.metadata.docs.rs]
+ features = ["doc"]
+ rustdoc-args = ["--cfg", "docsrs"]
++
++[workspace]
