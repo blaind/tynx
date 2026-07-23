@@ -1,7 +1,11 @@
 """Python bindings for the Tynx neural network runtime."""
 
+import builtins as _builtins
 from collections.abc import Mapping as _Mapping
+from numbers import Integral as _Integral
+from numbers import Real as _Real
 from os import PathLike as _PathLike
+from typing import Any as _Any
 from typing import Literal as _Literal
 from typing import Optional as _Optional
 from typing import Union as _Union
@@ -58,6 +62,58 @@ from .compiler import CompiledFunction, compile
 def manual_seed(seed: int) -> None:
     """Seed device sampling and authored-module parameter initialization."""
     _manual_seed(seed)
+
+
+def _inferred_tensor_dtype(data: _Any) -> _Optional[_Literal["float32", "int64", "bool"]]:
+    if isinstance(data, Tensor) or hasattr(data, "__array_interface__"):
+        return None
+    if isinstance(data, _builtins.bool):
+        return "bool"
+    if isinstance(data, _Integral):
+        return "int64"
+    if isinstance(data, _Real):
+        return "float32"
+    if isinstance(data, range):
+        return "int64"
+    if isinstance(data, (list, tuple)):
+        inferred = {_inferred_tensor_dtype(value) for value in data}
+        inferred.discard(None)
+        if "float32" in inferred:
+            return "float32"
+        if "int64" in inferred:
+            return "int64"
+        if "bool" in inferred:
+            return "bool"
+    return None
+
+
+def _coerce_inferred_tensor_data(
+    data: _Any, dtype: _Optional[_Literal["float32", "int64", "bool"]]
+) -> _Any:
+    if dtype == "int64" and isinstance(data, _builtins.bool):
+        return int(data)
+    if isinstance(data, list):
+        return [_coerce_inferred_tensor_data(value, dtype) for value in data]
+    if isinstance(data, tuple):
+        return tuple(_coerce_inferred_tensor_data(value, dtype) for value in data)
+    return data
+
+
+def tensor(
+    data: _Any,
+    *,
+    dtype: _Optional[_Literal["float32", "int64", "bool"]] = None,
+    device: _Optional[Device] = None,
+    requires_grad: _builtins.bool = False,
+) -> Tensor:
+    """Create a Tensor with PyTorch-style bool, integer, and float inference."""
+    inferred_dtype = _inferred_tensor_dtype(data) if dtype is None else dtype
+    return Tensor(
+        _coerce_inferred_tensor_data(data, inferred_dtype),
+        dtype=inferred_dtype,
+        device=device,
+        requires_grad=requires_grad,
+    )
 
 
 @_overload
@@ -149,6 +205,7 @@ __all__ = [
     "split",
     "stack",
     "synchronize",
+    "tensor",
     "topk",
     "where",
     "zeros",
