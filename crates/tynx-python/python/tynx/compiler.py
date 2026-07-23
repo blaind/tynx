@@ -10,7 +10,7 @@ from inspect import BoundArguments as _BoundArguments
 from inspect import Parameter as _Parameter
 from inspect import Signature as _Signature
 from inspect import signature as _signature
-from threading import get_ident as _get_ident
+from threading import current_thread as _current_thread
 from types import MethodType as _MethodType
 from typing import Any as _Any
 from typing import Generic as _Generic
@@ -53,7 +53,7 @@ class CompiledFunction(_Generic[R]):
         if not callable(function):
             raise TypeError(f"compile expected a callable, got {type(function).__qualname__}")
         self._function = function
-        self._owner_thread = _get_ident()
+        self._owner_thread = _current_thread()
         self._signature = _signature(function)
         self._fullgraph = fullgraph
         self._static_argnames = _validate_static_argnames(self._signature, static_argnames)
@@ -85,6 +85,7 @@ class CompiledFunction(_Generic[R]):
 
     def __get__(self, instance: _Optional[object], owner: type[object]) -> "CompiledFunction[R]":
         """Bind compiled functions used as class attributes like normal methods."""
+        self._require_owner_thread("bind as a method")
         if instance is None:
             return self
         cached = self._bound_instances.get(instance)
@@ -204,13 +205,15 @@ class CompiledFunction(_Generic[R]):
         return _cast(R, released_output)
 
     def _require_owner_thread(self, operation: str) -> None:
-        current = _get_ident()
-        if current != self._owner_thread:
+        current = _current_thread()
+        if current is not self._owner_thread:
             raise RuntimeError(
                 "tynx.compile objects are thread-confined and cannot "
-                f"{operation} on thread {current}; the object was created on thread "
-                f"{self._owner_thread}. Create and use a separate compiled function in each "
-                "worker thread, and pass NumPy arrays between threads instead of Tynx tensors."
+                f"{operation} on thread {current.name!r} (id={current.ident}); the object was "
+                f"created on thread {self._owner_thread.name!r} "
+                f"(id={self._owner_thread.ident}). Create and use a separate compiled function "
+                "in each worker thread, and pass NumPy arrays between threads instead of Tynx "
+                "tensors."
             )
 
     def _prepare_call(
