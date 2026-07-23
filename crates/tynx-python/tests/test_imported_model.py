@@ -51,6 +51,14 @@ _CLIPPED_GEMM_MODEL = bytes.fromhex(
     "696768744a040000803f2a10080110014204626961734a04000000005a130a0178120e0a0c08"
     "0112080a0208020a02080162130a0179120e0a0c080112080a0208020a02080142040a00100d"
 )
+_GATHER_MODEL = bytes.fromhex(
+    "08083ac4010a450a10656d62656464696e672e7765696768740a07696e646963657312087365"
+    "6c65637465641a09656d62656464696e6722064761746865722a0b0a04617869731800a00102"
+    "12146761746865725f747261696e696e675f746573742a320803080210014210656d62656464"
+    "696e672e7765696768744a180000803f0000004000004040000080400000a0400000c0405a15"
+    "0a07696e6469636573120a0a08080712040a020803621a0a0873656c6563746564120e0a0c08"
+    "0112080a0208030a02080242040a00100d"
+)
 
 
 def _model_path(tmp_path: Path) -> Path:
@@ -133,6 +141,25 @@ def test_imported_relu6_clip_preserves_parameter_gradients(tmp_path: Path) -> No
     assert parameters["weight"].grad.flatten().tolist() == pytest.approx([2.0])
     assert parameters["bias"].grad is not None
     assert parameters["bias"].grad.tolist() == pytest.approx([1.0])
+
+
+def test_imported_gather_accumulates_repeated_embedding_gradients(tmp_path: Path) -> None:
+    path = tmp_path / "gather.onnx"
+    path.write_bytes(_GATHER_MODEL)
+    model = tynx.load(path, trainable="auto", simplify=False)
+    indices = tynx.Tensor([0, 2, 0], dtype="int64")
+
+    output = model(indices)
+    assert output.tolist() == [[1.0, 2.0], [5.0, 6.0], [1.0, 2.0]]
+    output.sum().backward()
+
+    weight = dict(model.named_parameters())["embedding.weight"]
+    assert weight.grad is not None
+    assert weight.grad.tolist() == [[2.0, 2.0], [0.0, 0.0], [1.0, 1.0]]
+
+    optimizer = tynx.optim.SGD(model.named_parameters(), lr=0.1)
+    optimizer.step()
+    assert model(indices).flatten().tolist() == pytest.approx([0.8, 1.8, 4.9, 5.9, 0.8, 1.8])
 
 
 def test_imported_model_checkpoint_restores_weights_and_optimizer_state(tmp_path: Path) -> None:

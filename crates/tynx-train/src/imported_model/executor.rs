@@ -7,13 +7,15 @@ use tynx_core::onnx_ir::{
     node::{
         batch_norm::{BatchNormConfig, BatchNormalizationNode},
         conv2d::Conv2dNode,
+        gather::GatherNode,
         gemm::GemmNode,
         linear::LinearNode,
         matmul::MatMulNode,
     },
 };
 use tynx_core::{
-    DynTensor, Env, Result, Session, TynxError, Value, execute, resolve_onnx_padding2d,
+    DynTensor, Env, Result, Session, TynxError, Value, execute, execute_onnx_gather,
+    resolve_onnx_padding2d,
 };
 
 use crate::ImportedState;
@@ -33,6 +35,7 @@ pub(super) fn validate(graph: &OnnxGraph, state: &ImportedState) -> Result<()> {
                 Node::MatMul(_) => matches!(input_index, 0 | 1),
                 Node::BatchNormalization(_) => matches!(input_index, 1..=4),
                 Node::Conv2d(_) => matches!(input_index, 0..=2),
+                Node::Gather(_) => input_index == 0,
                 _ => false,
             };
             if !supported {
@@ -65,6 +68,7 @@ pub(super) fn run(
                 execute_batch_normalization(node, node_index, &env, state, device, tracking)
             }
             Node::Conv2d(node) => execute_conv2d(node, node_index, &env, state, device, tracking),
+            Node::Gather(node) => execute_gather(node, node_index, &env, state, device, tracking),
             _ => execute(node, &env, device),
         }?;
         if values.len() != node.outputs().len() {
@@ -81,6 +85,19 @@ pub(super) fn run(
     }
 
     session.collect_outputs(&env)
+}
+
+fn execute_gather(
+    node: &GatherNode,
+    node_index: usize,
+    env: &Env,
+    state: &ImportedState,
+    device: &Device,
+    tracking: bool,
+) -> Result<Vec<Value>> {
+    let data = resolve_value(node, node_index, 0, env, state, device, tracking)?;
+    let indices = resolve_value(node, node_index, 1, env, state, device, tracking)?;
+    execute_onnx_gather(data, indices, node.config.axis, device).map(|value| vec![value])
 }
 
 fn execute_conv2d(
@@ -401,4 +418,5 @@ impl_node_inputs!(
     MatMulNode,
     BatchNormalizationNode,
     Conv2dNode,
+    GatherNode,
 );

@@ -18,7 +18,7 @@ mod dropout;
 mod einsum;
 mod extrema;
 mod eye_like;
-mod gather;
+pub(crate) mod gather;
 mod grid_sample;
 mod hardmax;
 mod imputer;

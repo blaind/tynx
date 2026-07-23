@@ -11,25 +11,30 @@ use crate::{DynInt, Result, Scalar, TynxError, Value};
 pub(super) fn gather(node: &GatherNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
     let data = resolve::first(env, &node.name, &node.inputs, device)?;
     let indices = resolve::at(env, &node.name, &node.inputs, 1, device)?;
+    gather_values(data, indices, node.config.axis, device).map(|value| vec![value])
+}
+
+/// Apply ONNX Gather semantics to already-resolved data and index values.
+pub fn gather_values(data: Value, indices: Value, axis: usize, device: &Device) -> Result<Value> {
     let indices_dims = shape::value_dims(&indices);
 
     if let Value::Shape(values) = data {
-        if node.config.axis != 0 {
+        if axis != 0 {
             return Err(TynxError::Shape("Shape Gather only supports axis 0".into()));
         }
         let gathered = gather_shape(&values, shape::value_to_i64s(indices)?)?;
-        return Ok(vec![if indices_dims.is_empty() {
+        return Ok(if indices_dims.is_empty() {
             Value::Scalar(Scalar::I64(gathered[0]))
         } else {
             Value::Shape(gathered)
-        }]);
+        });
     }
 
     let data_dims = shape::value_dims(&data);
-    let axis_size = *data_dims.get(node.config.axis).ok_or_else(|| {
+    let axis_size = *data_dims.get(axis).ok_or_else(|| {
         TynxError::Shape(format!(
             "Gather axis {} is outside rank {}",
-            node.config.axis,
+            axis,
             data_dims.len()
         ))
     })?;
@@ -37,9 +42,9 @@ pub(super) fn gather(node: &GatherNode, env: &Env, device: &Device) -> Result<Ve
         .reshape(vec![indices_dims.iter().product::<usize>().max(1)])?
         .normalize_indices(axis_size)?;
     let selected = match data {
-        Value::Tensor(data) => Value::Tensor(data.select(node.config.axis, indices)?),
-        Value::Int(data) => Value::Int(data.select(node.config.axis, indices)?),
-        Value::Bool(data) => Value::Bool(data.select(node.config.axis, indices)?),
+        Value::Tensor(data) => Value::Tensor(data.select(axis, indices)?),
+        Value::Int(data) => Value::Int(data.select(axis, indices)?),
+        Value::Bool(data) => Value::Bool(data.select(axis, indices)?),
         other => {
             return Err(TynxError::TypeMismatch(format!(
                 "Gather expects tensor data, got {other:?}"
@@ -47,10 +52,10 @@ pub(super) fn gather(node: &GatherNode, env: &Env, device: &Device) -> Result<Ve
         }
     };
 
-    let mut output_dims = data_dims[..node.config.axis].to_vec();
+    let mut output_dims = data_dims[..axis].to_vec();
     output_dims.extend(indices_dims);
-    output_dims.extend_from_slice(&data_dims[node.config.axis + 1..]);
-    Ok(vec![shape::reshape_value(selected, output_dims, device)?])
+    output_dims.extend_from_slice(&data_dims[axis + 1..]);
+    shape::reshape_value(selected, output_dims, device)
 }
 
 pub(super) fn gather_elements(

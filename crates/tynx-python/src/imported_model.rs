@@ -317,8 +317,8 @@ impl PyImportedModel {
             let value = value
                 .as_ref()
                 .expect("missing imported inputs were rejected above")
-                .operation_float_value(tracking, "imported model input")?;
-            env.insert(input.name.clone(), Value::Tensor(value));
+                .operation_runtime_value(tracking, "imported model input")?;
+            env.insert(input.name.clone(), value);
         }
         let mut result = self
             .inner
