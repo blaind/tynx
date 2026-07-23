@@ -352,6 +352,7 @@ dependencies = [
  "burn-autodiff",
  "burn-core",
  "burn-flex",
+ "burn-ir",
  "burn-nn",
  "burn-optim",
  "burn-std",
@@ -443,6 +444,7 @@ source = "git+https://github.com/tracel-ai/burn?rev=78f10aec1ca6c6ffb1edd17a0fa1
 dependencies = [
  "burn-backend",
  "burn-cubecl",
+ "burn-fusion",
  "cubecl",
 ]
 
@@ -489,6 +491,7 @@ source = "git+https://github.com/tracel-ai/burn?rev=78f10aec1ca6c6ffb1edd17a0fa1
 dependencies = [
  "burn-backend",
  "burn-cubecl",
+ "burn-fusion",
  "cubecl",
 ]
 
@@ -616,6 +619,7 @@ source = "git+https://github.com/tracel-ai/burn?rev=78f10aec1ca6c6ffb1edd17a0fa1
 dependencies = [
  "burn-backend",
  "burn-cubecl",
+ "burn-fusion",
  "cubecl",
 ]
 
@@ -697,6 +701,7 @@ dependencies = [
  "bon",
  "burn-core",
  "burn-cubecl",
+ "burn-fusion",
  "burn-ir",
  "bytemuck",
  "cubecl",
@@ -717,6 +722,7 @@ source = "git+https://github.com/tracel-ai/burn?rev=78f10aec1ca6c6ffb1edd17a0fa1
 dependencies = [
  "burn-backend",
  "burn-cubecl",
+ "burn-fusion",
  "cubecl",
 ]
 
@@ -5305,6 +5311,7 @@ name = "tynx"
 version = "0.1.1"
 dependencies = [
  "burn",
+ "burn-fusion",
  "getrandom 0.4.3",
  "half",
  "log",
