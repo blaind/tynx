@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING, Union, cast
 from ..._tynx import Buffer, Parameter, Tensor
 from .module import Module
 
+_NormalizedShape = Union[int, list[int], tuple[int, ...]]
+
 if TYPE_CHECKING:
     from ..._tynx import TensorData
 
@@ -15,7 +17,7 @@ class LayerNorm(Module):
 
     def __init__(
         self,
-        normalized_shape: Union[int, tuple[int, ...]],
+        normalized_shape: _NormalizedShape,
         eps: float = 1e-5,
         elementwise_affine: bool = True,
         bias: bool = True,
@@ -181,11 +183,17 @@ class BatchNorm2d(BatchNorm):
     _valid_ranks = (4,)
 
 
-def _normalized_shape(value: Union[int, tuple[int, ...]]) -> tuple[int, ...]:
-    shape = (value,) if type(value) is int else value
-    if type(shape) is not tuple or not shape or len(shape) > 6:
+def _normalized_shape(value: _NormalizedShape) -> tuple[int, ...]:
+    shape: tuple[int, ...]
+    if type(value) is int:
+        shape = (value,)
+    elif isinstance(value, (list, tuple)):
+        shape = tuple(value)
+    else:
+        raise TypeError("normalized_shape must be an int or a list/tuple of integers")
+    if not shape or len(shape) > 6:
         raise ValueError(
-            "normalized_shape must be a non-empty int tuple with at most six dimensions"
+            "normalized_shape must be a non-empty int list/tuple with at most six dimensions"
         )
     if any(type(dimension) is not int or dimension <= 0 for dimension in shape):
         raise ValueError(f"normalized_shape dimensions must be positive integers, got {shape!r}")
