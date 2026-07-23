@@ -972,6 +972,34 @@ impl PyTensor {
         value.bind(py).is_truthy()
     }
 
+    fn __float__(&self, py: Python<'_>) -> PyResult<f64> {
+        if self.numel() != 1 {
+            return Err(PyValueError::new_err(format!(
+                "float() requires a one-element Tensor, got shape {:?}",
+                self.source.value().dims()
+            )));
+        }
+        let value = self.item(py)?;
+        py.import("builtins")?
+            .getattr("float")?
+            .call1((value,))?
+            .extract()
+    }
+
+    fn __int__(&self, py: Python<'_>) -> PyResult<i64> {
+        if self.numel() != 1 {
+            return Err(PyValueError::new_err(format!(
+                "int() requires a one-element Tensor, got shape {:?}",
+                self.source.value().dims()
+            )));
+        }
+        let value = self.item(py)?;
+        py.import("builtins")?
+            .getattr("int")?
+            .call1((value,))?
+            .extract()
+    }
+
     /// Element dtype.
     #[getter]
     fn dtype(&self) -> &'static str {
