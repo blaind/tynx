@@ -624,15 +624,13 @@ mod tests {
     }
 
     #[test]
-    fn rejects_a_descriptor_validated_for_another_context() {
+    fn rejects_a_descriptor_from_a_replaced_device_generation() {
         let (context, buffer) = context_and_buffer();
         let (descriptor, _, _, _) = descriptor(&context, buffer);
-        let wrong_context = ExternalWgpuContext {
-            capability: DeviceContextCapability::new(),
-            ..context.clone()
-        };
+        let replacement =
+            ExternalWgpuContext::from_wgpu_setup(noop_setup(), RuntimeOptions::default()).unwrap();
 
-        let error = wrong_context.adopt_f32(descriptor).unwrap_err();
+        let error = replacement.adopt_f32(descriptor).unwrap_err();
 
         assert!(
             error
