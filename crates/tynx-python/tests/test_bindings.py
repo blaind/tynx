@@ -215,7 +215,7 @@ def test_tensor_integer_and_boolean_storage() -> None:
     assert integers.tolist() == [[1, -2], [3, 4]]
     assert integers.grad is None
     assert not integers.requires_grad
-    assert not integers.is_leaf
+    assert integers.is_leaf
     assert isinstance(tynx.Tensor([7], dtype="int64").item(), int)
 
     assert booleans.dtype == "bool"
@@ -1587,10 +1587,25 @@ def test_tensor_detach_stops_gradient_tracking() -> None:
 
     assert detached.shape == (1,)
     assert not detached.requires_grad
-    assert not detached.is_leaf
+    assert detached.is_leaf
     with pytest.raises(ValueError, match="autodiff graph"):
         detached.backward()
     assert value.grad is None
+
+
+def test_tensor_is_leaf_matches_autograd_semantics() -> None:
+    constant = tynx.Tensor([1.0, 2.0])
+    trainable = tynx.Tensor([1.0, 2.0], requires_grad=True)
+
+    assert constant.is_leaf
+    assert (constant + 1.0).is_leaf
+    assert tynx.Tensor([1, 2], dtype="int64").is_leaf
+    assert tynx.Tensor([True, False], dtype="bool").is_leaf
+    assert trainable.is_leaf
+    assert not (trainable + 1.0).is_leaf
+    assert (trainable + 1.0).detach().is_leaf
+    with tynx.no_grad():
+        assert (trainable + 1.0).is_leaf
 
 
 def test_tensor_backward_rejects_non_scalar_output() -> None:

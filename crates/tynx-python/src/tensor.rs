@@ -1018,10 +1018,12 @@ impl PyTensor {
         !self.targets.is_empty()
     }
 
-    /// Whether this object is a user-created autodiff leaf.
+    /// Whether this tensor is a leaf in the current autodiff graph.
     #[getter]
     fn is_leaf(&self) -> bool {
-        self.leaf.is_some() || matches!(self.source, TensorSource::Parameter(_))
+        self.targets.is_empty()
+            || self.leaf.is_some()
+            || matches!(self.source, TensorSource::Parameter(_))
     }
 
     /// Return the accumulated gradient for a leaf tensor.
