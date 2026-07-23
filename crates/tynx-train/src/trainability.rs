@@ -515,6 +515,17 @@ fn analyze(
 ) -> TrainabilityReport {
     let mut entries = Vec::<WorkEntry>::new();
     let mut by_id = HashMap::<InitializerId, usize>::new();
+    let constant_outputs = graph
+        .nodes
+        .iter()
+        .filter_map(|node| match node {
+            Node::Constant(node) => Some(node.outputs.iter()),
+            _ => None,
+        })
+        .flatten()
+        .filter(|output| !output.name.is_empty())
+        .map(|output| output.name.as_str())
+        .collect::<HashSet<_>>();
 
     for (node_index, node) in graph.nodes.iter().enumerate() {
         // The parser represents ONNX initializers with generated Constant nodes
@@ -554,7 +565,15 @@ fn analyze(
                 entry.name = candidate_name;
                 entry.synthetic_name = false;
             }
-            let proposal = role_proposal(node, input_index);
+            let proposal = if constant_outputs.contains(input.name.as_str()) {
+                RoleProposal {
+                    role: InitializerRole::Constant,
+                    reason: "value produced by an ONNX Constant node",
+                    recognized: true,
+                }
+            } else {
+                role_proposal(node, input_index)
+            };
             entry.uses.push((
                 InitializerUse {
                     node_name: node.name().to_string(),
@@ -595,7 +614,7 @@ fn analyze(
             None => automatic_role,
         };
 
-        if entry.synthetic_name {
+        if entry.synthetic_name && role != InitializerRole::Constant {
             report.warnings.push(format!(
                 "initializer '{}' has no preserved ONNX name; checkpoint identity needs a stable provenance mapping",
                 entry.name
@@ -1018,6 +1037,7 @@ mod tests {
             batch_norm::{BatchNormConfig, BatchNormRuntimeConfig, BatchNormalizationNode},
             ceil::CeilNode,
             clip::{ClipConfig, ClipInput, ClipNode},
+            constant::ConstantNode,
             det::DetNode,
             gather::{GatherConfig, GatherNode},
             identity::IdentityNode,
@@ -1249,6 +1269,29 @@ mod tests {
                 .iter()
                 .any(|warning| warning.contains("Identity"))
         );
+    }
+
+    #[test]
+    fn explicit_onnx_constant_is_fixed_without_trainability_warning() {
+        let literal = named_constant("literal", DType::F32, &[2]);
+        let graph = graph(vec![
+            Node::Constant(ConstantNode {
+                name: "literal.storage".to_string(),
+                inputs: vec![static_tensor(7, DType::F32, &[2])],
+                outputs: vec![literal.clone()],
+            }),
+            Node::Identity(IdentityNode {
+                name: "identity".to_string(),
+                inputs: vec![literal],
+                outputs: vec![dynamic("y", DType::F32, &[2])],
+            }),
+        ]);
+
+        let report = TrainabilityReport::analyze_initializers(&graph);
+
+        assert_eq!(report.initializers().len(), 1);
+        assert_eq!(report.constants().next().unwrap().name(), "literal");
+        assert!(report.warnings().is_empty());
     }
 
     #[test]
