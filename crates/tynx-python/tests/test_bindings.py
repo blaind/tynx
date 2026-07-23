@@ -1633,6 +1633,29 @@ def test_tensor_sibling_results_share_backward_consumption() -> None:
         second.backward()
 
 
+@pytest.mark.parametrize(
+    "constant",
+    [
+        lambda: tynx.Tensor([1.0, 2.0]).reshape(1, 2),
+        lambda: tynx.Tensor([[0.0, 1.0]]) + 1.0,
+        lambda: tynx.Tensor([[-1.0, 2.0]]).relu(),
+        lambda: tynx.Tensor([[1.0, 2.0]]).to(dtype="float32"),
+    ],
+)
+def test_operation_derived_constants_can_be_reused_across_backward_passes(
+    constant: Callable[[], tynx.Tensor],
+) -> None:
+    value = constant()
+    weight = tynx.Tensor([[3.0], [4.0]], requires_grad=True)
+
+    (value @ weight).sum().backward()
+    (value @ weight).sum().backward()
+
+    assert weight.grad is not None
+    expected = [[2.0], [4.0]] if value.tolist() == [[1.0, 2.0]] else [[0.0], [4.0]]
+    assert weight.grad.tolist() == expected
+
+
 def test_tensor_leaf_allows_repeated_backward() -> None:
     value = tynx.Tensor([2.0], requires_grad=True)
 
