@@ -6,9 +6,11 @@ use pyo3::{
     prelude::*,
     types::{PyAny, PyBool, PyList, PyListMethods, PyRange, PyTuple, PyTupleMethods},
 };
-use tynx_core::{Device, DynBool, DynInt, DynTensor, TensorData, Value};
+use tynx_core::{BoolStore, DType, Device, DynBool, DynInt, DynTensor, TensorData, Value};
 
 use crate::to_python_error;
+
+use super::factory::validate_allocation;
 
 #[derive(Debug, Clone)]
 pub(super) enum TensorValue {
@@ -56,6 +58,7 @@ impl TensorValue {
         match dtype {
             "float32" => {
                 let (values, shape) = parse(data, "float32", |value| value.extract::<f32>())?;
+                validate_allocation(&shape, DType::F32, device)?;
                 DynTensor::from_data(TensorData::new(values, shape.clone()), shape.len(), device)
                     .map(Self::Float)
                     .map(|value| (value, None))
@@ -71,6 +74,7 @@ impl TensorValue {
                     value.extract::<i64>()
                 })?;
                 let bounds = IntBounds::from_values(&values);
+                validate_allocation(&shape, DType::I64, device)?;
                 DynInt::from_data(TensorData::new(values, shape.clone()), shape.len(), device)
                     .map(Self::Int)
                     .map(|value| (value, Some(bounds)))
@@ -78,6 +82,7 @@ impl TensorValue {
             }
             "bool" => {
                 let (values, shape) = parse(data, "bool", |value| value.extract::<bool>())?;
+                validate_allocation(&shape, DType::Bool(BoolStore::U32), device)?;
                 bool_from_data(values, shape, device)
                     .map(Self::Bool)
                     .map(|value| (value, None))
@@ -120,6 +125,7 @@ impl TensorValue {
                             "Tensor data cannot contain an empty NumPy array",
                         ));
                     }
+                    validate_allocation(&shape, DType::F32, device)?;
                     let values = array.iter().copied().collect::<Vec<_>>();
                     return $constructor::from_data(
                         TensorData::new(values, shape.clone()),
@@ -153,6 +159,7 @@ impl TensorValue {
                     "Tensor data cannot contain an empty NumPy array",
                 ));
             }
+            validate_allocation(&shape, DType::F32, device)?;
             let values = array.iter().map(|value| *value as f32).collect::<Vec<_>>();
             return DynTensor::from_data(
                 TensorData::new(values, shape.clone()),
@@ -182,6 +189,7 @@ impl TensorValue {
                     "Tensor data cannot contain an empty NumPy array",
                 ));
             }
+            validate_allocation(&shape, DType::I64, device)?;
             let values = array.iter().copied().collect::<Vec<_>>();
             let bounds = IntBounds::from_values(&values);
             return DynInt::from_data(TensorData::new(values, shape.clone()), shape.len(), device)
@@ -208,6 +216,7 @@ impl TensorValue {
                     "Tensor data cannot contain an empty NumPy array",
                 ));
             }
+            validate_allocation(&shape, DType::I64, device)?;
             let values = array
                 .iter()
                 .map(|value| i64::from(*value))
@@ -237,6 +246,7 @@ impl TensorValue {
                     "Tensor data cannot contain an empty NumPy array",
                 ));
             }
+            validate_allocation(&shape, DType::Bool(BoolStore::U32), device)?;
             let values = array.iter().copied().collect::<Vec<_>>();
             return bool_from_data(values, shape, device)
                 .map(Self::Bool)

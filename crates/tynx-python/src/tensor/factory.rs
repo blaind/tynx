@@ -1,11 +1,11 @@
 //! Native tensor factories exposed through the CPython projection.
 
 use pyo3::{
-    exceptions::{PyTypeError, PyValueError},
+    exceptions::{PyMemoryError, PyOverflowError, PyTypeError, PyValueError},
     prelude::*,
     types::{PyAny, PyBool, PyTuple},
 };
-use tynx_core::{DType, Device, Distribution, DynBool, DynInt, DynTensor, MAX_RANK};
+use tynx_core::{BoolStore, DType, Device, Distribution, DynBool, DynInt, DynTensor, MAX_RANK};
 
 use super::{
     PyTensor,
@@ -29,6 +29,49 @@ fn validate_shape(shape: Vec<usize>) -> PyResult<Vec<usize>> {
         )));
     }
     Ok(shape)
+}
+
+pub(super) fn validate_allocation(shape: &[usize], dtype: DType, device: &Device) -> PyResult<()> {
+    let elements = shape.iter().try_fold(1_usize, |product, &dimension| {
+        product.checked_mul(dimension).ok_or_else(|| {
+            PyOverflowError::new_err("factory element count exceeds platform allocation limits")
+        })
+    })?;
+    let bytes = elements.checked_mul(dtype.size()).ok_or_else(|| {
+        PyOverflowError::new_err("factory byte size exceeds platform allocation limits")
+    })?;
+    let bytes = bytes as u64;
+    if let Some(limit) = tynx_core::allocation_size_limit(device)
+        && bytes > limit
+    {
+        return Err(PyMemoryError::new_err(format!(
+            "requested {} tensor with shape {shape:?} requires {bytes} bytes, \
+             exceeding this device's effective single-storage limit of {limit} bytes",
+            dtype_name(dtype)
+        )));
+    }
+    Ok(())
+}
+
+fn dtype_name(dtype: DType) -> &'static str {
+    match dtype {
+        DType::F32 => "float32",
+        DType::I64 => "int64",
+        DType::Bool(_) => "bool",
+        _ => "unsupported",
+    }
+}
+
+fn factory_dtype(dtype: &str) -> PyResult<DType> {
+    match dtype {
+        "float32" => Ok(DType::F32),
+        "int64" => Ok(DType::I64),
+        // WGPU-backed bool tensors use u32 storage.
+        "bool" => Ok(DType::Bool(BoolStore::U32)),
+        other => Err(PyValueError::new_err(format!(
+            "unsupported Tensor dtype {other:?}; expected 'float32', 'int64', or 'bool'"
+        ))),
+    }
 }
 
 fn shape_value(value: &Bound<'_, PyAny>) -> PyResult<Vec<usize>> {
@@ -68,6 +111,7 @@ fn finish(value: TensorValue, requires_grad: bool) -> PyResult<PyTensor> {
 }
 
 fn empty_value(shape: &[usize], dtype: &str, device: &Device) -> PyResult<TensorValue> {
+    validate_allocation(shape, factory_dtype(dtype)?, device)?;
     match dtype {
         "float32" => DynTensor::empty(shape, device, DType::F32).map(TensorValue::Float),
         "int64" => DynInt::empty(shape, device, DType::I64).map(TensorValue::Int),
@@ -87,6 +131,7 @@ fn full_value(
     dtype: &str,
     device: &Device,
 ) -> PyResult<TensorValue> {
+    validate_allocation(shape, factory_dtype(dtype)?, device)?;
     match dtype {
         "float32" => fill_value
             .extract::<f64>()
@@ -198,6 +243,7 @@ fn random_float(
 ) -> PyResult<PyTensor> {
     let shape = validate_shape(shape)?;
     let device = select_device(device);
+    validate_allocation(&shape, DType::F32, &device)?;
     let value = DynTensor::random(&shape, distribution, &device, DType::F32)
         .map(TensorValue::Float)
         .map_err(to_python_error)?;
@@ -264,7 +310,8 @@ pub(crate) fn randint_py(
     }
     let shape = validate_shape(shape_value(shape)?)?;
     let device = select_device(device);
-    let bounds = if shape.iter().product::<usize>() == 0 {
+    validate_allocation(&shape, DType::I64, &device)?;
+    let bounds = if shape.contains(&0) {
         IntBounds::Empty
     } else {
         IntBounds::Range {
@@ -295,6 +342,19 @@ pub(crate) fn arange_py(
     let (start, end) = end.map_or((0, start), |end| (start, end));
     let dtype = dtype.unwrap_or("int64");
     let device = select_device(device);
+    if step == 0 {
+        return Err(PyValueError::new_err("arange step must be nonzero"));
+    }
+    let count = if step > 0 && start < end {
+        (i128::from(end) - i128::from(start) - 1) / i128::from(step) + 1
+    } else if step < 0 && start > end {
+        (i128::from(start) - i128::from(end) - 1) / -i128::from(step) + 1
+    } else {
+        0
+    };
+    let count = usize::try_from(count)
+        .map_err(|_| PyOverflowError::new_err("arange length exceeds platform limits"))?;
+    validate_allocation(&[count], DType::I64, &device)?;
     let values = DynInt::arange(start, end, step, &device, DType::I64).map_err(to_python_error)?;
     match dtype {
         "int64" if !requires_grad => Ok(PyTensor::from_int_inner(values)),

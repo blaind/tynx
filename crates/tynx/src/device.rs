@@ -52,6 +52,7 @@ mod probe {
     use super::record_device_error;
 
     static DEFAULT_DEVICE_USABLE: OnceLock<bool> = OnceLock::new();
+    static DEFAULT_BUFFER_SIZE_LIMIT: OnceLock<u64> = OnceLock::new();
     #[cfg(all(test, feature = "vulkan"))]
     static CONFIGURED_SETUP: OnceLock<burn::backend::wgpu::WgpuSetup> = OnceLock::new();
 
@@ -84,6 +85,12 @@ mod probe {
                 burn::backend::wgpu::graphics::AutoGraphicsApi,
             >(&device, Default::default());
 
+            let limits = setup.device.limits();
+            let buffer_size_limit = limits
+                .max_buffer_size
+                .min(limits.max_storage_buffer_binding_size);
+            let _ = DEFAULT_BUFFER_SIZE_LIMIT.set(buffer_size_limit);
+
             setup.device.on_uncaptured_error(Arc::new(|error| {
                 record_device_error(error.to_string());
                 log::error!("asynchronous wgpu device error: {error}");
@@ -92,6 +99,10 @@ mod probe {
             #[cfg(all(test, feature = "vulkan"))]
             let _ = CONFIGURED_SETUP.set(setup);
         });
+    }
+
+    pub(super) fn default_buffer_size_limit() -> Option<u64> {
+        DEFAULT_BUFFER_SIZE_LIMIT.get().copied()
     }
 
     #[cfg(all(test, feature = "vulkan"))]
@@ -145,6 +156,27 @@ pub fn default_device() -> burn::tensor::Device {
     burn::tensor::Device::default()
 }
 
+/// Return the maximum single storage allocation for the selected default GPU.
+///
+/// CPU devices and builds without the WGPU-backed default return `None`. This limit catches
+/// statically impossible allocations before CubeCL dispatch; it is not an estimate of currently
+/// available device memory.
+pub fn allocation_size_limit(device: &burn::tensor::Device) -> Option<u64> {
+    #[cfg(all(
+        any(feature = "wgpu", feature = "vulkan"),
+        feature = "flex",
+        not(target_family = "wasm")
+    ))]
+    {
+        let limit = probe::default_buffer_size_limit()?;
+        if device == &burn::tensor::Device::default() {
+            return Some(limit);
+        }
+    }
+    let _ = device;
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::{default_device, record_device_error, synchronize, take_device_error};
@@ -171,6 +203,17 @@ mod tests {
             Err(TynxError::AsynchronousDevice("Out of Memory".to_string()))
         );
         assert_eq!(take_device_error(), None);
+    }
+
+    #[cfg(all(feature = "vulkan", not(target_family = "wasm")))]
+    #[test]
+    fn allocation_limit_matches_configured_vulkan_storage_limits() {
+        let device = default_device();
+        let limits = super::probe::configured_setup().device.limits();
+        let expected = limits
+            .max_buffer_size
+            .min(limits.max_storage_buffer_binding_size);
+        assert_eq!(super::allocation_size_limit(&device), Some(expected));
     }
 
     #[cfg(all(feature = "vulkan", not(target_family = "wasm")))]
