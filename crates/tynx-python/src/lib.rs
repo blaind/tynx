@@ -12,7 +12,7 @@ mod parameter;
 mod random;
 mod tensor;
 
-pub use embedding::wrap_external_tensor;
+pub use embedding::{external_copy_source, wrap_external_tensor};
 
 use std::path::PathBuf;
 
