@@ -1,14 +1,12 @@
 """Authored convolution layers."""
 
 import math
-from typing import Union
 
 from ..._tynx import Parameter, Tensor, empty
+from .._utils import _IntOrPair, _pair
 from ..functional import conv2d
 from ..init import kaiming_uniform_, uniform_
 from .module import Module
-
-IntOrPair = Union[int, tuple[int, int]]
 
 
 class Conv2d(Module):
@@ -18,10 +16,10 @@ class Conv2d(Module):
         self,
         in_channels: int,
         out_channels: int,
-        kernel_size: IntOrPair,
-        stride: IntOrPair = 1,
-        padding: IntOrPair = 0,
-        dilation: IntOrPair = 1,
+        kernel_size: _IntOrPair,
+        stride: _IntOrPair = 1,
+        padding: _IntOrPair = 0,
+        dilation: _IntOrPair = 1,
         groups: int = 1,
         bias: bool = True,
         padding_mode: str = "zeros",
@@ -85,19 +83,6 @@ def _positive_int(value: int, name: str) -> int:
     if type(value) is not int or value <= 0:
         raise ValueError(f"{name} must be a positive integer, got {value!r}")
     return value
-
-
-def _pair(value: IntOrPair, name: str, *, positive: bool) -> tuple[int, int]:
-    pair = (value, value) if type(value) is int else value
-    minimum = 1 if positive else 0
-    if (
-        type(pair) is not tuple
-        or len(pair) != 2
-        or any(type(item) is not int or item < minimum for item in pair)
-    ):
-        qualifier = "positive" if positive else "non-negative"
-        raise ValueError(f"{name} must be an int or pair of {qualifier} integers, got {value!r}")
-    return pair
 
 
 __all__ = ["Conv2d"]
