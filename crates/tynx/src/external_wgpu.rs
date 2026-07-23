@@ -378,7 +378,9 @@ fn reclaim_unused_external<C: WgpuCompiler>(
     // Cleaning first leaves the just-submitted binding live until an unrelated later cleanup.
     crate::synchronize(device)?;
     WgpuRuntime::<C>::client(runtime_device).memory_cleanup();
-    Ok(())
+    // Process the allocator release queued by cleanup so external owners observe reclamation
+    // before this explicit transaction boundary returns.
+    crate::synchronize(device)
 }
 
 fn existing_device_kind(device: &WgpuDevice) -> Result<DeviceKind> {
