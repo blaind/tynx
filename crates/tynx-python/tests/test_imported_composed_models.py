@@ -4,6 +4,20 @@ from pathlib import Path
 
 import tynx
 
+_CNN_MODEL = bytes.fromhex(
+    "080a120a74796e782d74657374733aa0030a4d0a06696d616765730a0b636f6e762e776569"
+    "6768740a09636f6e762e626961731208636f6e762e6f75741a04636f6e762204436f6e762a"
+    "150a0c6b65726e656c5f736861706540014001a001070a200a08636f6e762e6f7574120872"
+    "656c752e6f75741a0472656c75220452656c750a330a0872656c752e6f7574120866656174"
+    "757265731a07666c617474656e2207466c617474656e2a0b0a04617869731801a001020a3a"
+    "0a0866656174757265730a0b686561642e7765696768740a09686561642e62696173120a70"
+    "726564696374696f6e1a0468656164220447656d6d12086d696e695f636e6e2a1d08010801"
+    "080108011001420b636f6e762e7765696768744a040000003f2a15080110014209636f6e76"
+    "2e626961734a04cdcccc3d2a25080408011001420b686561642e7765696768744a10000080"
+    "3e000000bf0000403fcdcccc3d2a15080110014209686561642e626961734a04000000005a"
+    "200a06696d6167657312160a14080112100a0208010a0208010a0208020a020802621c0a0a"
+    "70726564696374696f6e120e0a0c080112080a0208010a02080142040a001012"
+)
 _RECOMMENDER_MODEL = bytes.fromhex(
     "08083aaa020a400a10656d62656464696e672e7765696768740a036964731207766563746f72"
     "731a09656d62656464696e6722064761746865722a0b0a04617869731800a001020a350a0776"
@@ -59,6 +73,30 @@ def _train(
         optimizer.step()
     final = tynx.nn.functional.mse_loss(model(input), target).item()
     return initial, final
+
+
+def test_imported_cnn_converges_through_convolution_and_dense_head(tmp_path: Path) -> None:
+    path = tmp_path / "cnn.onnx"
+    path.write_bytes(_CNN_MODEL)
+    model = tynx.load(path, trainable="auto", simplify=False)
+    report = model.require_trainable()
+
+    initial, final = _train(
+        model,
+        tynx.Tensor([[[[1.0, 2.0], [3.0, 4.0]]]]),
+        tynx.Tensor([[1.5]]),
+        steps=80,
+    )
+
+    assert report.warnings == []
+    assert sorted(report.trainable_parameters) == [
+        "conv.bias",
+        "conv.weight",
+        "head.bias",
+        "head.weight",
+    ]
+    assert final < initial * 1e-3
+    assert all(parameter.grad is not None for _, parameter in model.named_parameters())
 
 
 def test_imported_recommender_trains_embedding_and_dense_head(tmp_path: Path) -> None:
