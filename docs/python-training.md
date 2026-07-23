@@ -19,6 +19,13 @@ device work internally; that does not change Python-visible eager semantics.
 | Imported ONNX | Multi-input/output calls, stable trainable initializer slots, user-composed losses, structured trainability reports, and shared authored/imported optimizer loops |
 | Capture | Exact-signature forward or whole-step replay, structured outputs, stable parameter slots, backward/optimizer effects, imported model calls, and advancing Dropout/Categorical/Normal RNG |
 
+NumPy inputs normalize common host-default dtypes at the boundary: `float64` is deterministically
+narrowed to `float32`, while `int32` is losslessly widened to `int64`. Passing the corresponding
+explicit `dtype="float32"` or `dtype="int64"` is accepted; contradictory or unsupported explicit
+dtypes raise instead of silently selecting another representation. The implicit floating-point
+conversion uses ordinary IEEE narrowing, so values may round and finite values outside the
+`float32` range may overflow.
+
 The checked-in [examples](../examples/README.md) cover authored eager training, imported ONNX
 fine-tuning, and a captured imported PPO update.
 
