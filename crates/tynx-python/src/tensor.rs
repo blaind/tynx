@@ -937,7 +937,10 @@ impl PyTensor {
             .unbind())
     }
 
-    /// Construct a typed tensor from a scalar or rectangular nested list/tuple.
+    /// Construct a typed tensor from Python or NumPy data.
+    ///
+    /// NumPy float64 input narrows to float32 and NumPy int32 input widens to int64.
+    /// Explicit incompatible dtype requests raise instead of being normalized.
     #[new]
     #[pyo3(signature = (data, *, dtype=None, device=None, requires_grad=false))]
     fn new(

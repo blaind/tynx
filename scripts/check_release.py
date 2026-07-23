@@ -23,6 +23,7 @@ BUILD_PATHS = (
 )
 MAX_MANYLINUX = (2, 28)
 MANYLINUX_TAG = re.compile(r"manylinux_(\d+)_(\d+)")
+REQUIRED_LICENSES = {"LICENSE-APACHE", "LICENSE-MIT"}
 
 
 def workspace_version() -> str:
@@ -91,6 +92,16 @@ def check_wheels(wheels: list[Path], expected: str, max_mib: int) -> None:
             )
 
         with zipfile.ZipFile(wheel) as archive:
+            licenses = {
+                Path(name).name
+                for name in archive.namelist()
+                if ".dist-info/licenses/" in name
+            }
+            missing_licenses = REQUIRED_LICENSES - licenses
+            if missing_licenses:
+                raise SystemExit(
+                    f"{wheel}: wheel is missing license files {sorted(missing_licenses)}"
+                )
             for name in archive.namelist():
                 if not name.endswith((".so", ".pyd", ".dylib")):
                     continue
