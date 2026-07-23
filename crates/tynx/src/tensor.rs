@@ -6,12 +6,14 @@
 //! these methods. Keeping the numerical implementation here prevents eager and imported models
 //! from developing separate semantics.
 
+#[cfg(feature = "training")]
+use burn::tensor::module::embedding as burn_embedding;
 use burn::tensor::{
     Bool, DType, Device, Distribution, IndexingUpdateOp, Int, Slice, Tensor, TensorData,
     activation,
     module::{
         adaptive_avg_pool2d as burn_adaptive_avg_pool2d, avg_pool2d as burn_avg_pool2d,
-        conv2d as burn_conv2d, embedding as burn_embedding, max_pool2d as burn_max_pool2d,
+        conv2d as burn_conv2d, max_pool2d as burn_max_pool2d,
     },
     ops::PaddedConvOptions,
 };

@@ -58,6 +58,10 @@ pub enum TynxError {
     #[error("device synchronization failed: {0}")]
     DeviceSynchronization(String),
 
+    /// An external tensor capability, descriptor, or lifecycle contract was invalid.
+    #[error("external tensor error: {0}")]
+    ExternalTensor(String),
+
     /// A value had an unexpected type.
     #[error("type mismatch: {0}")]
     TypeMismatch(String),

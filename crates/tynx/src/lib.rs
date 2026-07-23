@@ -2,6 +2,7 @@
 
 mod device;
 mod error;
+mod external;
 mod initializer;
 mod interpreter;
 mod session;
@@ -10,6 +11,11 @@ mod value;
 
 pub use device::{default_device, synchronize, take_device_error};
 pub use error::{Result, TynxError};
+pub use external::{
+    AcquiredExternalTensorDescriptor, DeviceContextCapability, ExternalAccess, ExternalBufferLease,
+    ExternalBufferUsage, ExternalSubmission, ExternalTensorDescriptor, ExternalTensorRetention,
+    SubmissionToken, ValidatedExternalTensorDescriptor,
+};
 pub use initializer::InitializerId;
 pub use interpreter::binary::prelu_values as execute_onnx_prelu;
 pub use interpreter::convolution::{
