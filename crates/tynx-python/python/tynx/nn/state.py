@@ -77,6 +77,8 @@ def _prepare_state_dict_load(
     strict: bool,
 ) -> tuple[dict[str, _StateValue], dict[str, Tensor], LoadStateResult]:
     """Validate a state load and detach every source before publishing any value."""
+    if not isinstance(state_dict, Mapping):
+        raise TypeError(f"state_dict must be a mapping, got {type(state_dict).__qualname__}")
     if type(strict) is not bool:
         raise TypeError(f"strict must be a bool, got {type(strict).__qualname__}")
     current = _named_state(obj)
