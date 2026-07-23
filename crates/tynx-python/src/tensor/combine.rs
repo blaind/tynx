@@ -8,7 +8,7 @@ use pyo3::{
 use tynx_core::{DynBool, DynInt, DynTensor};
 
 use super::{PyTensor, data::TensorValue, shape};
-use crate::{grad_mode::is_grad_enabled, to_python_error};
+use crate::{capture::record_combine, grad_mode::is_grad_enabled, to_python_error};
 
 fn tensor_refs<'py>(
     values: &Bound<'py, PyAny>,
@@ -41,9 +41,6 @@ fn tensor_refs<'py>(
 fn combine(values: &Bound<'_, PyAny>, dim: isize, stack: bool) -> PyResult<PyTensor> {
     let operation = if stack { "stack" } else { "cat" };
     let tensors = tensor_refs(values, operation)?;
-    for tensor in &tensors {
-        tensor.capture_unsupported(operation)?;
-    }
     let first = tensors[0].source.value();
     if tensors
         .iter()
@@ -57,7 +54,7 @@ fn combine(values: &Bound<'_, PyAny>, dim: isize, stack: bool) -> PyResult<PyTen
     let axis = shape::axis_value(dim, first.rank(), stack, operation)?;
     let tracking = is_grad_enabled();
     let sources = tensors.iter().map(|tensor| &**tensor).collect::<Vec<_>>();
-    match first {
+    let result = match first {
         TensorValue::Float(_) => {
             let inputs = tensors
                 .iter()
@@ -69,11 +66,11 @@ fn combine(values: &Bound<'_, PyAny>, dim: isize, stack: bool) -> PyResult<PyTen
                 DynTensor::concat(inputs, axis)
             }
             .map_err(to_python_error)?;
-            Ok(if tracking {
+            if tracking {
                 PyTensor::from_operation(output, &sources)
             } else {
                 PyTensor::from_inner(output)
-            })
+            }
         }
         TensorValue::Int(_) => {
             let inputs = tensors
@@ -92,7 +89,7 @@ fn combine(values: &Bound<'_, PyAny>, dim: isize, stack: bool) -> PyResult<PyTen
                 DynInt::concat(inputs, axis)
             }
             .map_err(to_python_error)?;
-            Ok(PyTensor::from_int_inner(output))
+            PyTensor::from_int_inner(output)
         }
         TensorValue::Bool(_) => {
             let inputs = tensors
@@ -111,9 +108,14 @@ fn combine(values: &Bound<'_, PyAny>, dim: isize, stack: bool) -> PyResult<PyTen
                 DynBool::concat(inputs, axis)
             }
             .map_err(to_python_error)?;
-            Ok(PyTensor::from_value(TensorValue::Bool(output)))
+            PyTensor::from_value(TensorValue::Bool(output))
         }
-    }
+    };
+    let trace = record_combine(&sources, axis, stack)?;
+    Ok(match trace {
+        Some(trace) => result.with_trace(trace),
+        None => result,
+    })
 }
 
 #[pyfunction(name = "cat")]

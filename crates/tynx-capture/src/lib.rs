@@ -293,6 +293,11 @@ enum Node {
         dilation: [usize; 2],
         groups: usize,
     },
+    Combine {
+        inputs: Vec<ValueId>,
+        dim: usize,
+        stack: bool,
+    },
     Operation {
         operation: Rc<dyn CapturedOperation>,
         inputs: Vec<ValueId>,
@@ -480,6 +485,19 @@ impl GraphBuilder {
         }))
     }
 
+    /// Record concatenation or stacking of a non-empty tensor sequence.
+    pub fn combine(&mut self, inputs: Vec<ValueId>, dim: usize, stack: bool) -> Result<ValueId> {
+        if inputs.is_empty() {
+            return Err(TynxError::TypeMismatch(
+                "captured tensor combination requires at least one input".to_string(),
+            ));
+        }
+        for input in &inputs {
+            self.require_value(*input)?;
+        }
+        Ok(self.push(Node::Combine { inputs, dim, stack }))
+    }
+
     /// Record one native multi-input/multi-output operation.
     pub fn operation(
         &mut self,
@@ -604,6 +622,9 @@ fn node_differentiability(nodes: &[Node]) -> Vec<bool> {
                 differentiable[input.index()]
                     || differentiable[weight.index()]
                     || bias.is_some_and(|bias| differentiable[bias.index()])
+            }
+            Node::Combine { inputs, .. } => {
+                inputs.iter().any(|input| differentiable[input.index()])
             }
             Node::Operation { inputs, guards, .. } => {
                 inputs.iter().any(|input| differentiable[input.index()])
@@ -743,6 +764,13 @@ impl Graph {
                         *dilation,
                         *groups,
                     )?)),
+                    Node::Combine { inputs, dim, stack } => {
+                        let inputs = inputs
+                            .iter()
+                            .map(|input| value(&values, *input))
+                            .collect::<Result<Vec<_>>>()?;
+                        NodeValue::Tensor(Box::new(execute_combine(inputs, *dim, *stack)?))
+                    }
                     Node::Operation {
                         operation,
                         inputs,
@@ -1153,4 +1181,51 @@ fn execute_conv2d(
             groups,
         )
         .map(Value::Tensor)
+}
+
+fn execute_combine(inputs: Vec<Value>, dim: usize, stack: bool) -> Result<Value> {
+    match inputs.first() {
+        Some(Value::Tensor(_)) => {
+            let inputs = inputs
+                .into_iter()
+                .map(Value::into_tensor)
+                .collect::<Result<Vec<_>>>()?;
+            if stack {
+                DynTensor::stack(inputs, dim)
+            } else {
+                DynTensor::concat(inputs, dim)
+            }
+            .map(Value::Tensor)
+        }
+        Some(Value::Int(_)) => {
+            let inputs = inputs
+                .into_iter()
+                .map(Value::into_int)
+                .collect::<Result<Vec<_>>>()?;
+            if stack {
+                tynx_core::DynInt::stack(inputs, dim)
+            } else {
+                tynx_core::DynInt::concat(inputs, dim)
+            }
+            .map(Value::Int)
+        }
+        Some(Value::Bool(_)) => {
+            let inputs = inputs
+                .into_iter()
+                .map(Value::into_bool)
+                .collect::<Result<Vec<_>>>()?;
+            if stack {
+                tynx_core::DynBool::stack(inputs, dim)
+            } else {
+                tynx_core::DynBool::concat(inputs, dim)
+            }
+            .map(Value::Bool)
+        }
+        Some(Value::Scalar(_) | Value::Shape(_)) => Err(TynxError::TypeMismatch(
+            "captured tensor combination requires device tensors".to_string(),
+        )),
+        None => Err(TynxError::TypeMismatch(
+            "captured tensor combination requires at least one input".to_string(),
+        )),
+    }
 }

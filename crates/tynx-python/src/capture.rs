@@ -165,6 +165,10 @@ impl CaptureState {
         })
     }
 
+    fn combine(&self, inputs: Vec<ValueId>, dim: usize, stack: bool) -> PyResult<ValueId> {
+        self.with_builder(|builder| builder.combine(inputs, dim, stack).map_err(to_python_error))
+    }
+
     fn operation(
         &self,
         operation: Rc<dyn CapturedOperation>,
@@ -463,38 +467,14 @@ pub(crate) fn record_conv2d(
     dilation: [usize; 2],
     groups: usize,
 ) -> PyResult<Option<TraceValue>> {
-    let tensors = [Some(input), Some(weight), bias]
+    let inputs = [Some(input), Some(weight), bias]
         .into_iter()
         .flatten()
         .collect::<Vec<_>>();
-    let traces = tensors
-        .iter()
-        .map(|tensor| trace_for(tensor))
-        .collect::<PyResult<Vec<_>>>()?;
-    let Some(state) = traces
-        .iter()
-        .flatten()
-        .next()
-        .map(|trace| trace.state.clone())
-    else {
+    let Some((state, values)) = traced_inputs(&inputs)? else {
         return Ok(None);
     };
-    if traces.iter().any(Option::is_none) {
-        state
-            .unsupported("a closed-over Tensor value; pass changing tensors as function inputs")?;
-        return Ok(None);
-    }
-    if traces
-        .iter()
-        .flatten()
-        .any(|trace| !Rc::ptr_eq(&state, &trace.state))
-    {
-        state.unsupported("tensors from different capture sessions")?;
-        return Ok(None);
-    }
-    let mut values = traces
-        .into_iter()
-        .map(|trace| trace.expect("all convolution inputs were traced").value);
+    let mut values = values.into_iter();
     let input = values.next().expect("convolution input was traced");
     let weight = values.next().expect("convolution weight was traced");
     let bias = bias.and_then(|_| values.next());
@@ -503,10 +483,39 @@ pub(crate) fn record_conv2d(
         .map(|value| Some(TraceValue { state, value }))
 }
 
+pub(crate) fn record_combine(
+    inputs: &[&PyTensor],
+    dim: usize,
+    stack: bool,
+) -> PyResult<Option<TraceValue>> {
+    let Some((state, inputs)) = traced_inputs(inputs)? else {
+        return Ok(None);
+    };
+    state
+        .combine(inputs, dim, stack)
+        .map(|value| Some(TraceValue { state, value }))
+}
+
 pub(crate) fn record_operation(
     inputs: &[&PyTensor],
     operation: Rc<dyn CapturedOperation>,
 ) -> PyResult<Option<Vec<TraceValue>>> {
+    let Some((state, inputs)) = traced_inputs(inputs)? else {
+        return Ok(None);
+    };
+    let outputs = state.operation(operation, inputs)?;
+    Ok(Some(
+        outputs
+            .into_iter()
+            .map(|value| TraceValue {
+                state: state.clone(),
+                value,
+            })
+            .collect(),
+    ))
+}
+
+fn traced_inputs(inputs: &[&PyTensor]) -> PyResult<Option<(Rc<CaptureState>, Vec<ValueId>)>> {
     let traces = inputs
         .iter()
         .map(|input| trace_for(input))
@@ -532,20 +541,11 @@ pub(crate) fn record_operation(
         state.unsupported("tensors from different capture sessions")?;
         return Ok(None);
     }
-    let inputs = traces
+    let values = traces
         .into_iter()
         .map(|trace| trace.expect("all operation inputs were traced").value)
         .collect();
-    let outputs = state.operation(operation, inputs)?;
-    Ok(Some(
-        outputs
-            .into_iter()
-            .map(|value| TraceValue {
-                state: state.clone(),
-                value,
-            })
-            .collect(),
-    ))
+    Ok(Some((state, values)))
 }
 
 /// Native first-call trace session used by the public Python decorator.
