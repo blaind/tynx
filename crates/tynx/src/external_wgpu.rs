@@ -359,6 +359,48 @@ mod tests {
         }
     }
 
+    fn executing_setup() -> Option<WgpuSetup> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::VULKAN | wgpu::Backends::GL,
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::LowPower,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+            ..Default::default()
+        }))
+        .ok()?;
+        let (device, queue) = pollster::block_on(
+            adapter.request_device(&wgpu::DeviceDescriptor {
+                label: Some("Tynx external WGPU execution test"),
+                required_features: adapter
+                    .features()
+                    .difference(wgpu::Features::MAPPABLE_PRIMARY_BUFFERS),
+                required_limits: adapter.limits(),
+                memory_hints: wgpu::MemoryHints::MemoryUsage,
+                trace: wgpu::Trace::Off,
+                experimental_features: wgpu::ExperimentalFeatures::disabled(),
+            }),
+        )
+        .ok()?;
+        let backend = adapter.get_info().backend;
+        Some(WgpuSetup {
+            instance,
+            adapter,
+            device,
+            queue,
+            backend,
+        })
+    }
+
+    fn f32_bytes(values: &[f32]) -> Vec<u8> {
+        values
+            .iter()
+            .flat_map(|value| value.to_ne_bytes())
+            .collect()
+    }
+
     fn descriptor(
         context: &ExternalWgpuContext,
         buffer: wgpu::Buffer,
@@ -411,6 +453,20 @@ mod tests {
         )
     }
 
+    fn executing_context_and_buffer() -> Option<(ExternalWgpuContext, wgpu::Buffer, wgpu::Queue)> {
+        let setup = executing_setup()?;
+        let queue = setup.queue.clone();
+        let buffer = setup.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Tynx external execution test"),
+            size: 256,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let context =
+            ExternalWgpuContext::from_wgpu_setup(setup, RuntimeOptions::default()).unwrap();
+        Some((context, buffer, queue))
+    }
+
     #[test]
     fn adopts_the_original_buffer_and_retains_its_logical_owner() {
         let (context, buffer) = context_and_buffer();
@@ -432,6 +488,29 @@ mod tests {
         assert_eq!(resource.resource().buffer, buffer);
         assert_eq!(resource.resource().offset, 0);
         assert_eq!(resource.resource().size, 16);
+    }
+
+    #[test]
+    fn executes_a_reduction_over_the_original_buffer_contents() {
+        let Some((context, buffer, queue)) = executing_context_and_buffer() else {
+            eprintln!("skipping external WGPU execution test: no executing adapter");
+            return;
+        };
+        queue.write_buffer(&buffer, 0, &f32_bytes(&[1.0, 2.0, 3.0, 4.0]));
+        let (descriptor, _, _, calls) = descriptor(&context, buffer);
+
+        let mean = context
+            .adopt_f32(descriptor)
+            .unwrap()
+            .mean_dims(&[0])
+            .reshape(vec![1])
+            .unwrap()
+            .into_data()
+            .iter::<f32>()
+            .collect::<Vec<_>>();
+
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(mean, [2.5]);
     }
 
     #[cfg(feature = "training")]

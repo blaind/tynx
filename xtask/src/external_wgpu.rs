@@ -108,6 +108,8 @@ pub(crate) fn run(mut args: impl Iterator<Item = String>) -> Result<(), String> 
                     "--features",
                     "external-wgpu,flex,training,wgpu",
                     "external_wgpu",
+                    "--",
+                    "--test-threads=1",
                 ],
             )?;
             cargo(
