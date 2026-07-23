@@ -808,3 +808,17 @@ def test_compile_descriptor_fallback_is_isolated_per_instance() -> None:
     assert eager.forward.fallback_count == 1
     assert captured.forward.compile_count == 1
     assert captured.forward.replay_count == 1
+
+
+def test_compile_replays_empty_matmul_sum_identity() -> None:
+    @tynx.compile(fullgraph=True)
+    def reduce_product(left: tynx.Tensor, right: tynx.Tensor) -> tynx.Tensor:
+        return (left @ right).sum()
+
+    left = tynx.zeros(0, 3)
+    right = tynx.ones(3, 4)
+
+    assert reduce_product(left, right).item() == 0.0
+    assert reduce_product(left, right).item() == 0.0
+    assert reduce_product.graph_count == 1
+    assert reduce_product.replay_count == 1

@@ -61,7 +61,11 @@ fn broadcast_shape(left: &[usize], right: &[usize]) -> Result<Vec<usize>> {
                 "cannot broadcast shapes {left:?} and {right:?}: dimensions {left_dim} and {right_dim} conflict at axis {axis}"
             )));
         }
-        output.push(left_dim.max(right_dim));
+        output.push(if left_dim == right_dim || right_dim == 1 {
+            left_dim
+        } else {
+            right_dim
+        });
     }
 
     output.reverse();
@@ -87,6 +91,22 @@ fn validate_matmul_shapes(left: &[usize], right: &[usize]) -> Result<()> {
 
     broadcast_shape(&left[..left.len() - 2], &right[..right.len() - 2])?;
     Ok(())
+}
+
+fn pad_zero_axes(mut tensor: DynTensor) -> Result<DynTensor> {
+    let zero_axes = tensor
+        .dims()
+        .iter()
+        .enumerate()
+        .filter_map(|(axis, &size)| (size == 0).then_some(axis))
+        .collect::<Vec<_>>();
+    for axis in zero_axes {
+        let mut padding_dims = tensor.dims();
+        padding_dims[axis] = 1;
+        let padding = DynTensor::full(&padding_dims, 0.0, &tensor.device(), tensor.dtype())?;
+        tensor = DynTensor::concat(vec![tensor, padding], axis)?;
+    }
+    Ok(tensor)
 }
 
 fn validate_pool2d(
@@ -1694,7 +1714,27 @@ impl DynTensor {
     /// Multiply matrices or batches of matrices with matching runtime ranks.
     pub fn matmul(self, other: Self) -> Result<Self> {
         ensure_same_device("matmul", &self.device(), &other.device())?;
-        validate_matmul_shapes(&self.dims(), &other.dims())?;
+        let left_dims = self.dims();
+        let right_dims = other.dims();
+        validate_matmul_shapes(&left_dims, &right_dims)?;
+        if left_dims.contains(&0) || right_dims.contains(&0) {
+            let mut output_dims = broadcast_shape(
+                &left_dims[..left_dims.len() - 2],
+                &right_dims[..right_dims.len() - 2],
+            )?;
+            output_dims.extend([
+                left_dims[left_dims.len() - 2],
+                right_dims[right_dims.len() - 1],
+            ]);
+            let left = pad_zero_axes(self)?;
+            let right = pad_zero_axes(other)?;
+            let output = left.matmul(right)?;
+            let slices = output_dims
+                .into_iter()
+                .map(|end| Slice::new(0, Some(end as isize), 1))
+                .collect::<Vec<_>>();
+            return Ok(output.slice(&slices));
+        }
         Ok(match (self, other) {
             (Self::R2(left), Self::R2(right)) => Self::R2(left.matmul(right)),
             (Self::R3(left), Self::R3(right)) => Self::R3(left.matmul(right)),
@@ -1712,7 +1752,35 @@ impl DynTensor {
     }
 
     /// Sum elements along dimensions while retaining singleton dimensions.
-    pub fn sum_dims(self, dims: &[usize]) -> Self {
+    pub fn sum_dims(mut self, dims: &[usize]) -> Self {
+        let input_dims = self.dims();
+        if !input_dims.contains(&0) {
+            return map_float!(self, |tensor| tensor.sum_dims(dims));
+        }
+
+        let mut output_dims = input_dims.clone();
+        for &dim in dims {
+            output_dims[dim] = 1;
+        }
+        if output_dims.contains(&0) {
+            return self
+                .reshape(output_dims)
+                .expect("empty sum output has the same zero element count");
+        }
+
+        for axis in input_dims
+            .iter()
+            .enumerate()
+            .filter_map(|(axis, &size)| (size == 0).then_some(axis))
+        {
+            let current_dims = self.dims();
+            let mut padding_dims = current_dims.clone();
+            padding_dims[axis] = 1;
+            let padding = Self::full(&padding_dims, 0.0, &self.device(), self.dtype())
+                .expect("empty sum padding preserves a supported rank and dtype");
+            self = Self::concat(vec![self, padding], axis)
+                .expect("empty sum padding is concatenation-compatible");
+        }
         map_float!(self, |tensor| tensor.sum_dims(dims))
     }
 
