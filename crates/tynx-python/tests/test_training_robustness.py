@@ -20,6 +20,7 @@ def test_conv2d_input_gradient_matches_central_finite_difference() -> None:
     weight = tynx.Tensor([[[[0.5, -0.25], [0.75, 0.1]]]])
 
     tynx.nn.functional.conv2d(input, weight).sum().backward()
+    tynx.synchronize(input.device)
 
     assert input.grad is not None
     epsilon = 1e-3
@@ -27,7 +28,9 @@ def test_conv2d_input_gradient_matches_central_finite_difference() -> None:
     def evaluate(first: float) -> float:
         candidate = [first, *values[1:]]
         tensor = tynx.Tensor([[[candidate[:2], candidate[2:]]]])
-        return tynx.nn.functional.conv2d(tensor, weight).sum().item()
+        output = tynx.nn.functional.conv2d(tensor, weight).sum()
+        tynx.synchronize(output.device)
+        return output.item()
 
     numerical = (evaluate(values[0] + epsilon) - evaluate(values[0] - epsilon)) / (2 * epsilon)
     assert input.grad.flatten().tolist()[0] == pytest.approx(numerical, rel=2e-3, abs=2e-3)
@@ -40,13 +43,16 @@ def test_layer_norm_input_gradient_matches_central_finite_difference() -> None:
     input = tynx.Tensor([values], requires_grad=True)
 
     (layer(input) * coefficients).sum().backward()
+    tynx.synchronize(input.device)
 
     assert input.grad is not None
     epsilon = 1e-3
 
     def evaluate(middle: float) -> float:
         candidate = tynx.Tensor([[values[0], middle, values[2]]])
-        return (layer(candidate) * coefficients).sum().item()
+        output = (layer(candidate) * coefficients).sum()
+        tynx.synchronize(output.device)
+        return output.item()
 
     numerical = (evaluate(values[1] + epsilon) - evaluate(values[1] - epsilon)) / (2 * epsilon)
     assert input.grad.flatten().tolist()[1] == pytest.approx(numerical, rel=3e-3, abs=3e-3)
@@ -94,6 +100,32 @@ def test_imported_output_retains_parameter_tape_after_model_drop(tmp_path: Path)
     assert parameters["weight"].grad.flatten().tolist() == pytest.approx([1.0])
     assert parameters["bias"].grad is not None
     assert parameters["bias"].grad.tolist() == pytest.approx([2.0])
+
+
+def test_captured_output_retains_parameter_tape_after_wrapper_drop() -> None:
+    layer = tynx.nn.Embedding(3, 2, padding_idx=0)
+    layer.weight.copy_(tynx.Tensor([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]))
+    weight = layer.weight
+
+    @tynx.compile(fullgraph=True)
+    def lookup(indices: tynx.Tensor) -> tynx.Tensor:
+        return layer(indices)
+
+    indices = tynx.Tensor([0, 2, 2, 1], dtype="int64")
+    lookup(indices)
+    output = lookup(indices)
+    loss = output.sum()
+    assert lookup.replay_count == 1
+
+    del output
+    del lookup
+    gc.collect()
+    tynx.synchronize(weight.device)
+    loss.backward()
+    tynx.synchronize(weight.device)
+
+    assert weight.grad is not None
+    assert weight.grad.tolist() == [[0.0, 0.0], [1.0, 1.0], [2.0, 2.0]]
 
 
 def test_multiple_forwards_share_one_parameter_generation_until_step() -> None:
@@ -157,3 +189,9 @@ def test_failed_backward_and_native_shape_errors_do_not_corrupt_gradients() -> N
             tynx.Tensor([[[[1.0]], [[2.0]]]]),
             tynx.Tensor([[[[1.0]]]]),
         )
+
+    recovered = (value * value).sum()
+    recovered.backward()
+    tynx.synchronize(value.device)
+    assert value.grad is not None
+    assert value.grad.tolist() == [8.0]

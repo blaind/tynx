@@ -180,6 +180,29 @@ def test_accelerated_tape_survives_intermediate_drop_and_optimizer_step() -> Non
     assert updated.item() == pytest.approx(0.0, abs=1e-5)
 
 
+def test_accelerated_conv2d_gradient_matches_central_finite_difference() -> None:
+    device = _accelerated_device()
+    values = [0.2, -0.4, 0.7, 1.1]
+    input = tynx.Tensor([[[values[:2], values[2:]]]], requires_grad=True)
+    weight = tynx.Tensor([[[[0.5, -0.25], [0.75, 0.1]]]])
+
+    tynx.nn.functional.conv2d(input, weight).sum().backward()
+    tynx.synchronize(device)
+    assert input.grad is not None
+    analytical = input.grad.flatten().tolist()[0]
+    epsilon = 1e-3
+
+    def evaluate(first: float) -> float:
+        candidate = [first, *values[1:]]
+        tensor = tynx.Tensor([[[candidate[:2], candidate[2:]]]])
+        output = tynx.nn.functional.conv2d(tensor, weight).sum()
+        tynx.synchronize(device)
+        return output.item()
+
+    numerical = (evaluate(values[0] + epsilon) - evaluate(values[0] - epsilon)) / (2 * epsilon)
+    assert analytical == pytest.approx(numerical, rel=2e-3, abs=2e-3)
+
+
 def test_accelerated_embedding_accumulates_repeated_index_gradients() -> None:
     device = _accelerated_device()
     layer = tynx.nn.Embedding(4, 2, padding_idx=0)
@@ -195,6 +218,49 @@ def test_accelerated_embedding_accumulates_repeated_index_gradients() -> None:
     assert layer.weight.grad.flatten().tolist() == pytest.approx(
         [0.0, 0.0, 1.0, 1.0, 2.0, 2.0, 0.0, 0.0]
     )
+
+
+def test_accelerated_captured_output_retains_tape_after_wrapper_drop() -> None:
+    device = _accelerated_device()
+    layer = tynx.nn.Embedding(3, 2, padding_idx=0)
+    layer.weight.copy_(tynx.Tensor([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]))
+    weight = layer.weight
+
+    @tynx.compile(fullgraph=True)
+    def lookup(indices: tynx.Tensor) -> tynx.Tensor:
+        return layer(indices)
+
+    indices = tynx.Tensor([0, 2, 2, 1], dtype="int64")
+    lookup(indices)
+    output = lookup(indices)
+    loss = output.sum()
+    assert lookup.replay_count == 1
+
+    del output
+    del lookup
+    gc.collect()
+    tynx.synchronize(device)
+    loss.backward()
+    tynx.synchronize(device)
+
+    assert weight.grad is not None
+    assert weight.grad.flatten().tolist() == pytest.approx([0.0, 0.0, 1.0, 1.0, 2.0, 2.0])
+
+
+def test_accelerated_recovers_after_rejected_index_and_synchronizes() -> None:
+    device = _accelerated_device()
+    value = tynx.Parameter([[1.0, 2.0], [3.0, 4.0]])
+
+    with pytest.raises(IndexError, match="out of bounds"):
+        value[tynx.Tensor([2], dtype="int64")]
+
+    selected = value[tynx.Tensor([1], dtype="int64")]
+    selected.sum().backward()
+    tynx.synchronize(device)
+
+    assert selected.tolist() == [[3.0, 4.0]]
+    assert value.grad is not None
+    assert value.grad.tolist() == [[0.0, 0.0], [1.0, 1.0]]
 
 
 def test_accelerated_imported_gather_layer_norm_and_batched_matmul(
