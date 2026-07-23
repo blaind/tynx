@@ -1,7 +1,22 @@
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 import tynx
+
+
+def test_compile_cross_thread_use_raises_catchable_runtime_error() -> None:
+    compiled = tynx.compile(lambda input: input.relu())
+    input = tynx.Tensor([-1.0, 2.0])
+    assert compiled(input).tolist() == pytest.approx([0.0, 2.0])
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(compiled, input)
+        with pytest.raises(RuntimeError, match=r"thread-confined.*separate compiled function"):
+            future.result()
+
+    assert compiled(input).tolist() == pytest.approx([0.0, 2.0])
+    assert compiled.replay_count == 1
 
 
 def test_compile_replays_linear_relu_without_python_dispatch() -> None:

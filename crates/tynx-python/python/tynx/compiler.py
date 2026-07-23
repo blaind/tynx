@@ -10,6 +10,7 @@ from inspect import BoundArguments as _BoundArguments
 from inspect import Parameter as _Parameter
 from inspect import Signature as _Signature
 from inspect import signature as _signature
+from threading import get_ident as _get_ident
 from types import MethodType as _MethodType
 from typing import Any as _Any
 from typing import Generic as _Generic
@@ -52,6 +53,7 @@ class CompiledFunction(_Generic[R]):
         if not callable(function):
             raise TypeError(f"compile expected a callable, got {type(function).__qualname__}")
         self._function = function
+        self._owner_thread = _get_ident()
         self._signature = _signature(function)
         self._fullgraph = fullgraph
         self._static_argnames = _validate_static_argnames(self._signature, static_argnames)
@@ -106,15 +108,18 @@ class CompiledFunction(_Generic[R]):
     @property
     def graph_count(self) -> int:
         """Number of exact-signature native graphs in the cache."""
+        self._require_owner_thread("inspect its graph cache")
         return len(self._graphs)
 
     @property
     def node_counts(self) -> tuple[int, ...]:
         """Recorded IR node count for each cached graph."""
+        self._require_owner_thread("inspect its captured graphs")
         return tuple(graph.node_count for _, graph, _, _ in self._graphs)
 
     def clear_cache(self) -> None:
         """Discard captured graphs and retry capture on the next compatible call."""
+        self._require_owner_thread("clear its graph cache")
         self._graphs.clear()
         for bound in self._bound_instances.values():
             bound.clear_cache()
@@ -123,6 +128,7 @@ class CompiledFunction(_Generic[R]):
         self.last_fallback_reason = None
 
     def __call__(self, *args: object, **kwargs: object) -> R:
+        self._require_owner_thread("run")
         if self._fallback:
             self.fallback_count += 1
             return self._function(*args, **kwargs)
@@ -196,6 +202,16 @@ class CompiledFunction(_Generic[R]):
         self._graphs.append((static_key, captured_graph, output_spec, module_guard))
         self.compile_count += 1
         return _cast(R, released_output)
+
+    def _require_owner_thread(self, operation: str) -> None:
+        current = _get_ident()
+        if current != self._owner_thread:
+            raise RuntimeError(
+                "tynx.compile objects are thread-confined and cannot "
+                f"{operation} on thread {current}; the object was created on thread "
+                f"{self._owner_thread}. Create and use a separate compiled function in each "
+                "worker thread, and pass NumPy arrays between threads instead of Tynx tensors."
+            )
 
     def _prepare_call(
         self, bound: _BoundArguments
