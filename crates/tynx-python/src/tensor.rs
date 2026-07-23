@@ -342,16 +342,20 @@ impl PyTensor {
                     targets.push(target.for_operation());
                 }
             }
-            for graph in &source.backward_graphs {
-                if !backward_graphs
-                    .iter()
-                    .any(|existing| Rc::ptr_eq(existing, graph))
-                {
-                    backward_graphs.push(graph.clone());
+            if !source.targets.is_empty() {
+                for graph in &source.backward_graphs {
+                    if !backward_graphs
+                        .iter()
+                        .any(|existing| Rc::ptr_eq(existing, graph))
+                    {
+                        backward_graphs.push(graph.clone());
+                    }
                 }
             }
         }
-        backward_graphs.push(Rc::new(BackwardGraph::default()));
+        if !targets.is_empty() {
+            backward_graphs.push(Rc::new(BackwardGraph::default()));
+        }
         Self {
             source: TensorSource::Owned(Box::new(TensorValue::Float(inner))),
             int_bounds: None,
@@ -368,6 +372,7 @@ impl PyTensor {
         parameters: impl IntoIterator<Item = ParameterSlot>,
     ) -> Self {
         let mut output = Self::from_operation(inner, sources);
+        let had_targets = !output.targets.is_empty();
         for parameter in parameters {
             let generation = parameter.value_generation();
             let target = GradTarget::Parameter {
@@ -385,10 +390,16 @@ impl PyTensor {
                 output.targets.push(target);
             }
         }
+        if !had_targets && !output.targets.is_empty() {
+            output
+                .backward_graphs
+                .push(Rc::new(BackwardGraph::default()));
+        }
         output
     }
 
     fn operation_input(&self, tracking: bool, operation: &str) -> PyResult<DynTensor> {
+        let tracking = tracking && !self.targets.is_empty();
         if tracking && let Some(leaf) = &self.leaf {
             return Ok(leaf.operation_input());
         }
