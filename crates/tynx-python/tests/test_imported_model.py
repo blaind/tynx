@@ -40,6 +40,17 @@ _CONV_MODEL = bytes.fromhex(
     "080112100a0208010a0208010a0208020a020802621b0a017912160a14080112100a0208010a02"
     "08010a0208020a02080242040a00100d"
 )
+_CLIPPED_GEMM_MODEL = bytes.fromhex(
+    "08083acb020a250a01780a067765696768740a0462696173120668696464656e1a0468656164"
+    "220447656d6d0a461208636c69705f6d696e1a08636c69705f6d696e2208436f6e7374616e74"
+    "2a260a0576616c75652a1a08011001420e636c69705f6d696e5f76616c75654a0400000000a0"
+    "01040a461208636c69705f6d61781a08636c69705f6d61782208436f6e7374616e742a260a05"
+    "76616c75652a1a08011001420e636c69705f6d61785f76616c75654a040000c040a001040a2c"
+    "0a0668696464656e0a08636c69705f6d696e0a08636c69705f6d61781201791a0572656c7536"
+    "2204436c69701212636c69705f747261696e696e675f746573742a1408010801100142067765"
+    "696768744a040000803f2a10080110014204626961734a04000000005a130a0178120e0a0c08"
+    "0112080a0208020a02080162130a0179120e0a0c080112080a0208020a02080142040a00100d"
+)
 
 
 def _model_path(tmp_path: Path) -> Path:
@@ -104,6 +115,24 @@ def test_public_imported_conv2d_weights_and_bias_train_in_place(tmp_path: Path) 
     parameters = dict(model.named_parameters())
     assert parameters["weight"].grad is not None
     assert parameters["bias"].grad is not None
+
+
+def test_imported_relu6_clip_preserves_parameter_gradients(tmp_path: Path) -> None:
+    path = tmp_path / "clipped_gemm.onnx"
+    path.write_bytes(_CLIPPED_GEMM_MODEL)
+    model = tynx.load(path, trainable="auto", simplify=False)
+    report = model.require_trainable()
+
+    assert report.backward_issues == []
+    output = model(tynx.Tensor([[-1.0], [2.0]]))
+    assert output.flatten().tolist() == pytest.approx([0.0, 2.0])
+    output.sum().backward()
+
+    parameters = dict(model.named_parameters())
+    assert parameters["weight"].grad is not None
+    assert parameters["weight"].grad.flatten().tolist() == pytest.approx([2.0])
+    assert parameters["bias"].grad is not None
+    assert parameters["bias"].grad.tolist() == pytest.approx([1.0])
 
 
 def test_imported_model_checkpoint_restores_weights_and_optimizer_state(tmp_path: Path) -> None:

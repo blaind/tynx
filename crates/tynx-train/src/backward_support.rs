@@ -98,6 +98,7 @@ impl BackwardSupportRegistry {
             | Node::HardSigmoid(_)
             | Node::HardSwish(_)
             | Node::Identity(_)
+            | Node::Clip(_)
                 if input_index == 0 =>
             {
                 differentiable

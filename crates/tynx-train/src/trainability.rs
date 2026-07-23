@@ -994,6 +994,7 @@ mod tests {
         node::{
             batch_norm::{BatchNormConfig, BatchNormRuntimeConfig, BatchNormalizationNode},
             ceil::CeilNode,
+            clip::{ClipConfig, ClipInput, ClipNode},
             det::DetNode,
             gather::{GatherConfig, GatherNode},
             identity::IdentityNode,
@@ -1287,6 +1288,33 @@ mod tests {
         assert!(matches!(
             BackwardSupportRegistry::input_capability(&node, 0, 1),
             BackwardCapability::StopGradient(_)
+        ));
+    }
+
+    #[test]
+    fn registry_accepts_clip_data_but_not_runtime_bounds() {
+        let node = Node::Clip(ClipNode {
+            name: "relu6".to_string(),
+            inputs: vec![
+                dynamic("data", DType::F32, &[2, 2]),
+                dynamic("minimum", DType::F32, &[1]),
+                dynamic("maximum", DType::F32, &[1]),
+            ],
+            outputs: vec![dynamic("clipped", DType::F32, &[2, 2])],
+            config: ClipConfig::new(Some(ClipInput::Static(0.0)), Some(ClipInput::Static(6.0))),
+        });
+
+        assert_eq!(
+            BackwardSupportRegistry::input_capability(&node, 0, 0),
+            BackwardCapability::Differentiable
+        );
+        assert!(matches!(
+            BackwardSupportRegistry::input_capability(&node, 0, 1),
+            BackwardCapability::Unsupported(_)
+        ));
+        assert!(matches!(
+            BackwardSupportRegistry::input_capability(&node, 0, 2),
+            BackwardCapability::Unsupported(_)
         ));
     }
 
