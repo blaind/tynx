@@ -5262,8 +5262,9 @@ name = "tynx"
 version = "0.1.1"
 dependencies = [
  "burn",
- "cubecl",
  "burn-fusion",
+ "burn-ir",
+ "cubecl",
  "getrandom 0.4.3",
  "half",
  "log",

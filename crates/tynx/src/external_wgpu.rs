@@ -9,6 +9,11 @@ use std::{
 #[cfg(feature = "training")]
 use burn::backend::{Autodiff, AutodiffBackend};
 use burn::prelude::{DeviceKind, Shape, Tensor};
+use burn_fusion::{
+    Fusion, FusionBackend, FusionRuntime as BurnFusionRuntime, FusionTensor, NoOp, get_client,
+    stream::StreamId,
+};
+use burn_ir::{BackendIr, InitOperationIr, OperationIr};
 use cubecl::{
     Runtime,
     ir::{ElemType, FloatKind, StorageType},
@@ -24,6 +29,9 @@ use crate::{
     AcquiredExternalTensorDescriptor, Device, DeviceContextCapability, DynTensor,
     ExternalBufferLease, ExternalBufferUsage, Result, TynxError,
 };
+
+type RawWgpu<C> = burn::backend::wgpu::CubeBackend<WgpuRuntime<C>>;
+type FusedWgpu<C> = Fusion<RawWgpu<C>>;
 
 #[derive(Debug, Clone, Copy)]
 enum Compiler {
@@ -44,15 +52,19 @@ struct ExternalWgpuBuffer {
 }
 
 macro_rules! copy_rank_f32 {
-    ($backend:ty, $source:expr, $destination:expr) => {{
+    ($fused_backend:ty, $raw_backend:ty, $source:expr, $destination:expr) => {{
         let source = $source
-            .try_into_primitive::<$backend>()
+            .try_into_primitive::<$fused_backend>()
             .map_err(|error| external_error(format!("invalid external copy source: {error:?}")))?;
         let destination = $destination
-            .try_into_primitive::<$backend>()
+            .try_into_primitive::<$fused_backend>()
             .map_err(|error| {
                 external_error(format!("invalid external copy destination: {error:?}"))
             })?;
+        let source_client = source.client.clone();
+        let source = source_client.resolve_tensor_float::<$raw_backend>(source);
+        let destination_client = destination.client.clone();
+        let destination = destination_client.resolve_tensor_float::<$raw_backend>(destination);
         let client = source.client.clone();
         cubecl::std::tensor::copy_into(
             &client,
@@ -65,25 +77,25 @@ macro_rules! copy_rank_f32 {
 }
 
 macro_rules! copy_dyn_f32 {
-    ($backend:ty, $source:expr, $destination:expr) => {{
+    ($fused_backend:ty, $raw_backend:ty, $source:expr, $destination:expr) => {{
         match ($source, $destination) {
             (DynTensor::R1(source), DynTensor::R1(destination)) => {
-                copy_rank_f32!($backend, source, destination)
+                copy_rank_f32!($fused_backend, $raw_backend, source, destination)
             }
             (DynTensor::R2(source), DynTensor::R2(destination)) => {
-                copy_rank_f32!($backend, source, destination)
+                copy_rank_f32!($fused_backend, $raw_backend, source, destination)
             }
             (DynTensor::R3(source), DynTensor::R3(destination)) => {
-                copy_rank_f32!($backend, source, destination)
+                copy_rank_f32!($fused_backend, $raw_backend, source, destination)
             }
             (DynTensor::R4(source), DynTensor::R4(destination)) => {
-                copy_rank_f32!($backend, source, destination)
+                copy_rank_f32!($fused_backend, $raw_backend, source, destination)
             }
             (DynTensor::R5(source), DynTensor::R5(destination)) => {
-                copy_rank_f32!($backend, source, destination)
+                copy_rank_f32!($fused_backend, $raw_backend, source, destination)
             }
             (DynTensor::R6(source), DynTensor::R6(destination)) => {
-                copy_rank_f32!($backend, source, destination)
+                copy_rank_f32!($fused_backend, $raw_backend, source, destination)
             }
             _ => Err(external_error(
                 "external copy requires source and destination to have the same rank",
@@ -265,13 +277,15 @@ impl ExternalWgpuContext {
             Compiler::Automatic => {
                 let (tensor, shape) =
                     register_external::<AutoCompiler>(descriptor, self.runtime_device.clone())?;
-                into_dyn_inference::<burn::backend::Wgpu>(tensor, &shape)
+                let tensor = into_fusion::<AutoCompiler>(tensor, &shape);
+                into_dyn_inference::<FusedWgpu<AutoCompiler>>(tensor, &shape)
             }
             #[cfg(feature = "vulkan")]
             Compiler::Vulkan => {
                 let (tensor, shape) =
                     register_external::<SpirvCompiler>(descriptor, self.runtime_device.clone())?;
-                into_dyn_inference::<burn::backend::Vulkan>(tensor, &shape)
+                let tensor = into_fusion::<SpirvCompiler>(tensor, &shape);
+                into_dyn_inference::<FusedWgpu<SpirvCompiler>>(tensor, &shape)
             }
         }
     }
@@ -324,11 +338,21 @@ impl ExternalWgpuContext {
         match self.compiler {
             #[cfg(feature = "wgpu")]
             Compiler::Automatic => {
-                copy_dyn_f32!(burn::backend::Wgpu, source, destination)
+                copy_dyn_f32!(
+                    FusedWgpu<AutoCompiler>,
+                    RawWgpu<AutoCompiler>,
+                    source,
+                    destination
+                )
             }
             #[cfg(feature = "vulkan")]
             Compiler::Vulkan => {
-                copy_dyn_f32!(burn::backend::Vulkan, source, destination)
+                copy_dyn_f32!(
+                    FusedWgpu<SpirvCompiler>,
+                    RawWgpu<SpirvCompiler>,
+                    source,
+                    destination
+                )
             }
         }
     }
@@ -348,13 +372,15 @@ impl ExternalWgpuContext {
             Compiler::Automatic => {
                 let (tensor, shape) =
                     register_external::<AutoCompiler>(descriptor, self.runtime_device.clone())?;
-                into_dyn_training::<burn::backend::Wgpu>(tensor, &shape)
+                let tensor = into_fusion::<AutoCompiler>(tensor, &shape);
+                into_dyn_training::<FusedWgpu<AutoCompiler>>(tensor, &shape)
             }
             #[cfg(feature = "vulkan")]
             Compiler::Vulkan => {
                 let (tensor, shape) =
                     register_external::<SpirvCompiler>(descriptor, self.runtime_device.clone())?;
-                into_dyn_training::<burn::backend::Vulkan>(tensor, &shape)
+                let tensor = into_fusion::<SpirvCompiler>(tensor, &shape);
+                into_dyn_training::<FusedWgpu<SpirvCompiler>>(tensor, &shape)
             }
         }
     }
@@ -429,6 +455,35 @@ fn register_external<C: WgpuCompiler>(
         descriptor.dtype(),
     );
     Ok((tensor, shape))
+}
+
+fn into_fusion<C>(
+    tensor: burn::backend::wgpu::CubeTensor<WgpuRuntime<C>>,
+    shape: &[usize],
+) -> FusionTensor<<RawWgpu<C> as FusionBackend>::FusionRuntime>
+where
+    C: WgpuCompiler,
+    RawWgpu<C>: FusionBackend
+        + burn::backend::Backend<
+            Device = WgpuDevice,
+            FloatTensorPrimitive = burn::backend::wgpu::CubeTensor<WgpuRuntime<C>>,
+        >,
+    <RawWgpu<C> as FusionBackend>::FusionRuntime: BurnFusionRuntime<FusionDevice = WgpuDevice>,
+{
+    let device = tensor.device.clone();
+    let dtype = tensor.dtype;
+    let handle = <RawWgpu<C> as BackendIr>::float_tensor_handle(tensor);
+    let client = get_client::<RawWgpu<C>>(&device);
+    let descriptor = InitOperationIr::create(Shape::from(shape.to_vec()), dtype, || {
+        client.register_tensor_handle(handle)
+    });
+    client
+        .register(
+            StreamId::current(),
+            OperationIr::Init(descriptor),
+            NoOp::<RawWgpu<C>>::new(),
+        )
+        .remove(0)
 }
 
 fn into_dyn_inference<B>(tensor: B::FloatTensorPrimitive, shape: &[usize]) -> Result<DynTensor>
@@ -531,10 +586,7 @@ mod tests {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::NOOP,
             backend_options: wgpu::BackendOptions {
-                noop: wgpu::NoopBackendOptions {
-                    enable: true,
-                    ..Default::default()
-                },
+                noop: wgpu::NoopBackendOptions { enable: true },
                 ..Default::default()
             },
             ..wgpu::InstanceDescriptor::new_without_display_handle()
@@ -563,7 +615,6 @@ mod tests {
             power_preference: wgpu::PowerPreference::LowPower,
             force_fallback_adapter: false,
             compatible_surface: None,
-            ..Default::default()
         }))
         .ok()?;
         let (device, queue) = pollster::block_on(
@@ -718,6 +769,8 @@ mod tests {
             DynTensor::R1(tensor) => tensor.try_into_primitive::<Wgpu>().unwrap(),
             _ => panic!("expected rank-1 external tensor"),
         };
+        let client = primitive.client.clone();
+        let primitive = client.resolve_tensor_float::<RawWgpu<AutoCompiler>>(primitive);
         let resource = primitive
             .client
             .get_resource(primitive.handle.clone())
