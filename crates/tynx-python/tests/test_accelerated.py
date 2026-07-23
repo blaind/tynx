@@ -282,6 +282,79 @@ def test_accelerated_tensor_composition_preserves_gradients() -> None:
     assert value.grad.flatten().tolist() == pytest.approx([12.0, 12.0, 12.0, 12.0])
 
 
+def test_accelerated_capture_replays_conv2d_and_pooling_gradients() -> None:
+    device = _accelerated_device()
+    layer = tynx.nn.Conv2d(1, 1, 2)
+    layer.weight.copy_(tynx.Tensor([[[[1.0, 1.0], [1.0, 1.0]]]]))
+    assert layer.bias is not None
+    layer.bias.copy_(tynx.Tensor([0.0]))
+    calls = 0
+
+    @tynx.compile(fullgraph=True)
+    def pooled(input: tynx.Tensor) -> tuple[tynx.Tensor, tynx.Tensor, tynx.Tensor]:
+        nonlocal calls
+        calls += 1
+        convolved = layer(input)
+        return (
+            tynx.nn.functional.max_pool2d(convolved, 2),
+            tynx.nn.functional.avg_pool2d(convolved, 2),
+            tynx.nn.functional.adaptive_avg_pool2d(convolved, (1, 1)),
+        )
+
+    first_input = tynx.Tensor(
+        [[[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]]]],
+    )
+    second_input = tynx.Tensor(
+        [[[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]]]],
+        requires_grad=True,
+    )
+    first = pooled(first_input)
+    second = pooled(second_input)
+    (second[0].sum() + second[1].sum() + second[2].sum()).backward()
+
+    tynx.synchronize(device)
+    assert [output.flatten().tolist() for output in second] == [
+        output.flatten().tolist() for output in first
+    ]
+    assert second_input.grad is not None
+    assert second_input.grad.shape == second_input.shape
+    assert layer.weight.grad is not None
+    assert calls == 1
+    assert pooled.compile_count == 1
+    assert pooled.fallback_count == 0
+    assert pooled.replay_count == 1
+
+
+def test_accelerated_capture_replays_tensor_composition_and_gradients() -> None:
+    device = _accelerated_device()
+    calls = 0
+
+    @tynx.compile(fullgraph=True)
+    def compose(input: tynx.Tensor) -> tuple[tynx.Tensor, tynx.Tensor, tynx.Tensor]:
+        nonlocal calls
+        calls += 1
+        joined = tynx.cat([input, input * 2.0], dim=0)
+        left, right = joined.split(2, dim=0)
+        first, second = tynx.stack([left, right], dim=0).chunk(2, dim=0)
+        return first, second, input.unsqueeze(0).expand(3, 2, 2)
+
+    compose(tynx.Tensor([[1.0, 2.0], [3.0, 4.0]]))
+    value = tynx.Tensor([[5.0, 6.0], [7.0, 8.0]], requires_grad=True)
+    first, second, expanded = compose(value)
+    (first.sum() + second.sum() + expanded.sum()).backward()
+
+    tynx.synchronize(device)
+    assert first.flatten().tolist() == pytest.approx([5.0, 6.0, 7.0, 8.0])
+    assert second.flatten().tolist() == pytest.approx([10.0, 12.0, 14.0, 16.0])
+    assert expanded.shape == (3, 2, 2)
+    assert value.grad is not None
+    assert value.grad.flatten().tolist() == pytest.approx([6.0, 6.0, 6.0, 6.0])
+    assert calls == 1
+    assert compose.compile_count == 1
+    assert compose.fallback_count == 0
+    assert compose.replay_count == 1
+
+
 def test_accelerated_ordering_and_advanced_indexing_preserve_gradients() -> None:
     device = _accelerated_device()
     value = tynx.Parameter([[3.0, 1.0, 2.0], [6.0, 4.0, 5.0]])
