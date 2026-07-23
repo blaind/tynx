@@ -19,7 +19,7 @@ use tynx_core::{
     execute_onnx_layer_normalization, resolve_onnx_padding2d,
 };
 
-use crate::ImportedState;
+use crate::{ImportedState, InitializerId, InitializerRole, TrainabilityReport};
 
 /// Validate that every materialized initializer is consumed by a slot-aware operator path.
 pub(super) fn validate(graph: &OnnxGraph, state: &ImportedState) -> Result<()> {
@@ -31,26 +31,56 @@ pub(super) fn validate(graph: &OnnxGraph, state: &ImportedState) -> Result<()> {
             {
                 continue;
             }
-            let supported = match node {
-                Node::Linear(_) | Node::Gemm(_) => matches!(input_index, 1 | 2),
-                Node::MatMul(_) => matches!(input_index, 0 | 1),
-                Node::BatchNormalization(_) => matches!(input_index, 1..=4),
-                Node::Conv2d(_) => matches!(input_index, 0..=2),
-                Node::Gather(_) => input_index == 0,
-                Node::LayerNormalization(_) => matches!(input_index, 0..=2),
-                _ => false,
-            };
-            if !supported {
-                return Err(TynxError::UnsupportedOp(format!(
-                    "slot-backed execution for {} node '{}' input {} is not implemented",
-                    node_kind(node),
-                    node.name(),
-                    input_index
+            if !supports_slot_input(node, input_index) {
+                return Err(TynxError::UnsupportedOp(slot_execution_issue(
+                    node,
+                    input_index,
                 )));
             }
         }
     }
     Ok(())
+}
+
+/// Add live-slot execution gaps to an imported model's preflight report.
+pub(super) fn add_report_issues(graph: &OnnxGraph, report: &mut TrainabilityReport) {
+    for (node_index, node) in graph.nodes.iter().enumerate() {
+        for (input_index, input) in node.inputs().iter().enumerate() {
+            let Some(id) = InitializerId::from_argument(input, node_index, input_index) else {
+                continue;
+            };
+            if !matches!(
+                report.role_for_initializer(&id),
+                Some(InitializerRole::Parameter | InitializerRole::Buffer)
+            ) {
+                continue;
+            }
+            if !supports_slot_input(node, input_index) {
+                report.push_error(slot_execution_issue(node, input_index));
+            }
+        }
+    }
+}
+
+fn supports_slot_input(node: &Node, input_index: usize) -> bool {
+    match node {
+        Node::Linear(_) | Node::Gemm(_) => matches!(input_index, 1 | 2),
+        Node::MatMul(_) => matches!(input_index, 0 | 1),
+        Node::BatchNormalization(_) => matches!(input_index, 1..=4),
+        Node::Conv2d(_) => matches!(input_index, 0..=2),
+        Node::Gather(_) => input_index == 0,
+        Node::LayerNormalization(_) => matches!(input_index, 0..=2),
+        _ => false,
+    }
+}
+
+fn slot_execution_issue(node: &Node, input_index: usize) -> String {
+    format!(
+        "slot-backed execution for {} node '{}' input {} is not implemented",
+        node_kind(node),
+        node.name(),
+        input_index
+    )
 }
 
 /// Execute a graph, specializing only nodes that need live slot-backed state.

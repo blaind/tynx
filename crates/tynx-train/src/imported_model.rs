@@ -252,6 +252,7 @@ fn analyze_session_outputs(
             session.initializer_names(),
         ),
     };
+    executor::add_report_issues(session.graph(), &mut report);
     let internal_to_public = session
         .output_name_mapping()
         .map(|(public, internal)| (internal.to_string(), public.to_string()))

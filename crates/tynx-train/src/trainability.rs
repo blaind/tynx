@@ -311,6 +311,22 @@ impl TrainabilityReport {
         }
     }
 
+    pub(crate) fn role_for_initializer(
+        &self,
+        initializer: &InitializerId,
+    ) -> Option<InitializerRole> {
+        self.initializers
+            .iter()
+            .find(|report| report.id() == initializer)
+            .map(InitializerReport::role)
+    }
+
+    pub(crate) fn push_error(&mut self, error: String) {
+        if !self.errors.contains(&error) {
+            self.errors.push(error);
+        }
+    }
+
     /// Return initializer reports in first-consumer graph order.
     pub fn initializers(&self) -> &[InitializerReport] {
         &self.initializers

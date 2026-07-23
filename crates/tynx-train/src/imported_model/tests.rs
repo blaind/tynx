@@ -3,7 +3,7 @@ use protobuf::{Message, MessageField};
 use tynx_core::onnx_ir::{GraphProto, ModelProto, TensorProto, TypeProto, ValueInfoProto};
 use tynx_core::{DynTensor, Env, Session, Value};
 
-use super::ImportedModel;
+use super::{ImportedModel, analyze_session_outputs};
 use crate::{
     InitializerNameOverrides, Sgd, TrainabilityOverrides, TrainabilityReport, backward, loss::mse,
 };
@@ -436,6 +436,29 @@ fn imported_dropout_is_inactive_or_rejected_before_training() {
     assert!(error.to_string().contains("training_mode"));
 }
 
+#[test]
+fn report_rejects_backward_capable_parameters_without_live_slot_execution() {
+    let session = Session::from_bytes_with(&prelu_model_bytes(), false).unwrap();
+    let report = analyze_session_outputs(&session, None, &TrainabilityOverrides::new());
+
+    assert!(report.backward_issues().is_empty());
+    assert!(!report.is_trainable());
+    assert!(
+        report
+            .errors()
+            .iter()
+            .any(|error| error.contains("slot-backed execution for PRelu"))
+    );
+
+    let error =
+        ImportedModel::from_session(session, Device::autodiff(Device::default())).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("slot-backed execution for PRelu")
+    );
+}
+
 fn gemm_model_bytes() -> Vec<u8> {
     model_bytes(
         "Gemm",
@@ -539,6 +562,22 @@ fn conv_model_bytes() -> Vec<u8> {
             tensor_proto("bias", &[1], &[0.0]),
         ],
     )
+}
+
+fn prelu_model_bytes() -> Vec<u8> {
+    let mut graph = GraphProto::new();
+    graph.name = "unsupported_slot_report".to_string();
+    graph.input.push(value_info_with_shape("x", &[Some(2)]));
+    graph.output.push(value_info_with_shape("y", &[Some(2)]));
+    graph.node.push(Default::default());
+    let node = graph.node.last_mut().unwrap();
+    node.name = "activation".to_string();
+    node.op_type = "PRelu".to_string();
+    node.input = vec!["x".to_string(), "slope".to_string()];
+    node.output = vec!["y".to_string()];
+    graph.initializer = vec![tensor_proto("slope", &[1], &[0.25])];
+
+    finish_model(graph, 13)
 }
 
 fn model_bytes(
