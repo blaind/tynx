@@ -178,9 +178,7 @@ fn validate_tensor_input(
         Value::Tensor(_) => {
             actual_device == *device && actual_device.is_autodiff() == device.is_autodiff()
         }
-        Value::Int(_) | Value::Bool(_) => {
-            actual_device.clone().inner() == device.clone().inner()
-        }
+        Value::Int(_) | Value::Bool(_) => actual_device.clone().inner() == device.clone().inner(),
         Value::Scalar(_) | Value::Shape(_) => unreachable!("tensor inputs were matched above"),
     };
     if !compatible_device {

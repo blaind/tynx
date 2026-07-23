@@ -26,7 +26,7 @@ mod integer;
 mod logical;
 mod matrix;
 mod mel_weight_matrix;
-mod normalization;
+pub(crate) mod normalization;
 mod pad;
 mod pooling;
 mod pow;

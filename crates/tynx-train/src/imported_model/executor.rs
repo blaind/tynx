@@ -9,13 +9,14 @@ use tynx_core::onnx_ir::{
         conv2d::Conv2dNode,
         gather::GatherNode,
         gemm::GemmNode,
+        layer_norm::LayerNormalizationNode,
         linear::LinearNode,
         matmul::MatMulNode,
     },
 };
 use tynx_core::{
     DynTensor, Env, Result, Session, TynxError, Value, execute, execute_onnx_gather,
-    resolve_onnx_padding2d,
+    execute_onnx_layer_normalization, resolve_onnx_padding2d,
 };
 
 use crate::ImportedState;
@@ -36,6 +37,7 @@ pub(super) fn validate(graph: &OnnxGraph, state: &ImportedState) -> Result<()> {
                 Node::BatchNormalization(_) => matches!(input_index, 1..=4),
                 Node::Conv2d(_) => matches!(input_index, 0..=2),
                 Node::Gather(_) => input_index == 0,
+                Node::LayerNormalization(_) => matches!(input_index, 0..=2),
                 _ => false,
             };
             if !supported {
@@ -69,6 +71,9 @@ pub(super) fn run(
             }
             Node::Conv2d(node) => execute_conv2d(node, node_index, &env, state, device, tracking),
             Node::Gather(node) => execute_gather(node, node_index, &env, state, device, tracking),
+            Node::LayerNormalization(node) => {
+                execute_layer_normalization(node, node_index, &env, state, device, tracking)
+            }
             _ => execute(node, &env, device),
         }?;
         if values.len() != node.outputs().len() {
@@ -85,6 +90,32 @@ pub(super) fn run(
     }
 
     session.collect_outputs(&env)
+}
+
+fn execute_layer_normalization(
+    node: &LayerNormalizationNode,
+    node_index: usize,
+    env: &Env,
+    state: &ImportedState,
+    device: &Device,
+    tracking: bool,
+) -> Result<Vec<Value>> {
+    let input = resolve_tensor(node, node_index, 0, env, state, device, tracking)?;
+    let scale = resolve_tensor(node, node_index, 1, env, state, device, tracking)?;
+    let bias = node
+        .inputs
+        .get(2)
+        .filter(|input| !input.is_optional())
+        .map(|_| resolve_tensor(node, node_index, 2, env, state, device, tracking))
+        .transpose()?;
+    execute_onnx_layer_normalization(
+        input,
+        scale,
+        bias,
+        node.config.epsilon,
+        node.config.full_precision,
+        node.outputs.len(),
+    )
 }
 
 fn execute_gather(
@@ -419,4 +450,5 @@ impl_node_inputs!(
     BatchNormalizationNode,
     Conv2dNode,
     GatherNode,
+    LayerNormalizationNode,
 );

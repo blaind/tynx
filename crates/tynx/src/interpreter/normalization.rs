@@ -96,8 +96,41 @@ pub(super) fn layer_normalization(
     device: &Device,
 ) -> Result<Vec<Value>> {
     let input = resolve::at(env, &node.name, &node.inputs, 0, device)?.into_tensor()?;
-    let output_dtype = input.dtype();
     let scale = resolve::at(env, &node.name, &node.inputs, 1, device)?.into_tensor()?;
+    let bias = node
+        .inputs
+        .get(2)
+        .filter(|input| !input.is_optional())
+        .map(|bias| resolve::input_at(env, bias, 2, device)?.into_tensor())
+        .transpose()?;
+    layer_normalization_values(
+        input,
+        scale,
+        bias,
+        node.config.epsilon,
+        node.config.full_precision,
+        node.outputs.len(),
+    )
+}
+
+/// Execute ONNX LayerNormalization from already-resolved tensor values.
+///
+/// This is shared with imported training execution so scale and bias can come
+/// from live parameter slots without duplicating ONNX normalization semantics.
+pub fn layer_normalization_values(
+    input: DynTensor,
+    scale: DynTensor,
+    bias: Option<DynTensor>,
+    epsilon: f64,
+    full_precision: bool,
+    output_count: usize,
+) -> Result<Vec<Value>> {
+    if !(1..=3).contains(&output_count) {
+        return Err(TynxError::Shape(format!(
+            "LayerNormalization expects between 1 and 3 outputs, got {output_count}"
+        )));
+    }
+    let output_dtype = input.dtype();
     let normalized_rank = scale.rank();
     if normalized_rank > input.rank() {
         return Err(TynxError::Shape(format!(
@@ -112,36 +145,32 @@ pub(super) fn layer_normalization(
             scale.dims()
         )));
     }
-    let compute_dtype =
-        if node.config.full_precision && matches!(output_dtype, DType::F16 | DType::BF16) {
-            DType::F32
-        } else {
-            output_dtype
-        };
+    let compute_dtype = if full_precision && matches!(output_dtype, DType::F16 | DType::BF16) {
+        DType::F32
+    } else {
+        output_dtype
+    };
     let input = input.cast(compute_dtype);
     let input_rank = input.rank();
     let axes = (input_rank - normalized_rank..input_rank).collect::<Vec<_>>();
     let mean = input.clone().mean_dims(&axes);
     let centered = input.sub_broadcast(mean.clone())?;
     let variance = centered.clone().powi_scalar(2).mean_dims(&axes);
-    let inv_std = variance.add_scalar(node.config.epsilon).powf_scalar(-0.5);
+    let inv_std = variance.add_scalar(epsilon).powf_scalar(-0.5);
     let scale = scale.cast(compute_dtype).to_rank(input_rank)?;
     let mut output = centered
         .mul_broadcast(inv_std.clone())?
         .mul_broadcast(scale)?;
-    if let Some(bias) = node.inputs.get(2).filter(|input| !input.is_optional()) {
-        let bias = resolve::input_at(env, bias, 2, device)?
-            .into_tensor()?
-            .cast(compute_dtype)
-            .to_rank(input_rank)?;
+    if let Some(bias) = bias {
+        let bias = bias.cast(compute_dtype).to_rank(input_rank)?;
         output = output.add_broadcast(bias)?;
     }
 
     let mut outputs = vec![Value::Tensor(output.cast(output_dtype))];
-    if node.outputs.len() > 1 {
+    if output_count > 1 {
         outputs.push(Value::Tensor(mean));
     }
-    if node.outputs.len() > 2 {
+    if output_count > 2 {
         outputs.push(Value::Tensor(inv_std));
     }
     Ok(outputs)

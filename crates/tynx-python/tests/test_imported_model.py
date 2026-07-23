@@ -59,6 +59,15 @@ _GATHER_MODEL = bytes.fromhex(
     "0a07696e6469636573120a0a08080712040a020803621a0a0873656c6563746564120e0a0c08"
     "0112080a0208030a02080242040a00100d"
 )
+_LAYER_NORM_MODEL = bytes.fromhex(
+    "08083adf010a610a01780a0b6e6f726d2e7765696768740a096e6f726d2e62696173120179"
+    "1a046e6f726d22124c617965724e6f726d616c697a6174696f6e2a140a046178697318ffffff"
+    "ffffffffffff01a001022a110a07657073696c6f6e15acc52737a0010112186c617965725f6e"
+    "6f726d5f747261696e696e675f746573742a1b0802100122080000803f0000803f420b6e6f"
+    "726d2e7765696768742a19080210012208000000000000000042096e6f726d2e626961735a"
+    "130a0178120e0a0c080112080a0208020a02080262130a0179120e0a0c080112080a0208020a"
+    "02080242040a001011"
+)
 
 
 def _model_path(tmp_path: Path) -> Path:
@@ -160,6 +169,36 @@ def test_imported_gather_accumulates_repeated_embedding_gradients(tmp_path: Path
     optimizer = tynx.optim.SGD(model.named_parameters(), lr=0.1)
     optimizer.step()
     assert model(indices).flatten().tolist() == pytest.approx([0.8, 1.8, 4.9, 5.9, 0.8, 1.8])
+
+
+def test_imported_layer_norm_trains_live_scale_and_bias(tmp_path: Path) -> None:
+    path = tmp_path / "layer_norm.onnx"
+    path.write_bytes(_LAYER_NORM_MODEL)
+    model = tynx.load(path, trainable="auto", simplify=False)
+    input = tynx.Tensor([[1.0, 3.0], [2.0, 6.0]])
+
+    output = model(input)
+    assert output.flatten().tolist() == pytest.approx(
+        [-0.999995, 0.999995, -0.999999, 0.999999],
+        abs=1e-5,
+    )
+    output.sum().backward()
+
+    parameters = dict(model.named_parameters())
+    assert parameters["norm.weight"].grad is not None
+    assert parameters["norm.weight"].grad.flatten().tolist() == pytest.approx(
+        [-1.999994, 1.999994],
+        abs=1e-5,
+    )
+    assert parameters["norm.bias"].grad is not None
+    assert parameters["norm.bias"].grad.tolist() == pytest.approx([2.0, 2.0])
+
+    optimizer = tynx.optim.SGD(model.named_parameters(), lr=0.1)
+    optimizer.step()
+    assert model(input).flatten().tolist() == pytest.approx(
+        [-1.399994, 0.599996, -1.399998, 0.599999],
+        abs=1e-5,
+    )
 
 
 def test_imported_model_checkpoint_restores_weights_and_optimizer_state(tmp_path: Path) -> None:
