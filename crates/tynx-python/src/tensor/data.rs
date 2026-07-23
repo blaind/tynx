@@ -17,6 +17,24 @@ pub(super) enum TensorValue {
     Bool(DynBool),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum IntBounds {
+    Empty,
+    Range { min: i64, max: i64 },
+}
+
+impl IntBounds {
+    pub(crate) fn from_values(values: &[i64]) -> Self {
+        let Some((&first, remaining)) = values.split_first() else {
+            return Self::Empty;
+        };
+        let (min, max) = remaining.iter().fold((first, first), |(min, max), &value| {
+            (min.min(value), max.max(value))
+        });
+        Self::Range { min, max }
+    }
+}
+
 impl TensorValue {
     pub(super) fn into_runtime(self) -> Value {
         match self {
@@ -30,7 +48,7 @@ impl TensorValue {
         data: &Bound<'_, PyAny>,
         dtype: Option<&str>,
         device: &Device,
-    ) -> PyResult<Self> {
+    ) -> PyResult<(Self, Option<IntBounds>)> {
         if let Some(value) = Self::from_numpy(data, dtype, device)? {
             return Ok(value);
         }
@@ -40,6 +58,7 @@ impl TensorValue {
                 let (values, shape) = parse(data, "float32", |value| value.extract::<f32>())?;
                 DynTensor::from_data(TensorData::new(values, shape.clone()), shape.len(), device)
                     .map(Self::Float)
+                    .map(|value| (value, None))
                     .map_err(to_python_error)
             }
             "int64" => {
@@ -51,14 +70,17 @@ impl TensorValue {
                     }
                     value.extract::<i64>()
                 })?;
+                let bounds = IntBounds::from_values(&values);
                 DynInt::from_data(TensorData::new(values, shape.clone()), shape.len(), device)
                     .map(Self::Int)
+                    .map(|value| (value, Some(bounds)))
                     .map_err(to_python_error)
             }
             "bool" => {
                 let (values, shape) = parse(data, "bool", |value| value.extract::<bool>())?;
                 bool_from_data(values, shape, device)
                     .map(Self::Bool)
+                    .map(|value| (value, None))
                     .map_err(to_python_error)
             }
             other => Err(PyValueError::new_err(format!(
@@ -71,7 +93,7 @@ impl TensorValue {
         data: &Bound<'_, PyAny>,
         dtype: Option<&str>,
         device: &Device,
-    ) -> PyResult<Option<Self>> {
+    ) -> PyResult<Option<(Self, Option<IntBounds>)>> {
         if !data.hasattr("__array_interface__")? {
             return Ok(None);
         }
@@ -105,6 +127,7 @@ impl TensorValue {
                         device,
                     )
                     .map(Self::$kind)
+                    .map(|value| (value, None))
                     .map(Some)
                     .map_err(to_python_error);
                 }
@@ -112,7 +135,32 @@ impl TensorValue {
         }
 
         extract!(f32, "float32", Float, DynTensor);
-        extract!(i64, "int64", Int, DynInt);
+        if let Ok(array) = data.extract::<PyReadonlyArrayDyn<'_, i64>>() {
+            if let Some(requested) = dtype
+                && requested != "int64"
+            {
+                return Err(PyTypeError::new_err(format!(
+                    "NumPy array dtype int64 must match requested Tensor dtype {requested}"
+                )));
+            }
+            let array = array.as_array();
+            let mut shape = array.shape().to_vec();
+            if shape.is_empty() {
+                shape.push(1);
+            }
+            if array.is_empty() {
+                return Err(PyValueError::new_err(
+                    "Tensor data cannot contain an empty NumPy array",
+                ));
+            }
+            let values = array.iter().copied().collect::<Vec<_>>();
+            let bounds = IntBounds::from_values(&values);
+            return DynInt::from_data(TensorData::new(values, shape.clone()), shape.len(), device)
+                .map(Self::Int)
+                .map(|value| (value, Some(bounds)))
+                .map(Some)
+                .map_err(to_python_error);
+        }
         if let Ok(array) = data.extract::<PyReadonlyArrayDyn<'_, bool>>() {
             if let Some(requested) = dtype
                 && requested != "bool"
@@ -134,6 +182,7 @@ impl TensorValue {
             let values = array.iter().copied().collect::<Vec<_>>();
             return bool_from_data(values, shape, device)
                 .map(Self::Bool)
+                .map(|value| (value, None))
                 .map(Some)
                 .map_err(to_python_error);
         }
@@ -151,7 +200,7 @@ impl TensorValue {
         data: &Bound<'_, PyAny>,
         device: &Device,
     ) -> PyResult<DynTensor> {
-        match Self::from_python(data, Some("float32"), device)? {
+        match Self::from_python(data, Some("float32"), device)?.0 {
             Self::Float(value) => Ok(value),
             _ => unreachable!("the float32 parser always creates a floating-point tensor"),
         }

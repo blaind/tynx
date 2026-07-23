@@ -97,9 +97,29 @@ def test_compile_replays_integer_index_gather_and_gradient() -> None:
     second.sum().backward()
     assert second_logits.grad is not None
     assert second_logits.grad.tolist() == [[0.0, 1.0], [1.0, 0.0]]
+    with pytest.raises(IndexError, match=r"gather index 2.*dimension 1.*size 2"):
+        select(second_logits, tynx.Tensor([2, 0], dtype="int64"))
     assert calls == 1
     assert select.compile_count == 1
-    assert select.replay_count == 1
+    assert select.replay_count == 2
+
+
+def test_compile_validates_derived_gather_indices_on_every_replay() -> None:
+    calls = 0
+
+    @tynx.compile(fullgraph=True)
+    def select(values: tynx.Tensor, raw_indices: tynx.Tensor) -> tynx.Tensor:
+        nonlocal calls
+        calls += 1
+        return values.gather(0, raw_indices[1:])
+
+    values = tynx.Tensor([10.0, 20.0])
+    assert select(values, tynx.Tensor([99, 0], dtype="int64")).tolist() == [10.0]
+
+    with pytest.raises(IndexError, match=r"gather index 99.*dimension 0.*size 2"):
+        select(values, tynx.Tensor([0, 99], dtype="int64"))
+    assert calls == 1
+    assert select.compile_count == 1
 
 
 def test_compile_replays_basic_slicing_and_gradient() -> None:

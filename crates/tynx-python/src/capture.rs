@@ -22,7 +22,17 @@ thread_local! {
 struct CaptureInner {
     builder: Option<GraphBuilder>,
     parameters: HashMap<ParamId, ValueId>,
+    value_inputs: HashMap<ValueId, usize>,
+    next_input: usize,
+    index_constraints: Vec<IndexConstraint>,
     failure: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct IndexConstraint {
+    input: usize,
+    size: usize,
+    dim: usize,
 }
 
 /// Shared state carried by tensors produced during one first-call trace.
@@ -39,6 +49,9 @@ impl CaptureState {
             inner: RefCell::new(CaptureInner {
                 builder: Some(GraphBuilder::new()),
                 parameters: HashMap::new(),
+                value_inputs: HashMap::new(),
+                next_input: 0,
+                index_constraints: Vec::new(),
                 failure: None,
             }),
         })
@@ -46,7 +59,13 @@ impl CaptureState {
 
     fn input(&self, tensor: &PyTensor) -> PyResult<ValueId> {
         let value = tensor.detached_runtime_value();
-        self.with_builder(|builder| builder.input_value(&value).map_err(to_python_error))
+        let value =
+            self.with_builder(|builder| builder.input_value(&value).map_err(to_python_error))?;
+        let mut inner = self.inner.borrow_mut();
+        let input = inner.next_input;
+        inner.next_input += 1;
+        inner.value_inputs.insert(value, input);
+        Ok(value)
     }
 
     fn parameter(&self, slot: ParameterSlot) -> PyResult<ValueId> {
@@ -61,15 +80,57 @@ impl CaptureState {
     }
 
     fn unary(&self, op: UnaryOp, input: ValueId) -> PyResult<ValueId> {
-        self.with_builder(|builder| builder.unary(op, input).map_err(to_python_error))
+        let preserves_indices = matches!(
+            op,
+            UnaryOp::Reshape(_) | UnaryOp::Expand(_) | UnaryOp::Permute(_)
+        );
+        let origin = preserves_indices
+            .then(|| self.inner.borrow().value_inputs.get(&input).copied())
+            .flatten();
+        let value =
+            self.with_builder(|builder| builder.unary(op, input).map_err(to_python_error))?;
+        if let Some(origin) = origin {
+            self.inner.borrow_mut().value_inputs.insert(value, origin);
+        }
+        Ok(value)
     }
 
     fn binary(&self, op: BinaryOp, left: ValueId, right: ValueId) -> PyResult<ValueId> {
         self.with_builder(|builder| builder.binary(op, left, right).map_err(to_python_error))
     }
 
-    fn gather(&self, input: ValueId, dim: usize, indices: ValueId) -> PyResult<ValueId> {
-        self.with_builder(|builder| builder.gather(input, dim, indices).map_err(to_python_error))
+    fn gather(
+        &self,
+        input: ValueId,
+        dim: usize,
+        size: usize,
+        indices: ValueId,
+    ) -> PyResult<ValueId> {
+        let origin = self.inner.borrow().value_inputs.get(&indices).copied();
+        let value = self.with_builder(|builder| {
+            if origin.is_some() {
+                builder.gather(input, dim, indices)
+            } else {
+                builder.gather_checked(input, dim, indices)
+            }
+            .map_err(to_python_error)
+        })?;
+        if let Some(origin) = origin {
+            let constraint = IndexConstraint {
+                input: origin,
+                size,
+                dim,
+            };
+            let mut inner = self.inner.borrow_mut();
+            if !inner.index_constraints.iter().any(|existing| {
+                existing.input == constraint.input
+                    && existing.size == constraint.size
+                    && existing.dim == constraint.dim
+            }) {
+                inner.index_constraints.push(constraint);
+            }
+        }
+        Ok(value)
     }
 
     fn index_select(
@@ -137,7 +198,7 @@ impl CaptureState {
         Ok(())
     }
 
-    fn finish(&self, outputs: Vec<ValueId>) -> PyResult<Option<Graph>> {
+    fn finish(&self, outputs: Vec<ValueId>) -> PyResult<Option<(Graph, Vec<IndexConstraint>)>> {
         let mut inner = self.inner.borrow_mut();
         if let Some(reason) = inner.failure.take() {
             inner.builder = None;
@@ -150,13 +211,19 @@ impl CaptureState {
             };
         }
         let builder = inner.builder.take().ok_or_else(capture_finished)?;
-        builder.finish(outputs).map(Some).map_err(to_python_error)
+        let constraints = std::mem::take(&mut inner.index_constraints);
+        builder
+            .finish(outputs)
+            .map(|graph| Some((graph, constraints)))
+            .map_err(to_python_error)
     }
 
     fn abort(&self) {
         let mut inner = self.inner.borrow_mut();
         inner.builder = None;
         inner.parameters.clear();
+        inner.value_inputs.clear();
+        inner.index_constraints.clear();
         inner.failure = None;
     }
 }
@@ -309,6 +376,7 @@ pub(crate) fn record_binary(
 pub(crate) fn record_gather(
     input: &PyTensor,
     dim: usize,
+    size: usize,
     indices: &PyTensor,
 ) -> PyResult<Option<TraceValue>> {
     let input_trace = trace_for(input)?;
@@ -332,7 +400,7 @@ pub(crate) fn record_gather(
     let input = input_trace.expect("matched as a traced value").value;
     let indices = index_trace.expect("matched as a traced value").value;
     state
-        .gather(input, dim, indices)
+        .gather(input, dim, size, indices)
         .map(|value| Some(TraceValue { state, value }))
 }
 
@@ -461,7 +529,7 @@ impl PyCaptureSession {
         }
         self.state
             .finish(values)
-            .map(|graph| graph.map(PyCapturedGraph::new))
+            .map(|graph| graph.map(|(graph, constraints)| PyCapturedGraph::new(graph, constraints)))
     }
 
     fn release(&self, output: PyRef<'_, PyTensor>) -> PyTensor {
@@ -485,12 +553,17 @@ impl Drop for PyCaptureSession {
 pub(crate) struct PyCapturedGraph {
     graph: Graph,
     parameters: Vec<ParameterSlot>,
+    index_constraints: Vec<IndexConstraint>,
 }
 
 impl PyCapturedGraph {
-    fn new(graph: Graph) -> Self {
+    fn new(graph: Graph, index_constraints: Vec<IndexConstraint>) -> Self {
         let parameters = graph.parameters();
-        Self { graph, parameters }
+        Self {
+            graph,
+            parameters,
+            index_constraints,
+        }
     }
 
     fn inputs<'py>(
@@ -535,6 +608,13 @@ impl PyCapturedGraph {
     #[pyo3(signature = (*inputs))]
     fn __call__(&self, py: Python<'_>, inputs: &Bound<'_, PyTuple>) -> PyResult<Py<PyTuple>> {
         let inputs = Self::inputs(inputs, "captured graph replay")?;
+        for constraint in &self.index_constraints {
+            inputs[constraint.input].validate_index_bounds(
+                constraint.size,
+                constraint.dim,
+                "gather",
+            )?;
+        }
         let tracking = is_grad_enabled();
         let values = inputs
             .iter()

@@ -7,7 +7,10 @@ use pyo3::{
 };
 use tynx_core::{DType, Device, Distribution, DynBool, DynInt, DynTensor, MAX_RANK};
 
-use super::{PyTensor, data::TensorValue};
+use super::{
+    PyTensor,
+    data::{IntBounds, TensorValue},
+};
 use crate::{
     device::{PyDevice, ensure_autodiff},
     to_python_error,
@@ -225,13 +228,21 @@ pub(crate) fn randint_py(
     }
     let shape = validate_shape(shape)?;
     let device = select_device(device);
+    let bounds = if shape.iter().product::<usize>() == 0 {
+        IntBounds::Empty
+    } else {
+        IntBounds::Range {
+            min: low,
+            max: high - 1,
+        }
+    };
     DynInt::random(
         &shape,
         Distribution::Uniform(low as f64, high as f64),
         &device,
         DType::I64,
     )
-    .map(PyTensor::from_int_inner)
+    .map(|value| PyTensor::from_int_inner_with_bounds(value, bounds))
     .map_err(to_python_error)
 }
 

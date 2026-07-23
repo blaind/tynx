@@ -318,6 +318,19 @@ def test_tensor_gather_rejects_invalid_indices_and_shapes() -> None:
         values.gather(1, tynx.Tensor([[0], [1], [2]], dtype="int64"))
     with pytest.raises(ValueError, match="dimension 2 is out of range"):
         values.gather(2, tynx.Tensor([[0], [0]], dtype="int64"))
+    with pytest.raises(IndexError, match=r"gather index 5.*dimension 1.*size 3"):
+        values.gather(1, tynx.Tensor([[5], [0]], dtype="int64"))
+    with pytest.raises(IndexError, match=r"gather index -1.*dimension 1.*size 3"):
+        values.gather(1, tynx.Tensor([[-1], [0]], dtype="int64"))
+
+
+def test_tensor_gather_validates_values_after_index_derivation() -> None:
+    values = tynx.Tensor([10.0, 20.0])
+    source = tynx.Tensor([99, 0], dtype="int64")
+
+    assert values.gather(0, source[1:]).tolist() == [10.0]
+    selected = source.index_select(0, tynx.Tensor([1], dtype="int64"))
+    assert values.gather(0, selected).tolist() == [10.0]
 
 
 def test_tensor_value_min_max_reductions_follow_shape_policy() -> None:
@@ -787,6 +800,12 @@ def test_functional_losses_validate_shapes_dtypes_and_reductions() -> None:
         tynx.nn.functional.cross_entropy(tynx.Tensor([1.0, 2.0]), tynx.Tensor([0], dtype="int64"))
     with pytest.raises(ValueError, match="rank-1 int64"):
         tynx.nn.functional.cross_entropy(tynx.Tensor([[1.0, 2.0]]), tynx.Tensor([0.0]))
+    for target in (-1, 2):
+        with pytest.raises(IndexError, match=r"gather index .*dimension 1.*size 2"):
+            tynx.nn.functional.cross_entropy(
+                tynx.Tensor([[1.0, 2.0]]),
+                tynx.Tensor([target], dtype="int64"),
+            )
     with pytest.raises(ValueError, match="reduction must"):
         tynx.nn.functional.mse_loss(
             tynx.Tensor([1.0]),

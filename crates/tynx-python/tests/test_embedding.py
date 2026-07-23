@@ -61,3 +61,12 @@ def test_embedding_rejects_sparse_and_other_unsupported_modes() -> None:
         F.embedding(tynx.arange(2), _weight(), max_norm=1.0)
     with pytest.raises(ValueError, match="padding_idx"):
         tynx.nn.Embedding(3, 2, padding_idx=3)
+
+
+@pytest.mark.parametrize("index", [-3, 99])
+def test_embedding_rejects_out_of_range_indices(index: int) -> None:
+    layer = tynx.nn.Embedding(5, 3)
+    indices = tynx.Tensor([0, index], dtype="int64")
+
+    with pytest.raises(IndexError, match=rf"embedding index {index}.*size 5"):
+        layer(indices)

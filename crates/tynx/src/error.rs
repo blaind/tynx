@@ -66,6 +66,10 @@ pub enum TynxError {
     #[error("shape error: {0}")]
     Shape(String),
 
+    /// A tensor index was outside the valid range.
+    #[error("{0}")]
+    Index(String),
+
     /// Mutable model state is already participating in another serialized operation.
     #[error("state is busy: {0}")]
     StateBusy(String),

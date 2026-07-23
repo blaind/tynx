@@ -129,6 +129,13 @@ pub(crate) fn embedding_py(
 ) -> PyResult<PyTensor> {
     input.capture_unsupported("embedding")?;
     weight.capture_unsupported("embedding")?;
+    let weight_shape = weight.detached_float_value("embedding")?.dims();
+    if weight_shape.len() != 2 {
+        return Err(PyTypeError::new_err(format!(
+            "embedding weight must be rank-2 float32, got shape {weight_shape:?}"
+        )));
+    }
+    input.validate_index_bounds(weight_shape[0], 0, "embedding")?;
     let indices = match input.detached_runtime_value() {
         Value::Int(indices) => indices,
         value => {

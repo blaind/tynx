@@ -245,6 +245,7 @@ enum Node {
         input: ValueId,
         dim: usize,
         indices: ValueId,
+        validate_indices: bool,
     },
     IndexSelect {
         input: ValueId,
@@ -363,12 +364,33 @@ impl GraphBuilder {
 
     /// Record differentiable floating-point gather with integer indices.
     pub fn gather(&mut self, input: ValueId, dim: usize, indices: ValueId) -> Result<ValueId> {
+        self.gather_with_validation(input, dim, indices, false)
+    }
+
+    /// Record differentiable floating-point gather whose derived indices are checked at replay.
+    pub fn gather_checked(
+        &mut self,
+        input: ValueId,
+        dim: usize,
+        indices: ValueId,
+    ) -> Result<ValueId> {
+        self.gather_with_validation(input, dim, indices, true)
+    }
+
+    fn gather_with_validation(
+        &mut self,
+        input: ValueId,
+        dim: usize,
+        indices: ValueId,
+        validate_indices: bool,
+    ) -> Result<ValueId> {
         self.require_value(input)?;
         self.require_value(indices)?;
         Ok(self.push(Node::Gather {
             input,
             dim,
             indices,
+            validate_indices,
         }))
     }
 
@@ -608,10 +630,12 @@ impl Graph {
                         input,
                         dim,
                         indices,
+                        validate_indices,
                     } => NodeValue::Tensor(Box::new(execute_gather(
                         value(&values, *input)?,
                         *dim,
                         value(&values, *indices)?,
+                        *validate_indices,
                     )?)),
                     Node::IndexSelect {
                         input,
@@ -919,9 +943,44 @@ fn execute_binary(op: BinaryOp, left: Value, right: Value) -> Result<Value> {
     Ok(Value::Tensor(output))
 }
 
-fn execute_gather(input: Value, dim: usize, indices: Value) -> Result<Value> {
+fn execute_gather(
+    input: Value,
+    dim: usize,
+    indices: Value,
+    validate_indices: bool,
+) -> Result<Value> {
     let input = input.into_tensor()?;
+    let input_shape = input.dims();
+    let size = input_shape.get(dim).copied().ok_or_else(|| {
+        TynxError::Shape(format!(
+            "captured gather dimension {dim} is out of range for rank {}",
+            input_shape.len()
+        ))
+    })?;
     let indices = indices.into_int()?;
+    if validate_indices {
+        let size = i64::try_from(size).map_err(|_| {
+            TynxError::Shape(format!(
+                "gather dimension {dim} exceeds the supported index range"
+            ))
+        })?;
+        let values = indices
+            .clone()
+            .into_data()
+            .iter::<i64>()
+            .collect::<Vec<_>>();
+        if let Some(error) = tynx_core::take_device_error() {
+            return Err(TynxError::AsynchronousDevice(error));
+        }
+        if let Some(index) = values
+            .into_iter()
+            .find(|index| *index < 0 || *index >= size)
+        {
+            return Err(TynxError::Index(format!(
+                "gather index {index} is out of bounds for dimension {dim} with size {size}"
+            )));
+        }
+    }
     input.gather(dim, indices).map(Value::Tensor)
 }
 
