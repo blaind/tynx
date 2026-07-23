@@ -129,7 +129,7 @@ def test_distribution_argument_errors_are_visible() -> None:
     ):
         with pytest.raises(ValueError, match="greater than zero"):
             tynx.distributions.Normal(tynx.Tensor([0.0]), tensor_scale, validate_args=True)
-    with pytest.raises(TypeError, match="validate_args must be a bool"):
+    with pytest.raises(TypeError, match="validate_args must be a bool or None"):
         tynx.distributions.Normal(0.0, 1.0, validate_args=1)  # type: ignore[arg-type]
 
 
@@ -139,3 +139,16 @@ def test_normal_tensor_scale_validation_is_explicit() -> None:
     distribution = tynx.distributions.Normal(tynx.Tensor([0.0]), scale)
 
     assert distribution.scale is scale
+
+
+def test_normal_validate_args_false_consistently_skips_scale_checks() -> None:
+    scalar = tynx.distributions.Normal(0.0, -1.0, validate_args=False)
+    tensor_scale = tynx.Tensor([-1.0])
+    tensor = tynx.distributions.Normal(
+        tynx.Tensor([0.0]),
+        tensor_scale,
+        validate_args=False,
+    )
+
+    assert scalar.scale.item() == pytest.approx(-1.0)
+    assert tensor.scale is tensor_scale

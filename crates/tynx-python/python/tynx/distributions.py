@@ -80,16 +80,17 @@ class Normal:
         loc: _Union[Tensor, float],
         scale: _Union[Tensor, float],
         *,
-        validate_args: bool = False,
+        validate_args: _Optional[bool] = None,
     ) -> None:
         """Construct a Normal distribution.
 
-        Scalar scales are always validated. Set ``validate_args=True`` to validate a
-        tensor-valued scale too; that explicit check reads the tensor on the host.
+        The default validates scalar scales without synchronizing tensor values. Set
+        ``validate_args=True`` to validate tensor-valued scales too; that explicit check
+        reads the tensor on the host. Set it to ``False`` to disable both checks.
         """
-        if not isinstance(validate_args, bool):
-            raise TypeError("Normal validate_args must be a bool")
-        if not isinstance(scale, Tensor) and not scale > 0.0:
+        if validate_args is not None and not isinstance(validate_args, bool):
+            raise TypeError("Normal validate_args must be a bool or None")
+        if not isinstance(scale, Tensor) and validate_args is not False and not scale > 0.0:
             raise ValueError(f"Normal scale must be greater than zero, got {scale!r}")
         if not isinstance(loc, Tensor):
             loc = scale.detach() * 0.0 + loc if isinstance(scale, Tensor) else Tensor([loc])
@@ -97,7 +98,7 @@ class Normal:
             scale = loc.detach() * 0.0 + scale
         if loc.dtype != "float32" or scale.dtype != "float32":
             raise TypeError("Normal loc and scale must be float32 Tensors")
-        if validate_args and scale.numel > 0 and not scale.min().item() > 0.0:
+        if validate_args is True and scale.numel > 0 and not scale.min().item() > 0.0:
             raise ValueError("Normal scale must contain only values greater than zero")
         self.loc = loc
         self.scale = scale
