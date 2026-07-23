@@ -21,6 +21,30 @@ _ACTOR_CRITIC_MODEL = bytes.fromhex(
     "080112080a0208040a02080262180a066c6f67697473120e0a0c080112080a0208040a020802"
     "62180a0676616c756573120e0a0c080112080a0208040a020801"
 )
+_GATHER_MODEL = bytes.fromhex(
+    "08083ac4010a450a10656d62656464696e672e7765696768740a07696e646963657312087365"
+    "6c65637465641a09656d62656464696e6722064761746865722a0b0a04617869731800a00102"
+    "12146761746865725f747261696e696e675f746573742a320803080210014210656d62656464"
+    "696e672e7765696768744a180000803f0000004000004040000080400000a0400000c0405a15"
+    "0a07696e6469636573120a0a08080712040a020803621a0a0873656c6563746564120e0a0c08"
+    "0112080a0208030a02080242040a00100d"
+)
+_LAYER_NORM_MODEL = bytes.fromhex(
+    "08083adf010a610a01780a0b6e6f726d2e7765696768740a096e6f726d2e62696173120179"
+    "1a046e6f726d22124c617965724e6f726d616c697a6174696f6e2a140a046178697318ffffff"
+    "ffffffffffff01a001022a110a07657073696c6f6e15acc52737a0010112186c617965725f6e"
+    "6f726d5f747261696e696e675f746573742a1b0802100122080000803f0000803f420b6e6f"
+    "726d2e7765696768742a19080210012208000000000000000042096e6f726d2e626961735a"
+    "130a0178120e0a0c080112080a0208020a02080262130a0179120e0a0c080112080a0208020a"
+    "02080242040a001011"
+)
+_BATCHED_MATMUL_MODEL = bytes.fromhex(
+    "08083aaa010a2d0a01780a1170726f6a656374696f6e2e7765696768741201791a0a70726f"
+    "6a656374696f6e22064d61744d756c1212626174636865645f70726f6a656374696f6e2a33"
+    "08030802100122180000803f00000000000000000000803f0000803f0000803f421170726f"
+    "6a656374696f6e2e7765696768745a170a017812120a100801120c0a0208020a0208020a02"
+    "080362170a017912120a100801120c0a0208020a0208020a02080242040a00100d"
+)
 
 
 def _accelerated_device() -> tynx.Device:
@@ -170,6 +194,55 @@ def test_accelerated_embedding_accumulates_repeated_index_gradients() -> None:
     assert layer.weight.grad is not None
     assert layer.weight.grad.flatten().tolist() == pytest.approx(
         [0.0, 0.0, 1.0, 1.0, 2.0, 2.0, 0.0, 0.0]
+    )
+
+
+def test_accelerated_imported_gather_layer_norm_and_batched_matmul(
+    tmp_path: Path,
+) -> None:
+    device = _accelerated_device()
+
+    gather_path = tmp_path / "gather.onnx"
+    gather_path.write_bytes(_GATHER_MODEL)
+    gather = tynx.load(gather_path, trainable="auto", simplify=False)
+    gather(tynx.Tensor([0, 2, 0], dtype="int64")).sum().backward()
+    gather_weight = dict(gather.named_parameters())["embedding.weight"]
+
+    norm_path = tmp_path / "layer_norm.onnx"
+    norm_path.write_bytes(_LAYER_NORM_MODEL)
+    norm = tynx.load(norm_path, trainable="auto", simplify=False)
+    norm(tynx.Tensor([[1.0, 3.0], [2.0, 6.0]])).sum().backward()
+    norm_parameters = dict(norm.named_parameters())
+
+    matmul_path = tmp_path / "batched_matmul.onnx"
+    matmul_path.write_bytes(_BATCHED_MATMUL_MODEL)
+    matmul = tynx.load(matmul_path, trainable="auto", simplify=False)
+    projected = matmul(
+        tynx.Tensor(
+            [
+                [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
+                [[7.0, 8.0, 9.0], [10.0, 11.0, 12.0]],
+            ]
+        )
+    )
+    projected.sum().backward()
+    projection_weight = dict(matmul.named_parameters())["projection.weight"]
+
+    tynx.synchronize(device)
+    assert gather_weight.grad is not None
+    assert gather_weight.grad.flatten().tolist() == pytest.approx([2.0, 2.0, 0.0, 0.0, 1.0, 1.0])
+    assert norm_parameters["norm.weight"].grad is not None
+    assert norm_parameters["norm.weight"].grad.flatten().tolist() == pytest.approx(
+        [-1.999994, 1.999994], abs=1e-5
+    )
+    assert norm_parameters["norm.bias"].grad is not None
+    assert norm_parameters["norm.bias"].grad.tolist() == pytest.approx([2.0, 2.0])
+    assert projected.flatten().tolist() == pytest.approx(
+        [4.0, 5.0, 10.0, 11.0, 16.0, 17.0, 22.0, 23.0]
+    )
+    assert projection_weight.grad is not None
+    assert projection_weight.grad.flatten().tolist() == pytest.approx(
+        [22.0, 22.0, 26.0, 26.0, 30.0, 30.0]
     )
 
 
