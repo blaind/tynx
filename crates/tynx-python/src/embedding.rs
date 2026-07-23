@@ -18,3 +18,12 @@ use crate::tensor::PyTensor;
 pub fn wrap_external_tensor(py: Python<'_>, tensor: DynTensor) -> PyResult<Py<PyAny>> {
     Ok(Py::new(py, PyTensor::from_inner(tensor))?.into_any())
 }
+
+/// Clone a Python `tynx.Tensor` as an off-tape inference tensor for a trusted GPU copy.
+///
+/// This never reads tensor data. It only removes autodiff metadata from a cloned handle so an
+/// embedding can queue a same-device copy into externally owned writable storage.
+pub fn external_copy_source(value: &Bound<'_, PyAny>) -> PyResult<DynTensor> {
+    let tensor = value.extract::<PyRef<'_, PyTensor>>()?;
+    Ok(tensor.detached_float_value("external GPU copy")?.inner())
+}

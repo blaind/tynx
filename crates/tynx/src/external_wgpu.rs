@@ -11,6 +11,7 @@ use burn::backend::{Autodiff, AutodiffBackend};
 use burn::prelude::{DeviceKind, Shape, Tensor};
 use cubecl::{
     Runtime,
+    ir::{ElemType, FloatKind, StorageType},
     wgpu::{RuntimeOptions, WgpuCompiler, WgpuDevice, WgpuResource, WgpuRuntime, WgpuSetup},
 };
 
@@ -40,6 +41,55 @@ enum Compiler {
 struct ExternalWgpuBuffer {
     buffer: wgpu::Buffer,
     _owner: Arc<dyn Any + Send + Sync>,
+}
+
+macro_rules! copy_rank_f32 {
+    ($backend:ty, $source:expr, $destination:expr) => {{
+        let source = $source
+            .try_into_primitive::<$backend>()
+            .map_err(|error| external_error(format!("invalid external copy source: {error:?}")))?;
+        let destination = $destination
+            .try_into_primitive::<$backend>()
+            .map_err(|error| {
+                external_error(format!("invalid external copy destination: {error:?}"))
+            })?;
+        let client = source.client.clone();
+        cubecl::std::tensor::copy_into(
+            &client,
+            source.binding(),
+            destination.binding(),
+            StorageType::Scalar(ElemType::Float(FloatKind::F32)),
+        );
+        Ok(())
+    }};
+}
+
+macro_rules! copy_dyn_f32 {
+    ($backend:ty, $source:expr, $destination:expr) => {{
+        match ($source, $destination) {
+            (DynTensor::R1(source), DynTensor::R1(destination)) => {
+                copy_rank_f32!($backend, source, destination)
+            }
+            (DynTensor::R2(source), DynTensor::R2(destination)) => {
+                copy_rank_f32!($backend, source, destination)
+            }
+            (DynTensor::R3(source), DynTensor::R3(destination)) => {
+                copy_rank_f32!($backend, source, destination)
+            }
+            (DynTensor::R4(source), DynTensor::R4(destination)) => {
+                copy_rank_f32!($backend, source, destination)
+            }
+            (DynTensor::R5(source), DynTensor::R5(destination)) => {
+                copy_rank_f32!($backend, source, destination)
+            }
+            (DynTensor::R6(source), DynTensor::R6(destination)) => {
+                copy_rank_f32!($backend, source, destination)
+            }
+            _ => Err(external_error(
+                "external copy requires source and destination to have the same rank",
+            )),
+        }
+    }};
 }
 
 impl Debug for ExternalWgpuBuffer {
@@ -233,6 +283,50 @@ impl ExternalWgpuContext {
         descriptor: AcquiredExternalTensorDescriptor,
     ) -> Result<DynTensor> {
         self.adopt_f32(descriptor)
+    }
+
+    /// Copy one dense inference tensor into a writable adopted tensor on the shared GPU queue.
+    ///
+    /// Both tensors must be f32, have the same shape, and belong to this context's inference
+    /// backend. This queues a device-to-device CubeCL copy; it never maps either allocation or
+    /// stages through host memory. A training result should be detached and converted with
+    /// [`DynTensor::inner`] before calling this method.
+    pub fn copy_f32_into(&self, source: DynTensor, destination: DynTensor) -> Result<()> {
+        if source.dims() != destination.dims() {
+            return Err(external_error(format!(
+                "external copy requires matching shapes, got {:?} and {:?}",
+                source.dims(),
+                destination.dims()
+            )));
+        }
+        if source.dtype() != crate::DType::F32 || destination.dtype() != crate::DType::F32 {
+            return Err(external_error(format!(
+                "external copy requires f32 tensors, got {} and {}",
+                source.dtype().name(),
+                destination.dtype().name()
+            )));
+        }
+        if source.device().inner() != self.device.clone().inner()
+            || destination.device().inner() != self.device.clone().inner()
+        {
+            return Err(external_error(format!(
+                "external copy tensors must use context device {:?}, got {:?} and {:?}",
+                self.device,
+                source.device(),
+                destination.device()
+            )));
+        }
+
+        match self.compiler {
+            #[cfg(feature = "wgpu")]
+            Compiler::Automatic => {
+                copy_dyn_f32!(burn::backend::Wgpu, source, destination)
+            }
+            #[cfg(feature = "vulkan")]
+            Compiler::Vulkan => {
+                copy_dyn_f32!(burn::backend::Vulkan, source, destination)
+            }
+        }
     }
 
     /// Adopt an acquired descriptor as a read-only tensor on the autodiff backend.
@@ -527,6 +621,34 @@ mod tests {
         (descriptor, buffer, owner_weak, calls)
     }
 
+    fn writable_descriptor(
+        context: &ExternalWgpuContext,
+        buffer: wgpu::Buffer,
+    ) -> AcquiredExternalTensorDescriptor {
+        let lease = context.lease_buffer(buffer, Arc::new(Owner)).unwrap();
+        let capability = context.capability();
+        ExternalTensorDescriptor::new(
+            capability.clone(),
+            lease,
+            0,
+            16,
+            vec![4],
+            DType::F32,
+            vec![1],
+            ExternalAccess::ReadWrite,
+            SubmissionToken::new(
+                capability.clone(),
+                Submission {
+                    calls: Arc::new(AtomicUsize::new(0)),
+                },
+            ),
+        )
+        .validate_read_write_dense(&capability)
+        .unwrap()
+        .acquire()
+        .unwrap()
+    }
+
     fn context_and_buffer() -> (ExternalWgpuContext, wgpu::Buffer) {
         let setup = noop_setup();
         let buffer = setup.device.create_buffer(&wgpu::BufferDescriptor {
@@ -615,6 +737,28 @@ mod tests {
         assert_eq!(mean, [2.5]);
         context.reclaim_unused_external_buffers().unwrap();
         assert!(owner.upgrade().is_none());
+    }
+
+    #[test]
+    fn copies_inference_results_into_writable_external_storage_without_host_staging() {
+        let Some((context, buffer, _queue)) = executing_context_and_buffer() else {
+            eprintln!("skipping external WGPU copy test: no executing adapter");
+            return;
+        };
+        let destination = context
+            .adopt_f32_write(writable_descriptor(&context, buffer))
+            .unwrap();
+        let source = DynTensor::from_data(
+            crate::TensorData::new(vec![1.5_f32, -2.0, 3.25, 8.0], [4]),
+            1,
+            &context.device(),
+        )
+        .unwrap();
+
+        context.copy_f32_into(source, destination.clone()).unwrap();
+        let values = destination.into_data().iter::<f32>().collect::<Vec<_>>();
+
+        assert_eq!(values, [1.5, -2.0, 3.25, 8.0]);
     }
 
     #[cfg(feature = "training")]
