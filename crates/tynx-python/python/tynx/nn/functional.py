@@ -117,8 +117,10 @@ def embedding(
     return _embedding(input, weight, padding_idx)
 
 
-def relu(input: Tensor) -> Tensor:
+def relu(input: Tensor, inplace: bool = False) -> Tensor:
     """Apply rectified linear activation elementwise."""
+    if _bool(inplace, "inplace"):
+        raise NotImplementedError("relu inplace=True is not supported")
     return input.relu()
 
 
