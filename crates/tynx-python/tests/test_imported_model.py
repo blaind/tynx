@@ -75,6 +75,64 @@ _BATCHED_MATMUL_MODEL = bytes.fromhex(
     "6a656374696f6e2e7765696768745a170a017812120a100801120c0a0208020a0208020a02"
     "080362170a017912120a100801120c0a0208020a0208020a02080242040a00100d"
 )
+_PRELU_MODEL = bytes.fromhex(
+    "08084202100d3a710a200a01780a05736c6f70651201791a0a61637469766174696f6e2205"
+    "5052656c751217756e737570706f727465645f736c6f745f7265706f72742a120a01011001"
+    "22040000803e4205736c6f70655a0f0a0178120a0a08080112040a020802620f0a0179120a"
+    "0a08080112040a020802"
+)
+_INSTANCE_NORM_MODEL = bytes.fromhex(
+    "08084202100d3ab8010a300a01780a057363616c650a04626961731201791a046e6f726d22"
+    "15496e7374616e63654e6f726d616c697a6174696f6e1223696d706f727465645f496e7374"
+    "616e63654e6f726d616c697a6174696f6e5f746573742a160a0102100122080000803f0000"
+    "803f42057363616c652a150a01021001220800000000000000004204626961735a170a0178"
+    "12120a100801120c0a0208010a0208020a02080262170a017912120a100801120c0a020801"
+    "0a0208020a020802"
+)
+_GROUP_NORM_MODEL = bytes.fromhex(
+    "0808420210123ad5010a400a01780a057363616c650a04626961731201791a046e6f726d22"
+    "1247726f75704e6f726d616c697a6174696f6e2a110a0a6e756d5f67726f757073a0010218"
+    "021220696d706f727465645f47726f75704e6f726d616c697a6174696f6e5f746573742a1e"
+    "0a0104100122100000803f0000803f0000803f0000803f42057363616c652a1d0a01041001"
+    "2210000000000000000000000000000000004204626961735a170a017812120a100801120c"
+    "0a0208010a0208040a02080262170a017912120a100801120c0a0208010a0208040a020802"
+)
+_CONV1D_MODEL = bytes.fromhex(
+    "08084202100d3a97010a210a01780a067765696768740a04626961731201791a056c617965"
+    "722204436f6e761216696d706f727465645f747261696e696e675f746573742a150a030101"
+    "01100122040000803f42067765696768742a110a010110012204000000004204626961735a"
+    "170a017812120a100801120c0a0208010a0208010a02080262170a017912120a100801120c"
+    "0a0208010a0208010a020802"
+)
+_CONV3D_MODEL = bytes.fromhex(
+    "08084202100d3aa9010a210a01780a067765696768740a04626961731201791a056c617965"
+    "722204436f6e761216696d706f727465645f747261696e696e675f746573742a170a050101"
+    "010101100122040000803f42067765696768742a110a010110012204000000004204626961"
+    "735a1f0a0178121a0a18080112140a0208010a0208010a0208010a0208010a020802621f0a"
+    "0179121a0a18080112140a0208010a0208010a0208010a0208010a020802"
+)
+_CONV_TRANSPOSE1D_MODEL = bytes.fromhex(
+    "08084202100d3aa0010a2a0a01780a067765696768740a04626961731201791a056c617965"
+    "72220d436f6e765472616e73706f73651216696d706f727465645f747261696e696e675f74"
+    "6573742a150a03010101100122040000803f42067765696768742a110a0101100122040000"
+    "00004204626961735a170a017812120a100801120c0a0208010a0208010a02080262170a01"
+    "7912120a100801120c0a0208010a0208010a020802"
+)
+_CONV_TRANSPOSE2D_MODEL = bytes.fromhex(
+    "08084202100d3aa9010a2a0a01780a067765696768740a04626961731201791a056c617965"
+    "72220d436f6e765472616e73706f73651216696d706f727465645f747261696e696e675f74"
+    "6573742a160a0401010101100122040000803f42067765696768742a110a01011001220400"
+    "0000004204626961735a1b0a017812160a14080112100a0208010a0208010a0208010a0208"
+    "02621b0a017912160a14080112100a0208010a0208010a0208010a020802"
+)
+_CONV_TRANSPOSE3D_MODEL = bytes.fromhex(
+    "08084202100d3ab2010a2a0a01780a067765696768740a04626961731201791a056c617965"
+    "72220d436f6e765472616e73706f73651216696d706f727465645f747261696e696e675f74"
+    "6573742a170a050101010101100122040000803f42067765696768742a110a010110012204"
+    "000000004204626961735a1f0a0178121a0a18080112140a0208010a0208010a0208010a02"
+    "08010a020802621f0a0179121a0a18080112140a0208010a0208010a0208010a0208010a02"
+    "0802"
+)
 
 
 def _model_path(tmp_path: Path) -> Path:
@@ -229,6 +287,62 @@ def test_imported_batched_matmul_trains_rank_two_weight(tmp_path: Path) -> None:
     weight = dict(model.named_parameters())["projection.weight"]
     assert weight.grad is not None
     assert weight.grad.flatten().tolist() == pytest.approx([22.0, 22.0, 26.0, 26.0, 30.0, 30.0])
+
+
+def test_public_imported_prelu_trains_live_slope(tmp_path: Path) -> None:
+    path = tmp_path / "prelu.onnx"
+    path.write_bytes(_PRELU_MODEL)
+    model = tynx.load(path, trainable="auto", simplify=False)
+    input = tynx.Tensor([-2.0, 3.0])
+
+    output = model(input)
+    assert output.tolist() == pytest.approx([-0.5, 3.0])
+    output.sum().backward()
+
+    slope = dict(model.named_parameters())["slope"]
+    assert slope.grad is not None
+    assert slope.grad.tolist() == pytest.approx([-2.0])
+    optimizer = tynx.optim.SGD(model.named_parameters(), lr=0.1)
+    optimizer.step()
+    assert model(input).tolist() == pytest.approx([-0.9, 3.0])
+
+
+@pytest.mark.parametrize(
+    ("filename", "model_bytes", "shape"),
+    [
+        ("instance_norm.onnx", _INSTANCE_NORM_MODEL, (1, 2, 2)),
+        ("group_norm.onnx", _GROUP_NORM_MODEL, (1, 4, 2)),
+        ("conv1d.onnx", _CONV1D_MODEL, (1, 1, 2)),
+        ("conv3d.onnx", _CONV3D_MODEL, (1, 1, 1, 1, 2)),
+        ("conv_transpose1d.onnx", _CONV_TRANSPOSE1D_MODEL, (1, 1, 2)),
+        ("conv_transpose2d.onnx", _CONV_TRANSPOSE2D_MODEL, (1, 1, 1, 2)),
+        ("conv_transpose3d.onnx", _CONV_TRANSPOSE3D_MODEL, (1, 1, 1, 1, 2)),
+    ],
+)
+def test_public_imported_affine_operator_slots_update(
+    tmp_path: Path,
+    filename: str,
+    model_bytes: bytes,
+    shape: tuple[int, ...],
+) -> None:
+    path = tmp_path / filename
+    path.write_bytes(model_bytes)
+    model = tynx.load(path, trainable="auto", simplify=False)
+    report = model.require_trainable()
+    input = tynx.ones(shape)
+
+    output = model(input)
+    before = output.flatten().tolist()
+    ((output * output).sum() + output.sum()).backward()
+
+    parameters = dict(model.named_parameters())
+    assert len(parameters) == 2
+    assert report.errors == []
+    assert report.backward_issues == []
+    assert all(parameter.grad is not None for parameter in parameters.values())
+    optimizer = tynx.optim.SGD(model.named_parameters(), lr=0.05)
+    optimizer.step()
+    assert model(input).flatten().tolist() != before
 
 
 def test_imported_model_checkpoint_restores_weights_and_optimizer_state(tmp_path: Path) -> None:
