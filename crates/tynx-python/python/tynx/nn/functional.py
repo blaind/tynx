@@ -117,6 +117,11 @@ def embedding(
     return _embedding(input, weight, padding_idx)
 
 
+def relu(input: Tensor) -> Tensor:
+    """Apply rectified linear activation elementwise."""
+    return input.relu()
+
+
 def mse_loss(input: Tensor, target: Tensor, reduction: _Reduction = "mean") -> Tensor:
     """Return elementwise, mean, or summed squared error for exactly matching shapes."""
     _require_same_shape(input, target, "mse_loss")
@@ -206,4 +211,5 @@ __all__ = [
     "embedding",
     "max_pool2d",
     "mse_loss",
+    "relu",
 ]

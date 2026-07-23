@@ -822,6 +822,17 @@ def test_functional_mse_loss_reductions_and_gradients() -> None:
     assert prediction.grad.tolist() == pytest.approx([1.0, 2.0])
 
 
+def test_functional_relu_forwards_and_backpropagates() -> None:
+    input = tynx.Tensor([-2.0, 0.0, 3.0], requires_grad=True)
+
+    output = tynx.nn.functional.relu(input)
+    output.sum().backward()
+
+    assert output.tolist() == pytest.approx([0.0, 0.0, 3.0])
+    assert input.grad is not None
+    assert input.grad.tolist() == pytest.approx([0.0, 0.0, 1.0])
+
+
 def test_functional_cross_entropy_matches_reference_and_backpropagates() -> None:
     logits = tynx.Tensor([[2.0, 1.0, 0.0], [0.0, 1.0, 2.0]], requires_grad=True)
     targets = tynx.Tensor([0, 2], dtype="int64")
