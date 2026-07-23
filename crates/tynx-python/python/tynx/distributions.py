@@ -5,21 +5,43 @@ from typing import Optional as _Optional
 from typing import Union as _Union
 
 from ._tynx import Tensor, _categorical_sample, _normal_sample
+from ._tynx import zeros as _zeros
 
 
-def _broadcast_shape(left: tuple[int, ...], right: tuple[int, ...]) -> tuple[int, ...]:
+def _broadcast_shape(
+    left: tuple[int, ...],
+    right: tuple[int, ...],
+    operation: str,
+) -> tuple[int, ...]:
     rank = max(len(left), len(right))
     left = (1,) * (rank - len(left)) + left
     right = (1,) * (rank - len(right)) + right
     output = []
     for left_dim, right_dim in zip(left, right):
-        if left_dim != right_dim and left_dim != 1 and right_dim != 1:
-            raise ValueError(
-                "Categorical.log_prob value shape "
-                f"{left} is not broadcastable with batch shape {right}"
-            )
-        output.append(max(left_dim, right_dim))
+        if left_dim == right_dim:
+            output.append(left_dim)
+        elif left_dim == 1:
+            output.append(right_dim)
+        elif right_dim == 1:
+            output.append(left_dim)
+        else:
+            raise ValueError(f"{operation} shape {left} is not broadcastable with shape {right}")
     return tuple(output)
+
+
+def _sample_shape(value: tuple[int, ...]) -> tuple[int, ...]:
+    if not isinstance(value, tuple):
+        raise TypeError("sample_shape must be a tuple of non-negative integers")
+    if any(type(dimension) is not int or dimension < 0 for dimension in value):
+        raise ValueError("sample_shape must contain only non-negative integers")
+    return value
+
+
+def _expand_to(value: Tensor, shape: tuple[int, ...]) -> Tensor:
+    aligned_shape = (1,) * (len(shape) - value.ndim) + value.shape
+    if value.shape != aligned_shape:
+        value = value.reshape(aligned_shape)
+    return value if value.shape == shape else value.expand(shape)
 
 
 class Categorical:
@@ -41,14 +63,24 @@ class Categorical:
             self.probs = normalized
             self.logits = normalized.log()
 
-    def sample(self, *, seed: _Optional[int] = None) -> Tensor:
+    def sample(
+        self,
+        sample_shape: tuple[int, ...] = (),
+        *,
+        seed: _Optional[int] = None,
+    ) -> Tensor:
         """Draw detached int64 class indices, advancing native device RNG state."""
-        return _categorical_sample(self.logits, seed)
+        sample_shape = _sample_shape(sample_shape)
+        logits = _expand_to(
+            self.logits,
+            (*sample_shape, *self.logits.shape),
+        )
+        return _categorical_sample(logits, seed)
 
     def log_prob(self, value: Tensor) -> Tensor:
         """Return selected normalized log probabilities for int64 indices."""
         batch_shape = self.logits.shape[:-1]
-        output_shape = _broadcast_shape(value.shape, batch_shape)
+        output_shape = _broadcast_shape(value.shape, batch_shape, "Categorical.log_prob value")
 
         logits_shape = (1,) * (len(output_shape) - len(batch_shape)) + self.logits.shape
         logits = (
@@ -103,9 +135,23 @@ class Normal:
         self.loc = loc
         self.scale = scale
 
-    def sample(self, *, seed: _Optional[int] = None) -> Tensor:
+    def sample(
+        self,
+        sample_shape: tuple[int, ...] = (),
+        *,
+        seed: _Optional[int] = None,
+    ) -> Tensor:
         """Draw a detached sample, advancing native device RNG state."""
-        return _normal_sample(self.loc, self.scale, seed)
+        sample_shape = _sample_shape(sample_shape)
+        batch_shape = _broadcast_shape(self.loc.shape, self.scale.shape, "Normal parameter")
+        output_shape = (*sample_shape, *batch_shape)
+        if 0 in output_shape:
+            if self.loc.device != self.scale.device:
+                raise ValueError("Normal loc and scale must be on the same device")
+            return _zeros(output_shape, device=self.loc.device)
+        loc = _expand_to(self.loc, output_shape)
+        scale = _expand_to(self.scale, output_shape)
+        return _normal_sample(loc, scale, seed)
 
     def log_prob(self, value: Tensor) -> Tensor:
         """Return elementwise log density."""
