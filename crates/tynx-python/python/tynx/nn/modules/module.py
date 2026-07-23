@@ -43,6 +43,11 @@ class Module:
 
         return named_buffers(self)
 
+    def zero_grad(self) -> None:
+        """Clear gradients for every recursively discovered parameter."""
+        for parameter in self.parameters():
+            parameter.zero_grad()
+
     def state_dict(self) -> dict[str, Tensor]:
         from ..state import get_state_dict
 
