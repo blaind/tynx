@@ -45,6 +45,37 @@ def test_padding_idx_preserves_forward_value_but_blocks_gradient() -> None:
     assert layer.weight.grad.tolist() == [[0.0, 0.0], [1.0, 1.0], [0.0, 0.0]]
 
 
+def test_compile_replays_complete_embedding_training_step() -> None:
+    layer = tynx.nn.Embedding(3, 2, padding_idx=0)
+    layer.weight.copy_(_weight())
+    optimizer = tynx.optim.SGD(layer.parameters(), lr=0.1)
+    calls = 0
+
+    @tynx.compile(fullgraph=True)
+    def train_step(indices: tynx.Tensor) -> tynx.Tensor:
+        nonlocal calls
+        calls += 1
+        optimizer.zero_grad()
+        loss = layer(indices).sum()
+        loss.backward()
+        optimizer.step()
+        return loss
+
+    indices = tynx.Tensor([0, 2, 2, 1], dtype="int64")
+    first = train_step(indices)
+    second = train_step(indices)
+
+    assert second.item() < first.item()
+    assert layer.weight.tolist()[0] == [1.0, 2.0]
+    assert calls == 1
+    assert train_step.compile_count == 1
+    assert train_step.fallback_count == 0
+    assert train_step.replay_count == 1
+
+    with pytest.raises(IndexError, match=r"embedding index 3.*size 3"):
+        train_step(tynx.Tensor([0, 3, 2, 1], dtype="int64"))
+
+
 def test_embedding_initialization_uses_tynx_seeded_rng() -> None:
     tynx.manual_seed(31)
     first = tynx.nn.Embedding(4, 3).weight.tolist()

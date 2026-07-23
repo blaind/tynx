@@ -5,7 +5,10 @@ use tynx_capture::UnaryOp;
 use tynx_core::Value;
 
 use crate::{
-    capture::record_conv2d, grad_mode::is_grad_enabled, tensor::PyTensor, to_python_error,
+    capture::{record_conv2d, record_embedding},
+    grad_mode::is_grad_enabled,
+    tensor::PyTensor,
+    to_python_error,
 };
 
 #[pyfunction(name = "_conv2d")]
@@ -167,8 +170,6 @@ pub(crate) fn embedding_py(
     weight: PyRef<'_, PyTensor>,
     padding_idx: Option<usize>,
 ) -> PyResult<PyTensor> {
-    input.capture_unsupported("embedding")?;
-    weight.capture_unsupported("embedding")?;
     let weight_shape = weight.detached_float_value("embedding")?.dims();
     if weight_shape.len() != 2 {
         return Err(PyTypeError::new_err(format!(
@@ -189,9 +190,14 @@ pub(crate) fn embedding_py(
         .operation_float_value(tracking, "embedding")?
         .embedding(indices, padding_idx)
         .map_err(to_python_error)?;
-    Ok(if tracking {
+    let result = if tracking {
         PyTensor::from_operation(output, &[&weight])
     } else {
         PyTensor::from_inner(output)
+    };
+    let trace = record_embedding(&weight, &input, weight_shape[0], padding_idx)?;
+    Ok(match trace {
+        Some(trace) => result.with_trace(trace),
+        None => result,
     })
 }

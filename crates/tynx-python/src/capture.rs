@@ -33,6 +33,7 @@ struct IndexConstraint {
     input: usize,
     size: usize,
     dim: usize,
+    operation: &'static str,
 }
 
 /// Shared state carried by tensors produced during one first-call trace.
@@ -120,12 +121,47 @@ impl CaptureState {
                 input: origin,
                 size,
                 dim,
+                operation: "gather",
             };
             let mut inner = self.inner.borrow_mut();
             if !inner.index_constraints.iter().any(|existing| {
                 existing.input == constraint.input
                     && existing.size == constraint.size
                     && existing.dim == constraint.dim
+                    && existing.operation == constraint.operation
+            }) {
+                inner.index_constraints.push(constraint);
+            }
+        }
+        Ok(value)
+    }
+
+    fn embedding(
+        &self,
+        weight: ValueId,
+        indices: ValueId,
+        size: usize,
+        padding_idx: Option<usize>,
+    ) -> PyResult<ValueId> {
+        let origin = self.inner.borrow().value_inputs.get(&indices).copied();
+        let value = self.with_builder(|builder| {
+            builder
+                .embedding(weight, indices, padding_idx, origin.is_none())
+                .map_err(to_python_error)
+        })?;
+        if let Some(origin) = origin {
+            let constraint = IndexConstraint {
+                input: origin,
+                size,
+                dim: 0,
+                operation: "embedding",
+            };
+            let mut inner = self.inner.borrow_mut();
+            if !inner.index_constraints.iter().any(|existing| {
+                existing.input == constraint.input
+                    && existing.size == constraint.size
+                    && existing.dim == constraint.dim
+                    && existing.operation == constraint.operation
             }) {
                 inner.index_constraints.push(constraint);
             }
@@ -430,6 +466,23 @@ pub(crate) fn record_gather(
         .map(|value| Some(TraceValue { state, value }))
 }
 
+pub(crate) fn record_embedding(
+    weight: &PyTensor,
+    indices: &PyTensor,
+    size: usize,
+    padding_idx: Option<usize>,
+) -> PyResult<Option<TraceValue>> {
+    let Some((state, values)) = traced_inputs(&[weight, indices])? else {
+        return Ok(None);
+    };
+    let mut values = values.into_iter();
+    let weight = values.next().expect("embedding weight was traced");
+    let indices = values.next().expect("embedding indices were traced");
+    state
+        .embedding(weight, indices, size, padding_idx)
+        .map(|value| Some(TraceValue { state, value }))
+}
+
 pub(crate) fn record_index_select(
     input: &PyTensor,
     dim: usize,
@@ -705,7 +758,7 @@ impl PyCapturedGraph {
             inputs[constraint.input].validate_index_bounds(
                 constraint.size,
                 constraint.dim,
-                "gather",
+                constraint.operation,
             )?;
         }
         let tracking = is_grad_enabled();

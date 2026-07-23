@@ -2,7 +2,7 @@ use burn::tensor::{DType, Device, TensorData};
 use std::{cell::RefCell, rc::Rc};
 
 use tynx_capture::{BinaryOp, CapturedOptimizer, GraphBuilder, UnaryOp};
-use tynx_core::{DynTensor, Result};
+use tynx_core::{DynInt, DynTensor, Result, Value};
 use tynx_train::{ParameterSlot, ParameterStore, Sgd, backward};
 
 fn tensor(data: &[f32], shape: [usize; 2], device: &Device) -> DynTensor {
@@ -128,6 +128,71 @@ fn replays_conv2d_with_gradients_and_current_parameter_values() {
     graph.validate_parameters().unwrap();
     let updated = graph.run(&[input], false).unwrap().remove(0);
     assert_ne!(values(updated), vec![12.0, 16.0, 24.0, 28.0]);
+}
+
+#[test]
+fn replays_embedding_with_repeated_indices_and_current_weight() {
+    let device = Device::autodiff(Device::default());
+    let indices =
+        DynInt::from_data(TensorData::new(vec![0_i64, 2, 2, 1], [4]), 1, &device).unwrap();
+    let weight = ParameterSlot::new(
+        Some("weight".to_string()),
+        tensor(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], [3, 2], &device),
+        true,
+    )
+    .unwrap();
+
+    let mut builder = GraphBuilder::new();
+    let indices = builder.input_value(&Value::Int(indices)).unwrap();
+    let weight_value = builder.parameter(weight.clone());
+    let output = builder
+        .embedding(weight_value, indices, Some(0), false)
+        .unwrap();
+    let graph = builder.finish(vec![output]).unwrap();
+
+    let replay_indices =
+        DynInt::from_data(TensorData::new(vec![0_i64, 2, 2, 1], [4]), 1, &device).unwrap();
+    let output = graph
+        .run_values(&[Value::Int(replay_indices)], true)
+        .unwrap()
+        .remove(0)
+        .into_tensor()
+        .unwrap();
+    assert_eq!(
+        values(output.clone()),
+        vec![1.0, 2.0, 5.0, 6.0, 5.0, 6.0, 3.0, 4.0]
+    );
+
+    let mut parameters = ParameterStore::new();
+    parameters.insert("weight", weight.clone()).unwrap();
+    let loss = output.sum_dims(&[0, 1]).reshape(vec![1]).unwrap();
+    backward(&loss, &parameters).unwrap();
+    assert_eq!(
+        values(weight.grad().expect("weight gradient")),
+        vec![0.0, 0.0, 1.0, 1.0, 2.0, 2.0]
+    );
+
+    let mut optimizer = Sgd::new(0.1).unwrap();
+    optimizer.step(&parameters).unwrap();
+    let replay_indices =
+        DynInt::from_data(TensorData::new(vec![1_i64, 2], [2]), 1, &device).unwrap();
+    let changed_shape = graph
+        .run_values(&[Value::Int(replay_indices)], false)
+        .unwrap_err();
+    assert!(changed_shape.to_string().contains("expected shape [4]"));
+
+    let replay_indices =
+        DynInt::from_data(TensorData::new(vec![0_i64, 2, 2, 1], [4]), 1, &device).unwrap();
+    let updated = graph
+        .run_values(&[Value::Int(replay_indices)], false)
+        .unwrap()
+        .remove(0)
+        .into_tensor()
+        .unwrap();
+    assert_ne!(
+        values(updated),
+        vec![1.0, 2.0, 5.0, 6.0, 5.0, 6.0, 3.0, 4.0]
+    );
 }
 
 #[test]

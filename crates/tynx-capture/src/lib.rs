@@ -278,6 +278,12 @@ enum Node {
         indices: ValueId,
         validate_indices: bool,
     },
+    Embedding {
+        weight: ValueId,
+        indices: ValueId,
+        padding_idx: Option<usize>,
+        validate_indices: bool,
+    },
     IndexSelect {
         input: ValueId,
         dim: usize,
@@ -440,6 +446,24 @@ impl GraphBuilder {
             input,
             dim,
             indices,
+            validate_indices,
+        }))
+    }
+
+    /// Record embedding lookup with repeated-index gradient accumulation.
+    pub fn embedding(
+        &mut self,
+        weight: ValueId,
+        indices: ValueId,
+        padding_idx: Option<usize>,
+        validate_indices: bool,
+    ) -> Result<ValueId> {
+        self.require_value(weight)?;
+        self.require_value(indices)?;
+        Ok(self.push(Node::Embedding {
+            weight,
+            indices,
+            padding_idx,
             validate_indices,
         }))
     }
@@ -632,6 +656,7 @@ fn node_differentiability(nodes: &[Node]) -> Vec<bool> {
                 _ => differentiable[left.index()] || differentiable[right.index()],
             },
             Node::Gather { input, .. } => differentiable[input.index()],
+            Node::Embedding { weight, .. } => differentiable[weight.index()],
             Node::IndexSelect { input, .. } => differentiable[input.index()],
             Node::Conv2d {
                 input,
@@ -755,6 +780,17 @@ impl Graph {
                         value(&values, *input)?,
                         *dim,
                         value(&values, *indices)?,
+                        *validate_indices,
+                    )?)),
+                    Node::Embedding {
+                        weight,
+                        indices,
+                        padding_idx,
+                        validate_indices,
+                    } => NodeValue::Tensor(Box::new(execute_embedding(
+                        value(&values, *weight)?,
+                        value(&values, *indices)?,
+                        *padding_idx,
                         *validate_indices,
                     )?)),
                     Node::IndexSelect {
@@ -1127,29 +1163,50 @@ fn execute_gather(
     })?;
     let indices = indices.into_int()?;
     if validate_indices {
-        let size = i64::try_from(size).map_err(|_| {
-            TynxError::Shape(format!(
-                "gather dimension {dim} exceeds the supported index range"
-            ))
-        })?;
-        let values = indices
-            .clone()
-            .into_data()
-            .iter::<i64>()
-            .collect::<Vec<_>>();
-        if let Some(error) = tynx_core::take_device_error() {
-            return Err(TynxError::AsynchronousDevice(error));
-        }
-        if let Some(index) = values
-            .into_iter()
-            .find(|index| *index < 0 || *index >= size)
-        {
-            return Err(TynxError::Index(format!(
-                "gather index {index} is out of bounds for dimension {dim} with size {size}"
-            )));
-        }
+        validate_index_values(indices.clone(), size, dim, "gather")?;
     }
     input.gather(dim, indices).map(Value::Tensor)
+}
+
+fn execute_embedding(
+    weight: Value,
+    indices: Value,
+    padding_idx: Option<usize>,
+    validate_indices: bool,
+) -> Result<Value> {
+    let weight = weight.into_tensor()?;
+    let weight_shape = weight.dims();
+    let embeddings = weight_shape.first().copied().ok_or_else(|| {
+        TynxError::Shape("captured embedding weight must have rank 2".to_string())
+    })?;
+    let indices = indices.into_int()?;
+    if validate_indices {
+        validate_index_values(indices.clone(), embeddings, 0, "embedding")?;
+    }
+    weight.embedding(indices, padding_idx).map(Value::Tensor)
+}
+
+fn validate_index_values(
+    indices: tynx_core::DynInt,
+    size: usize,
+    dim: usize,
+    operation: &str,
+) -> Result<()> {
+    let size = i64::try_from(size)
+        .map_err(|_| TynxError::Shape(format!("{operation} dimension exceeds i64")))?;
+    let values = indices.into_data().iter::<i64>().collect::<Vec<_>>();
+    if let Some(error) = tynx_core::take_device_error() {
+        return Err(TynxError::AsynchronousDevice(error));
+    }
+    if let Some(index) = values
+        .into_iter()
+        .find(|index| *index < 0 || *index >= size)
+    {
+        return Err(TynxError::Index(format!(
+            "{operation} index {index} is out of bounds for dimension {dim} with size {size}"
+        )));
+    }
+    Ok(())
 }
 
 fn execute_index_select(
