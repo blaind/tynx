@@ -14,7 +14,7 @@ mod tensor;
 use std::path::PathBuf;
 
 use capture::{PyCaptureSession, PyCapturedGraph};
-use pyo3::exceptions::{PyIndexError, PyOSError, PyTypeError, PyValueError};
+use pyo3::exceptions::{PyIndexError, PyOSError, PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
 use tynx_core::{Device, Env, PreparedSession, Scalar, Session, Value};
@@ -47,6 +47,13 @@ fn synchronize(device: Option<PyRef<'_, PyDevice>>) -> PyResult<()> {
         Some(device) => device.sync(),
         None => PyDevice::new(tynx_core::default_device()).sync(),
     }
+}
+
+/// Best-effort process-default device quiesce used by the Python shutdown hook.
+#[pyfunction]
+fn _synchronize_at_exit() -> PyResult<()> {
+    tynx_core::synchronize_initialized_default_device()
+        .map_err(|error| PyRuntimeError::new_err(error.to_string()))
 }
 
 /// A parsed ONNX model.
@@ -251,6 +258,7 @@ fn _tynx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(is_grad_enabled_py, module)?)?;
     module.add_function(wrap_pyfunction!(get_default_device, module)?)?;
     module.add_function(wrap_pyfunction!(synchronize, module)?)?;
+    module.add_function(wrap_pyfunction!(_synchronize_at_exit, module)?)?;
     module.add_function(wrap_pyfunction!(where_py, module)?)?;
     module.add_function(wrap_pyfunction!(maximum_py, module)?)?;
     module.add_function(wrap_pyfunction!(minimum_py, module)?)?;

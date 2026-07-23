@@ -9,7 +9,10 @@ mod session;
 mod tensor;
 mod value;
 
-pub use device::{allocation_size_limit, default_device, synchronize, take_device_error};
+pub use device::{
+    allocation_size_limit, default_device, synchronize, synchronize_initialized_default_device,
+    take_device_error,
+};
 pub use error::{Result, TynxError};
 pub use external::{
     AcquiredExternalTensorDescriptor, DeviceContextCapability, ExternalAccess, ExternalBufferLease,
