@@ -3,7 +3,9 @@
 use pyo3::{exceptions::PyTypeError, prelude::*};
 use tynx_core::Value;
 
-use crate::{grad_mode::is_grad_enabled, tensor::PyTensor, to_python_error};
+use crate::{
+    capture::record_conv2d, grad_mode::is_grad_enabled, tensor::PyTensor, to_python_error,
+};
 
 #[pyfunction(name = "_conv2d")]
 #[pyo3(signature = (input, weight, bias, stride, padding, dilation, groups))]
@@ -35,14 +37,28 @@ pub(crate) fn conv2d_py(
         )
         .map_err(to_python_error)?;
 
-    if !tracking {
-        return Ok(PyTensor::from_inner(output));
-    }
     let mut sources = vec![&*input, &*weight];
     if let Some(bias) = &bias {
         sources.push(bias);
     }
-    Ok(PyTensor::from_operation(output, &sources))
+    let result = if tracking {
+        PyTensor::from_operation(output, &sources)
+    } else {
+        PyTensor::from_inner(output)
+    };
+    let trace = record_conv2d(
+        &input,
+        &weight,
+        bias.as_deref(),
+        [stride.0, stride.1],
+        [padding.0, padding.1],
+        [dilation.0, dilation.1],
+        groups,
+    )?;
+    Ok(match trace {
+        Some(trace) => result.with_trace(trace),
+        None => result,
+    })
 }
 
 #[pyfunction(name = "_max_pool2d")]

@@ -25,6 +25,36 @@ def test_functional_conv2d_forward_and_backward() -> None:
     assert bias.grad.tolist() == pytest.approx([4.0])
 
 
+def test_compile_replays_complete_conv2d_training_step() -> None:
+    layer = tynx.nn.Conv2d(1, 1, 2)
+    layer.weight.copy_(tynx.Tensor([[[[1.0, 1.0], [1.0, 1.0]]]]))
+    assert layer.bias is not None
+    layer.bias.copy_(tynx.Tensor([0.0]))
+    optimizer = tynx.optim.SGD(layer.parameters(), lr=0.001)
+    calls = 0
+
+    @tynx.compile(fullgraph=True)
+    def train_step(input: tynx.Tensor) -> tynx.Tensor:
+        nonlocal calls
+        calls += 1
+        optimizer.zero_grad()
+        loss = layer(input).mean()
+        loss.backward()
+        optimizer.step()
+        return loss
+
+    input = tynx.Tensor([[[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]]]])
+    first = train_step(input)
+    second = train_step(input)
+
+    assert first.item() == pytest.approx(20.0)
+    assert second.item() < first.item()
+    assert calls == 1
+    assert train_step.compile_count == 1
+    assert train_step.fallback_count == 0
+    assert train_step.replay_count == 1
+
+
 def test_conv2d_layer_initializes_grouped_state_and_runs() -> None:
     layer = tynx.nn.Conv2d(4, 6, (3, 2), stride=2, padding=(1, 0), groups=2, bias=False)
     input = tynx.Tensor([[[[1.0] * 6 for _ in range(5)]] * 4])

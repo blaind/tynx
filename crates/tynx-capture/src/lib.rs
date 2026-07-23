@@ -253,6 +253,15 @@ enum Node {
         indices: ValueId,
         allow_negative: bool,
     },
+    Conv2d {
+        input: ValueId,
+        weight: ValueId,
+        bias: Option<ValueId>,
+        stride: [usize; 2],
+        padding: [usize; 2],
+        dilation: [usize; 2],
+        groups: usize,
+    },
     Operation {
         operation: Rc<dyn CapturedOperation>,
         inputs: Vec<ValueId>,
@@ -412,6 +421,34 @@ impl GraphBuilder {
         }))
     }
 
+    /// Record an NCHW two-dimensional convolution with symmetric padding.
+    #[allow(clippy::too_many_arguments)]
+    pub fn conv2d(
+        &mut self,
+        input: ValueId,
+        weight: ValueId,
+        bias: Option<ValueId>,
+        stride: [usize; 2],
+        padding: [usize; 2],
+        dilation: [usize; 2],
+        groups: usize,
+    ) -> Result<ValueId> {
+        self.require_value(input)?;
+        self.require_value(weight)?;
+        if let Some(bias) = bias {
+            self.require_value(bias)?;
+        }
+        Ok(self.push(Node::Conv2d {
+            input,
+            weight,
+            bias,
+            stride,
+            padding,
+            dilation,
+            groups,
+        }))
+    }
+
     /// Record one native multi-input/multi-output operation.
     pub fn operation(
         &mut self,
@@ -527,6 +564,16 @@ fn node_differentiability(nodes: &[Node]) -> Vec<bool> {
             },
             Node::Gather { input, .. } => differentiable[input.index()],
             Node::IndexSelect { input, .. } => differentiable[input.index()],
+            Node::Conv2d {
+                input,
+                weight,
+                bias,
+                ..
+            } => {
+                differentiable[input.index()]
+                    || differentiable[weight.index()]
+                    || bias.is_some_and(|bias| differentiable[bias.index()])
+            }
             Node::Operation { inputs, guards, .. } => {
                 inputs.iter().any(|input| differentiable[input.index()])
                     || guards.iter().any(|guard| guard.contract.trainable())
@@ -647,6 +694,23 @@ impl Graph {
                         *dim,
                         value(&values, *indices)?,
                         *allow_negative,
+                    )?)),
+                    Node::Conv2d {
+                        input,
+                        weight,
+                        bias,
+                        stride,
+                        padding,
+                        dilation,
+                        groups,
+                    } => NodeValue::Tensor(Box::new(execute_conv2d(
+                        value(&values, *input)?,
+                        value(&values, *weight)?,
+                        bias.map(|bias| value(&values, bias)).transpose()?,
+                        *stride,
+                        *padding,
+                        *dilation,
+                        *groups,
                     )?)),
                     Node::Operation {
                         operation,
@@ -1014,4 +1078,27 @@ fn execute_index_select(
         Value::Bool(value) => value.select(dim, indices).map(Value::Bool),
         Value::Scalar(_) | Value::Shape(_) => unreachable!("input kind was validated above"),
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_conv2d(
+    input: Value,
+    weight: Value,
+    bias: Option<Value>,
+    stride: [usize; 2],
+    padding: [usize; 2],
+    dilation: [usize; 2],
+    groups: usize,
+) -> Result<Value> {
+    input
+        .into_tensor()?
+        .conv2d(
+            weight.into_tensor()?,
+            bias.map(Value::into_tensor).transpose()?,
+            stride,
+            padding,
+            dilation,
+            groups,
+        )
+        .map(Value::Tensor)
 }

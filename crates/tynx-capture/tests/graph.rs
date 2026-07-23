@@ -14,6 +14,15 @@ fn tensor(data: &[f32], shape: [usize; 2], device: &Device) -> DynTensor {
     .unwrap()
 }
 
+fn tensor4(data: &[f32], shape: [usize; 4], device: &Device) -> DynTensor {
+    DynTensor::from_data(
+        TensorData::new(data.to_vec(), shape).convert::<f32>(),
+        4,
+        device,
+    )
+    .unwrap()
+}
+
 fn values(tensor: DynTensor) -> Vec<f32> {
     tensor.into_data().to_vec::<f32>().unwrap()
 }
@@ -60,6 +69,65 @@ fn replays_linear_relu_graph_and_tracks_current_slots() {
     let next_input = tensor(&[1.0, -2.0, 3.0, 4.0], [2, 2], &device);
     let next = graph.run(&[next_input], false).unwrap().remove(0);
     assert_ne!(values(next), vec![3.0, 0.0, 7.0, 3.0]);
+}
+
+#[test]
+fn replays_conv2d_with_gradients_and_current_parameter_values() {
+    let device = Device::autodiff(Device::default());
+    let input = tensor4(
+        &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
+        [1, 1, 3, 3],
+        &device,
+    );
+    let weight = ParameterSlot::new(
+        Some("weight".to_string()),
+        tensor4(&[1.0, 1.0, 1.0, 1.0], [1, 1, 2, 2], &device),
+        true,
+    )
+    .unwrap();
+    let bias = ParameterSlot::new(
+        Some("bias".to_string()),
+        DynTensor::from_data(
+            TensorData::new(vec![0.0f32], [1]).convert::<f32>(),
+            1,
+            &device,
+        )
+        .unwrap(),
+        true,
+    )
+    .unwrap();
+
+    let mut builder = GraphBuilder::new();
+    let x = builder.input(&input);
+    let w = builder.parameter(weight.clone());
+    let b = builder.parameter(bias.clone());
+    let output = builder
+        .conv2d(x, w, Some(b), [1, 1], [0, 0], [1, 1], 1)
+        .unwrap();
+    let graph = builder.finish(vec![output]).unwrap();
+
+    let output = graph
+        .run(std::slice::from_ref(&input), true)
+        .unwrap()
+        .remove(0);
+    assert_eq!(values(output.clone()), vec![12.0, 16.0, 24.0, 28.0]);
+
+    let mut parameters = ParameterStore::new();
+    parameters.insert("weight", weight.clone()).unwrap();
+    parameters.insert("bias", bias.clone()).unwrap();
+    let loss = output.sum_dims(&[0, 1, 2, 3]).reshape(vec![1]).unwrap();
+    backward(&loss, &parameters).unwrap();
+    assert_eq!(
+        values(weight.grad().expect("weight gradient")),
+        vec![12.0, 16.0, 24.0, 28.0]
+    );
+    assert_eq!(values(bias.grad().expect("bias gradient")), vec![4.0]);
+
+    let mut optimizer = Sgd::new(0.01).unwrap();
+    optimizer.step(&parameters).unwrap();
+    graph.validate_parameters().unwrap();
+    let updated = graph.run(&[input], false).unwrap().remove(0);
+    assert_ne!(values(updated), vec![12.0, 16.0, 24.0, 28.0]);
 }
 
 #[test]

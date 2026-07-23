@@ -147,6 +147,24 @@ impl CaptureState {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn conv2d(
+        &self,
+        input: ValueId,
+        weight: ValueId,
+        bias: Option<ValueId>,
+        stride: [usize; 2],
+        padding: [usize; 2],
+        dilation: [usize; 2],
+        groups: usize,
+    ) -> PyResult<ValueId> {
+        self.with_builder(|builder| {
+            builder
+                .conv2d(input, weight, bias, stride, padding, dilation, groups)
+                .map_err(to_python_error)
+        })
+    }
+
     fn operation(
         &self,
         operation: Rc<dyn CapturedOperation>,
@@ -432,6 +450,56 @@ pub(crate) fn record_index_select(
     let indices = index_trace.expect("matched as a traced value").value;
     state
         .index_select(input, dim, indices, allow_negative)
+        .map(|value| Some(TraceValue { state, value }))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn record_conv2d(
+    input: &PyTensor,
+    weight: &PyTensor,
+    bias: Option<&PyTensor>,
+    stride: [usize; 2],
+    padding: [usize; 2],
+    dilation: [usize; 2],
+    groups: usize,
+) -> PyResult<Option<TraceValue>> {
+    let tensors = [Some(input), Some(weight), bias]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    let traces = tensors
+        .iter()
+        .map(|tensor| trace_for(tensor))
+        .collect::<PyResult<Vec<_>>>()?;
+    let Some(state) = traces
+        .iter()
+        .flatten()
+        .next()
+        .map(|trace| trace.state.clone())
+    else {
+        return Ok(None);
+    };
+    if traces.iter().any(Option::is_none) {
+        state
+            .unsupported("a closed-over Tensor value; pass changing tensors as function inputs")?;
+        return Ok(None);
+    }
+    if traces
+        .iter()
+        .flatten()
+        .any(|trace| !Rc::ptr_eq(&state, &trace.state))
+    {
+        state.unsupported("tensors from different capture sessions")?;
+        return Ok(None);
+    }
+    let mut values = traces
+        .into_iter()
+        .map(|trace| trace.expect("all convolution inputs were traced").value);
+    let input = values.next().expect("convolution input was traced");
+    let weight = values.next().expect("convolution weight was traced");
+    let bias = bias.and_then(|_| values.next());
+    state
+        .conv2d(input, weight, bias, stride, padding, dilation, groups)
         .map(|value| Some(TraceValue { state, value }))
 }
 
