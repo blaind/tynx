@@ -66,6 +66,30 @@ pub struct ExternalWgpuContext {
 }
 
 impl ExternalWgpuContext {
+    /// Initialize the automatic compiler from an engine's exact WGPU handles.
+    ///
+    /// This is the integration-oriented convenience form of [`Self::from_wgpu_setup`]. It avoids
+    /// requiring downstream engines to depend on CubeCL merely to construct its setup value.
+    #[cfg(feature = "wgpu")]
+    pub fn from_wgpu_handles(
+        instance: wgpu::Instance,
+        adapter: wgpu::Adapter,
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+    ) -> Result<Self> {
+        let backend = adapter.get_info().backend;
+        Self::from_wgpu_setup(
+            WgpuSetup {
+                instance,
+                adapter,
+                device,
+                queue,
+                backend,
+            },
+            RuntimeOptions::default(),
+        )
+    }
+
     /// Initialize the automatic WGPU compiler on an existing engine device and queue.
     ///
     /// Create at most one Tynx context for each engine device generation. Other runtimes may use
@@ -462,6 +486,20 @@ mod tests {
             ExternalWgpuContext::from_wgpu_setup(setup, RuntimeOptions::default()).unwrap(),
             buffer,
         )
+    }
+
+    #[test]
+    fn initializes_from_engine_wgpu_handles_without_exposing_cubecl_setup() {
+        let setup = noop_setup();
+        let context = ExternalWgpuContext::from_wgpu_handles(
+            setup.instance,
+            setup.adapter,
+            setup.device,
+            setup.queue,
+        )
+        .unwrap();
+
+        assert!(context.capability().same_context(&context.capability()));
     }
 
     fn executing_context_and_buffer() -> Option<(ExternalWgpuContext, wgpu::Buffer, wgpu::Queue)> {
