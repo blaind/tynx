@@ -10,18 +10,44 @@ import tynx
 
 def _train_step(model: tynx.nn.Linear, optimizer: tynx.optim.Adam) -> None:
     optimizer.zero_grad()
-    prediction = model(tynx.Tensor([[2.0], [-1.0]]))
-    target = tynx.Tensor([[5.0], [-1.0]])
+    prediction = model(tynx.Tensor([[2.0], [-1.0]], device=model.weight.device))
+    target = tynx.Tensor([[5.0], [-1.0]], device=model.weight.device)
     tynx.nn.functional.mse_loss(prediction, target).backward()
     optimizer.step()
 
 
-def _initialized_model() -> tynx.nn.Linear:
+def _initialized_model(device: Any = None) -> tynx.nn.Linear:
     model = tynx.nn.Linear(1, 1)
-    model.weight.copy_(tynx.Tensor([[1.5]]))
-    assert model.bias is not None
-    model.bias.copy_(tynx.Tensor([0.5]))
+    if device is not None:
+        model.weight = tynx.Parameter(
+            tynx.Tensor([[1.5]], device=device),
+            name="weight",
+        )
+        model.bias = tynx.Parameter(
+            tynx.Tensor([0.5], device=device),
+            name="bias",
+        )
+    else:
+        model.weight.copy_(tynx.Tensor([[1.5]]))
+        assert model.bias is not None
+        model.bias.copy_(tynx.Tensor([0.5]))
     return model
+
+
+def _state_tensors(value: object) -> list[tynx.Tensor]:
+    if isinstance(value, tynx.Tensor):
+        return [value]
+    if isinstance(value, dict):
+        tensors: list[tynx.Tensor] = []
+        for item in value.values():
+            tensors.extend(_state_tensors(item))
+        return tensors
+    if isinstance(value, (list, tuple)):
+        tensors = []
+        for item in value:
+            tensors.extend(_state_tensors(item))
+        return tensors
+    return []
 
 
 def test_combined_checkpoint_resumes_model_and_adam_exactly(tmp_path: Path) -> None:
@@ -57,6 +83,33 @@ def test_combined_checkpoint_resumes_model_and_adam_exactly(tmp_path: Path) -> N
     _train_step(resumed_model, resumed_optimizer)
     for name, value in resumed_model.state_dict().items():
         assert value.tolist() == expected[name].tolist()
+
+
+def test_checkpoint_maps_model_and_optimizer_tensors_to_device(tmp_path: Path) -> None:
+    source = _initialized_model()
+    source_optimizer = tynx.optim.Adam(source.named_parameters(), lr=0.03)
+    _train_step(source, source_optimizer)
+    checkpoint = tmp_path / "device-remap.tynx"
+    tynx.save_checkpoint(checkpoint, source, source_optimizer)
+
+    cpu = tynx.Device("cpu")
+    destination = _initialized_model(cpu)
+    destination_optimizer = tynx.optim.Adam(
+        destination.named_parameters(),
+        lr=0.9,
+    )
+    tynx.load_checkpoint(
+        checkpoint,
+        destination,
+        destination_optimizer,
+        device=cpu,
+    )
+
+    assert all(value.device == cpu for value in destination.state_dict().values())
+    optimizer_tensors = _state_tensors(destination_optimizer.state_dict())
+    assert optimizer_tensors
+    assert all(value.device == cpu for value in optimizer_tensors)
+    _train_step(destination, destination_optimizer)
 
 
 def test_checkpoint_supports_optimizer_constructed_from_parameters(tmp_path: Path) -> None:

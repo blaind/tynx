@@ -9,7 +9,7 @@ from os import PathLike
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Protocol, Union, cast, overload
 
-from ._tynx import Tensor
+from ._tynx import Device, Tensor
 from .nn.state import (
     LoadStateResult,
     _apply_prepared_state,
@@ -126,6 +126,7 @@ def load_checkpoint(
     strict: bool = True,
     *,
     scheduler: Optional[_Scheduler] = None,
+    device: Optional[Device] = None,
 ) -> LoadStateResult: ...
 
 
@@ -137,6 +138,7 @@ def load_checkpoint(
     strict: bool = True,
     *,
     scheduler: None = None,
+    device: Optional[Device] = None,
 ) -> LoadStateResult: ...
 
 
@@ -148,6 +150,7 @@ def load_checkpoint(
     strict: bool = True,
     *,
     scheduler: Optional[_Scheduler] = None,
+    device: Optional[Device] = None,
 ) -> LoadStateResult: ...
 
 
@@ -158,29 +161,39 @@ def load_checkpoint(
     strict: bool = True,
     *,
     scheduler: Optional[_Scheduler] = None,
+    device: Optional[Device] = None,
 ) -> LoadStateResult:
     """Restore combined state without publishing a partially validated component.
 
     Both ``load_checkpoint(path, model, optimizer)`` and the PyTorch-shaped
     ``load_checkpoint(model, optimizer, path)`` order are accepted. For weights-only
     checkpoints, use either ``load_checkpoint(path, model)`` or
-    ``load_checkpoint(model, path)``.
+    ``load_checkpoint(model, path)``. ``device`` explicitly materializes model,
+    optimizer, and scheduler tensors on a destination device.
     """
     target, destination_model, destination_optimizer = _normalize_load_arguments(
         path, model, optimizer
     )
     payload = _read_payload(target)
-    model_state = _decode_state_dictionary(_required(payload, "model"), "model")
+    model_state = _decode_state_dictionary(
+        _required(payload, "model"),
+        "model",
+        device,
+    )
     if not model_state:
         raise ValueError("cannot load checkpoint: model state is empty")
     encoded_optimizer = _required(payload, "optimizer")
     optimizer_state = (
-        None if destination_optimizer is None else _decode_optimizer_dictionary(encoded_optimizer)
+        None
+        if destination_optimizer is None
+        else _decode_optimizer_dictionary(encoded_optimizer, device)
     )
     _validate_scheduler(destination_optimizer, scheduler)
     encoded_scheduler = payload.get("scheduler")
     scheduler_state = (
-        None if scheduler is None else _decode_component_dictionary(encoded_scheduler, "scheduler")
+        None
+        if scheduler is None
+        else _decode_component_dictionary(encoded_scheduler, "scheduler", device)
     )
 
     current, prepared, result = _prepare_state_dict_load(destination_model, model_state, strict)
@@ -337,21 +350,29 @@ def _encode(value: object) -> _Encoded:
     raise TypeError(f"checkpoint cannot serialize {type(value).__qualname__}")
 
 
-def _decode(value: _Encoded, autodiff_float: bool) -> object:
+def _decode(
+    value: _Encoded,
+    autodiff_float: bool,
+    device: Optional[Device],
+) -> object:
     if not isinstance(value, (dict, list)):
         return value
     if isinstance(value, list):
-        return [_decode(item, autodiff_float) for item in value]
+        return [_decode(item, autodiff_float, device) for item in value]
     marker = value.get("__type__")
     if marker == "tensor":
         dtype = value.get("dtype")
         shape = value.get("shape")
         if not isinstance(dtype, str) or not _is_shape(shape):
             raise ValueError("invalid tensor metadata in Tynx checkpoint")
-        data = cast("TensorData", _decode(_required(value, "data"), autodiff_float))
+        data = cast(
+            "TensorData",
+            _decode(_required(value, "data"), autodiff_float, device),
+        )
         tensor = Tensor(
             data,
             dtype=cast("TensorDType", dtype),
+            device=device,
             requires_grad=autodiff_float and dtype == "float32",
         ).detach()
         expected_shape = tuple(cast(list[int], shape))
@@ -364,14 +385,18 @@ def _decode(value: _Encoded, autodiff_float: bool) -> object:
         items = _required(value, "items")
         if not isinstance(items, list):
             raise ValueError("checkpoint tuple items must be a list")
-        return tuple(_decode(item, autodiff_float) for item in items)
+        return tuple(_decode(item, autodiff_float, device) for item in items)
     if marker is not None:
         raise ValueError(f"unknown checkpoint value type {marker!r}")
-    return {key: _decode(item, autodiff_float) for key, item in value.items()}
+    return {key: _decode(item, autodiff_float, device) for key, item in value.items()}
 
 
-def _decode_state_dictionary(value: _Encoded, field: str) -> dict[str, Tensor]:
-    decoded = _decode(value, True)
+def _decode_state_dictionary(
+    value: _Encoded,
+    field: str,
+    device: Optional[Device],
+) -> dict[str, Tensor]:
+    decoded = _decode(value, True, device)
     if not isinstance(decoded, dict):
         raise ValueError(f"checkpoint field {field!r} must be a dictionary")
     result: dict[str, Tensor] = {}
@@ -382,14 +407,21 @@ def _decode_state_dictionary(value: _Encoded, field: str) -> dict[str, Tensor]:
     return result
 
 
-def _decode_optimizer_dictionary(value: _Encoded) -> dict[str, object]:
-    return _decode_component_dictionary(value, "optimizer")
+def _decode_optimizer_dictionary(
+    value: _Encoded,
+    device: Optional[Device],
+) -> dict[str, object]:
+    return _decode_component_dictionary(value, "optimizer", device)
 
 
-def _decode_component_dictionary(value: Optional[_Encoded], field: str) -> dict[str, object]:
+def _decode_component_dictionary(
+    value: Optional[_Encoded],
+    field: str,
+    device: Optional[Device],
+) -> dict[str, object]:
     if value is None:
         raise ValueError(f"checkpoint does not contain {field} state")
-    decoded = _decode(value, True)
+    decoded = _decode(value, True, device)
     if not isinstance(decoded, dict):
         raise ValueError(f"checkpoint field {field!r} must be a dictionary")
     return cast(dict[str, object], decoded)
