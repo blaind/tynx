@@ -83,7 +83,7 @@ impl CaptureState {
     fn unary(&self, op: UnaryOp, input: ValueId) -> PyResult<ValueId> {
         let preserves_indices = matches!(
             op,
-            UnaryOp::Reshape(_) | UnaryOp::Expand(_) | UnaryOp::Permute(_)
+            UnaryOp::Reshape(_) | UnaryOp::Expand(_) | UnaryOp::Repeat(_) | UnaryOp::Permute(_)
         );
         let origin = preserves_indices
             .then(|| self.inner.borrow().value_inputs.get(&input).copied())

@@ -56,7 +56,7 @@ def test_expand_and_repeat_validate_shape_contracts() -> None:
         value.repeat(2)
 
 
-def test_leading_expand_replays_under_capture_and_repeat_rejects_strict_capture() -> None:
+def test_expand_and_repeat_replay_under_strict_capture() -> None:
     expanded = tynx.compile(lambda value: value.expand(2, -1), fullgraph=True)
     value = tynx.Tensor([1.0, 2.0, 3.0])
 
@@ -70,5 +70,19 @@ def test_leading_expand_replays_under_capture_and_repeat_rejects_strict_capture(
     assert expanded.replay_count == 1
 
     repeated = tynx.compile(lambda input: input.repeat(2), fullgraph=True)
-    with pytest.raises(RuntimeError, match="cannot capture"):
-        repeated(value)
+    assert repeated(value).tolist() == [1.0, 2.0, 3.0, 1.0, 2.0, 3.0]
+    repeated_input = tynx.Tensor([4.0, 5.0, 6.0], requires_grad=True)
+    repeated_output = repeated(repeated_input)
+    repeated_output.sum().backward()
+    assert repeated_output.tolist() == [4.0, 5.0, 6.0, 4.0, 5.0, 6.0]
+    assert repeated_input.grad is not None
+    assert repeated_input.grad.tolist() == [2.0, 2.0, 2.0]
+    assert repeated.replay_count == 1
+
+    repeated_bool = tynx.compile(lambda input: input.repeat(2, 1), fullgraph=True)
+    repeated_bool(tynx.Tensor([[True, False]], dtype="bool"))
+    assert repeated_bool(tynx.Tensor([[False, True]], dtype="bool")).tolist() == [
+        [False, True],
+        [False, True],
+    ]
+    assert repeated_bool.replay_count == 1

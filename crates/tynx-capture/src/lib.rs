@@ -170,6 +170,8 @@ pub enum UnaryOp {
     Reshape(Vec<usize>),
     /// Broadcast singleton dimensions to a larger shape.
     Expand(Vec<usize>),
+    /// Materialize repetitions along every dimension.
+    Repeat(Vec<usize>),
     /// Permute all tensor axes.
     Permute(Vec<usize>),
     /// Slice and reshape using a trace-time basic Python index specification.
@@ -987,6 +989,18 @@ fn execute_unary(op: &UnaryOp, input: Value) -> Result<Value> {
             )),
         };
     }
+    if let UnaryOp::Repeat(repeats) = op {
+        return match input {
+            Value::Tensor(value) => {
+                Ok(Value::Tensor(value.to_rank(repeats.len())?.repeat(repeats)))
+            }
+            Value::Int(value) => Ok(Value::Int(value.to_rank(repeats.len())?.repeat(repeats))),
+            Value::Bool(value) => Ok(Value::Bool(value.to_rank(repeats.len())?.repeat(repeats))),
+            Value::Scalar(_) | Value::Shape(_) => Err(TynxError::TypeMismatch(
+                "captured repeat requires a device tensor".to_string(),
+            )),
+        };
+    }
     if let UnaryOp::Slice {
         slices,
         output_shape,
@@ -1066,6 +1080,7 @@ fn execute_unary(op: &UnaryOp, input: Value) -> Result<Value> {
         UnaryOp::Clamp { min, max } => Ok(input.clip(*min, *max)),
         UnaryOp::Reshape(shape) => input.reshape(shape.clone()),
         UnaryOp::Expand(_) => unreachable!("handled before float unary dispatch"),
+        UnaryOp::Repeat(_) => unreachable!("handled before float unary dispatch"),
         UnaryOp::Permute(axes) => input.permute(axes.clone()),
         UnaryOp::Slice { .. } => unreachable!("handled before float unary dispatch"),
         UnaryOp::Sum { dims, output_shape } => input.sum_dims(dims).reshape(output_shape.clone()),

@@ -1452,35 +1452,33 @@ impl PyTensor {
     /// Materialize repetitions along each dimension.
     #[pyo3(signature = (*repeats))]
     fn repeat(&self, repeats: &Bound<'_, PyTuple>) -> PyResult<Self> {
-        self.capture_unsupported("Tensor.repeat")?;
         let repeats = shape::repeat(repeats, self.ndim())?;
-        let tracking = is_grad_enabled();
         match self.source.value() {
-            TensorValue::Float(_) => {
-                let output = self
-                    .operation_input(tracking, "Tensor.repeat")?
-                    .to_rank(repeats.len())
-                    .map_err(to_python_error)?
-                    .repeat(&repeats);
-                Ok(if tracking {
-                    Self::from_operation(output, &[self])
-                } else {
-                    Self::from_inner(output)
-                })
+            TensorValue::Float(_) => self
+                .unary_captured(UnaryOp::Repeat(repeats.clone()), move |input| {
+                    Ok(input.to_rank(repeats.len())?.repeat(&repeats))
+                }),
+            TensorValue::Int(input) => {
+                let mut result = Self::from_int_inner(
+                    input
+                        .to_rank(repeats.len())
+                        .map_err(to_python_error)?
+                        .repeat(&repeats),
+                )
+                .with_inherited_int_bounds(self);
+                result.trace = record_unary(self, UnaryOp::Repeat(repeats))?;
+                Ok(result)
             }
-            TensorValue::Int(input) => Ok(Self::from_int_inner(
-                input
-                    .to_rank(repeats.len())
-                    .map_err(to_python_error)?
-                    .repeat(&repeats),
-            )
-            .with_inherited_int_bounds(self)),
-            TensorValue::Bool(input) => Ok(Self::from_value(TensorValue::Bool(
-                input
-                    .to_rank(repeats.len())
-                    .map_err(to_python_error)?
-                    .repeat(&repeats),
-            ))),
+            TensorValue::Bool(input) => {
+                let mut result = Self::from_value(TensorValue::Bool(
+                    input
+                        .to_rank(repeats.len())
+                        .map_err(to_python_error)?
+                        .repeat(&repeats),
+                ));
+                result.trace = record_unary(self, UnaryOp::Repeat(repeats))?;
+                Ok(result)
+            }
         }
     }
 
