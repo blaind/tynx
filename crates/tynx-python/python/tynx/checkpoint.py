@@ -9,7 +9,7 @@ from os import PathLike
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Protocol, Union, cast, overload
 
-from ._tynx import Tensor
+from ._tynx import Tensor, zeros
 from .nn.state import (
     LoadStateResult,
     _apply_prepared_state,
@@ -349,12 +349,24 @@ def _decode(value: _Encoded, autodiff_float: bool) -> object:
         if not isinstance(dtype, str) or not _is_shape(shape):
             raise ValueError("invalid tensor metadata in Tynx checkpoint")
         data = cast("TensorData", _decode(_required(value, "data"), autodiff_float))
-        tensor = Tensor(
-            data,
-            dtype=cast("TensorDType", dtype),
-            requires_grad=autodiff_float and dtype == "float32",
-        ).detach()
         expected_shape = tuple(cast(list[int], shape))
+        if not _data_matches_shape(data, expected_shape):
+            raise ValueError(
+                f"checkpoint tensor data does not match declared shape {expected_shape}"
+            )
+        tensor = (
+            zeros(
+                expected_shape,
+                dtype=cast("TensorDType", dtype),
+                requires_grad=autodiff_float and dtype == "float32",
+            )
+            if 0 in expected_shape
+            else Tensor(
+                data,
+                dtype=cast("TensorDType", dtype),
+                requires_grad=autodiff_float and dtype == "float32",
+            )
+        ).detach()
         if tensor.shape != expected_shape:
             raise ValueError(
                 f"checkpoint tensor data has shape {tensor.shape}, expected {expected_shape}"
@@ -406,8 +418,16 @@ def _is_shape(value: object) -> bool:
     return (
         isinstance(value, list)
         and bool(value)
-        and all(type(item) is int and item > 0 for item in value)
+        and all(type(item) is int and item >= 0 for item in value)
     )
+
+
+def _data_matches_shape(value: object, shape: tuple[int, ...]) -> bool:
+    if not shape:
+        return not isinstance(value, list)
+    if not isinstance(value, list) or len(value) != shape[0]:
+        return False
+    return all(_data_matches_shape(item, shape[1:]) for item in value)
 
 
 __all__ = ["load_checkpoint", "save_checkpoint"]

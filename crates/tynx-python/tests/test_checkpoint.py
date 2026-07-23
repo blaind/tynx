@@ -24,6 +24,46 @@ def _initialized_model() -> tynx.nn.Linear:
     return model
 
 
+class _EmptyBufferModel:
+    def __init__(self) -> None:
+        self.weight = tynx.Parameter([1.0], name="weight")
+        self.empty = tynx.Buffer(tynx.zeros(2, 0, 3), name="empty")
+
+
+def test_checkpoint_round_trips_empty_buffer_dimensions(tmp_path: Path) -> None:
+    source = _EmptyBufferModel()
+    checkpoint = tmp_path / "empty-buffer.tynx"
+    tynx.save_checkpoint(checkpoint, source)
+
+    payload = json.loads(checkpoint.read_text(encoding="utf-8"))
+    assert payload["model"]["empty"]["shape"] == [2, 0, 3]
+    assert payload["model"]["empty"]["data"] == [[], []]
+
+    destination = _EmptyBufferModel()
+    destination.weight.copy_(tynx.Tensor([9.0]))
+    result = tynx.load_checkpoint(checkpoint, destination)
+
+    assert result.missing_keys == ()
+    assert result.unexpected_keys == ()
+    assert destination.empty.shape == (2, 0, 3)
+    assert destination.empty.tolist() == [[], []]
+    assert destination.weight.item() == pytest.approx(1.0)
+
+
+def test_checkpoint_rejects_empty_tensor_data_that_disagrees_with_shape(
+    tmp_path: Path,
+) -> None:
+    model = _EmptyBufferModel()
+    checkpoint = tmp_path / "corrupt-empty-buffer.tynx"
+    tynx.save_checkpoint(checkpoint, model)
+    payload = json.loads(checkpoint.read_text(encoding="utf-8"))
+    payload["model"]["empty"]["data"] = [[]]
+    checkpoint.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="does not match declared shape"):
+        tynx.load_checkpoint(checkpoint, _EmptyBufferModel())
+
+
 def test_combined_checkpoint_resumes_model_and_adam_exactly(tmp_path: Path) -> None:
     model = _initialized_model()
     optimizer = tynx.optim.Adam(
