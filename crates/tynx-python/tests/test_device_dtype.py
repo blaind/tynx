@@ -4,6 +4,16 @@ import pytest
 import tynx
 
 
+def test_public_dtype_constants_work_across_dtype_entry_points() -> None:
+    assert tynx.float32 == "float32"
+    assert tynx.int64 == "int64"
+    assert tynx.bool == "bool"
+    assert tynx.ones((2,), dtype=tynx.float32).dtype == "float32"
+    assert tynx.Tensor([1, 2], dtype=tynx.int64).dtype == "int64"
+    assert tynx.Tensor([0.0, 1.0]).cast(tynx.bool).tolist() == [False, True]
+    assert tynx.Tensor([1, 2], dtype="int64").to(dtype=tynx.float32).dtype == "float32"
+
+
 def test_device_can_be_selected_during_construction_and_factories() -> None:
     cpu = tynx.Device("cpu")
 
@@ -25,6 +35,19 @@ def test_cast_converts_supported_dtype_pairs() -> None:
     assert booleans.tolist() == [True, False, True]
     assert integers.cast("float32").tolist() == [-1.0, 0.0, 2.0]
     assert booleans.cast("int64").tolist() == [1, 0, 1]
+
+
+def test_float_operations_explain_how_to_convert_discrete_tensors() -> None:
+    floats = tynx.Tensor([1.0, 2.0])
+    integers = tynx.Tensor([1, 2], dtype="int64")
+
+    with pytest.raises(
+        TypeError,
+        match=r'got int64; convert it with \.cast\("float32"\)',
+    ):
+        _ = floats + integers
+
+    assert (floats + integers.cast("float32")).tolist() == [2.0, 4.0]
 
 
 def test_tensor_copy_constructor_can_cast_and_select_device() -> None:

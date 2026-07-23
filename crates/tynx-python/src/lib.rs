@@ -20,7 +20,7 @@ use pyo3::types::{PyDict, PyTuple};
 use tynx_core::{Device, Env, PreparedSession, Scalar, Session, Value};
 
 use device::PyDevice;
-use grad_mode::{PyNoGrad, is_grad_enabled_py, no_grad};
+use grad_mode::{PyNoGrad, PyNoGradFunction, is_grad_enabled_py, no_grad};
 use gradient::{clip_grad_norm_py, clip_grad_value_py};
 use imported_model::{PyImportedModel, PyTrainabilityReport};
 use nn::{adaptive_avg_pool2d_py, avg_pool2d_py, conv2d_py, embedding_py, max_pool2d_py};
@@ -241,6 +241,7 @@ fn _tynx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyParameter>()?;
     module.add_class::<PyBuffer>()?;
     module.add_class::<PyNoGrad>()?;
+    module.add_class::<PyNoGradFunction>()?;
     module.add_class::<PyCaptureSession>()?;
     module.add_class::<PyCapturedGraph>()?;
     module.add_class::<PySgd>()?;

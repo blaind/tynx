@@ -1,4 +1,4 @@
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from os import PathLike
 from typing import Any, Literal, overload
 
@@ -31,6 +31,7 @@ Shape = tuple[int, ...] | list[int]
 class _NoGrad:
     def __enter__(self) -> None: ...
     def __exit__(self, exception_type: object, exception: object, traceback: object) -> bool: ...
+    def __call__(self, function: Callable[..., Any]) -> Callable[..., Any]: ...
 
 def no_grad() -> _NoGrad: ...
 def is_grad_enabled() -> bool: ...
@@ -91,6 +92,7 @@ def nonzero(input: Tensor, *, as_tuple: Literal[False] = False) -> Tensor: ...
 @overload
 def nonzero(input: Tensor, *, as_tuple: Literal[True]) -> tuple[Tensor, ...]: ...
 def index_select(input: Tensor, dim: int, index: Tensor) -> Tensor: ...
+@overload
 def empty(
     shape: Shape,
     *,
@@ -98,14 +100,22 @@ def empty(
     device: Device | None = None,
     requires_grad: bool = False,
 ) -> Tensor: ...
+@overload
+def empty(
+    *shape: int,
+    dtype: TensorDType = "float32",
+    device: Device | None = None,
+    requires_grad: bool = False,
+) -> Tensor: ...
 def full(
-    shape: Shape,
+    shape: Shape | int,
     fill_value: TensorScalar,
     *,
     dtype: TensorDType = "float32",
     device: Device | None = None,
     requires_grad: bool = False,
 ) -> Tensor: ...
+@overload
 def zeros(
     shape: Shape,
     *,
@@ -113,6 +123,14 @@ def zeros(
     device: Device | None = None,
     requires_grad: bool = False,
 ) -> Tensor: ...
+@overload
+def zeros(
+    *shape: int,
+    dtype: TensorDType = "float32",
+    device: Device | None = None,
+    requires_grad: bool = False,
+) -> Tensor: ...
+@overload
 def ones(
     shape: Shape,
     *,
@@ -120,6 +138,14 @@ def ones(
     device: Device | None = None,
     requires_grad: bool = False,
 ) -> Tensor: ...
+@overload
+def ones(
+    *shape: int,
+    dtype: TensorDType = "float32",
+    device: Device | None = None,
+    requires_grad: bool = False,
+) -> Tensor: ...
+@overload
 def rand(
     shape: Shape,
     *,
@@ -127,6 +153,14 @@ def rand(
     device: Device | None = None,
     requires_grad: bool = False,
 ) -> Tensor: ...
+@overload
+def rand(
+    *shape: int,
+    dtype: Literal["float32"] = "float32",
+    device: Device | None = None,
+    requires_grad: bool = False,
+) -> Tensor: ...
+@overload
 def randn(
     shape: Shape,
     *,
@@ -134,10 +168,17 @@ def randn(
     device: Device | None = None,
     requires_grad: bool = False,
 ) -> Tensor: ...
+@overload
+def randn(
+    *shape: int,
+    dtype: Literal["float32"] = "float32",
+    device: Device | None = None,
+    requires_grad: bool = False,
+) -> Tensor: ...
 def randint(
     low: int,
     high: int,
-    shape: Shape,
+    shape: Shape | int,
     *,
     dtype: Literal["int64"] = "int64",
     device: Device | None = None,
@@ -289,6 +330,7 @@ class Tensor:
     def log(self) -> Tensor: ...
     def sqrt(self) -> Tensor: ...
     def gelu(self) -> Tensor: ...
+    def abs(self) -> Tensor: ...
     def softmax(self, dim: int) -> Tensor: ...
     def log_softmax(self, dim: int) -> Tensor: ...
     def clamp(self, min: float | None = None, max: float | None = None) -> Tensor: ...
@@ -297,6 +339,11 @@ class Tensor:
     def reshape(self, shape: Shape) -> Tensor: ...
     @overload
     def reshape(self, *shape: int) -> Tensor: ...
+    @overload
+    def view(self, shape: Shape) -> Tensor: ...
+    @overload
+    def view(self, *shape: int) -> Tensor: ...
+    def contiguous(self) -> Tensor: ...
     @overload
     def expand(self, shape: Shape) -> Tensor: ...
     @overload
@@ -307,6 +354,8 @@ class Tensor:
     def repeat(self, *repeats: int) -> Tensor: ...
     def flatten(self, start_dim: int = 0, end_dim: int = -1) -> Tensor: ...
     def transpose(self, dim0: int, dim1: int) -> Tensor: ...
+    @property
+    def T(self) -> Tensor: ...
     @overload
     def permute(self, dims: Shape) -> Tensor: ...
     @overload
@@ -336,6 +385,8 @@ class Tensor:
     def __rpow__(self, base: float) -> Tensor: ...
     def __ipow__(self, exponent: Tensor | float, modulo: None = None) -> Tensor: ...
     def __len__(self) -> int: ...
+    def __float__(self) -> float: ...
+    def __int__(self) -> int: ...
     def __getitem__(self, index: object) -> Tensor: ...
     def split(
         self, split_size_or_sections: int | Sequence[int], dim: int = 0

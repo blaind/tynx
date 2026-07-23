@@ -89,12 +89,52 @@ def test_tensor_metadata_and_host_conversion() -> None:
     assert tynx.Tensor(integers).dtype == "int64"
 
 
+def test_lowercase_tensor_factory_infers_python_data_dtypes() -> None:
+    assert tynx.tensor([True, False]).dtype == "bool"
+    assert tynx.tensor([1, 2]).dtype == "int64"
+    assert tynx.tensor([1.0, 2.0]).dtype == "float32"
+    assert tynx.tensor([True, 2]).dtype == "int64"
+    assert tynx.tensor([1, 2.5]).dtype == "float32"
+    assert tynx.tensor(range(3)).dtype == "int64"
+
+
+def test_lowercase_tensor_factory_honors_explicit_dtype_and_tensor_inputs() -> None:
+    source = tynx.Tensor([1, 2], dtype="int64")
+
+    assert tynx.tensor([1, 2], dtype="float32").dtype == "float32"
+    assert tynx.tensor(source).dtype == "int64"
+    assert tynx.tensor(source).tolist() == [1, 2]
+
+
 def test_tensor_python_numeric_protocols() -> None:
     values = tynx.Tensor([-2.0, 3.0])
 
     assert abs(values).tolist() == [2.0, 3.0]
+    assert values.abs().tolist() == [2.0, 3.0]
     assert (values**2).tolist() == pytest.approx([4.0, 9.0])
     assert (2 ** tynx.Tensor([1.0, 3.0])).tolist() == pytest.approx([2.0, 8.0])
+    assert float(tynx.Tensor([2.5])) == pytest.approx(2.5)
+    assert float(tynx.Tensor([2], dtype="int64")) == pytest.approx(2.0)
+    assert int(tynx.Tensor([-2.9])) == -2
+    assert int(tynx.Tensor([True], dtype="bool")) == 1
+    with pytest.raises(ValueError, match=r"float\(\).*one-element.*shape \[2\]"):
+        float(values)
+    with pytest.raises(ValueError, match=r"int\(\).*one-element.*shape \[2\]"):
+        int(values)
+
+
+def test_tensor_matrix_and_layout_aliases_preserve_gradients() -> None:
+    values = tynx.Tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], requires_grad=True)
+
+    output = values.T.contiguous().view(6)
+    output.sum().backward()
+
+    assert values.T.tolist() == [[1.0, 4.0], [2.0, 5.0], [3.0, 6.0]]
+    assert output.shape == (6,)
+    assert values.grad is not None
+    assert values.grad.tolist() == [[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]]
+    with pytest.raises(ValueError, match="rank-2 matrix"):
+        _ = tynx.Tensor([1.0, 2.0]).T
 
 
 def test_tensor_matmul_supports_vector_cases() -> None:
@@ -881,6 +921,17 @@ def test_module_sequential_discovery_and_recursive_modes() -> None:
     assert all(module.training for module in (model, model[0], model[1], model[2]))
 
 
+def test_module_zero_grad_clears_all_recursive_parameter_gradients() -> None:
+    model = tynx.nn.Sequential(tynx.nn.Linear(2, 3), tynx.nn.ReLU(), tynx.nn.Linear(3, 1))
+
+    model(tynx.Tensor([[1.0, 2.0]])).sum().backward()
+    assert all(parameter.grad is not None for parameter in model.parameters())
+
+    model.zero_grad()
+
+    assert all(parameter.grad is None for parameter in model.parameters())
+
+
 def test_linear_and_sequential_validate_construction_and_inputs() -> None:
     with pytest.raises(ValueError, match="positive integer"):
         tynx.nn.Linear(0, 2)
@@ -1605,6 +1656,38 @@ def test_no_grad_is_nested_and_restores_tracking() -> None:
 
     assert tynx.is_grad_enabled()
     assert (value * value).requires_grad
+
+
+def test_no_grad_can_decorate_functions() -> None:
+    value = tynx.Tensor([2.0], requires_grad=True)
+
+    @tynx.no_grad()
+    def inference(input: tynx.Tensor) -> tynx.Tensor:
+        assert not tynx.is_grad_enabled()
+        return input * input
+
+    output = inference(value)
+
+    assert inference.__name__ == "inference"
+    assert not output.requires_grad
+    assert tynx.is_grad_enabled()
+
+
+def test_no_grad_decorated_instance_method_binds_self() -> None:
+    class Inference:
+        @tynx.no_grad()
+        def forward(self, input: tynx.Tensor) -> tynx.Tensor:
+            assert not tynx.is_grad_enabled()
+            return input * input
+
+    value = tynx.Tensor([2.0], requires_grad=True)
+    inference = Inference()
+
+    output = inference.forward(value)
+
+    assert inference.forward.__name__ == "forward"
+    assert not output.requires_grad
+    assert tynx.is_grad_enabled()
 
 
 def test_parameter_is_a_named_trainable_tensor() -> None:
