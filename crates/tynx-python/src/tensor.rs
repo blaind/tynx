@@ -56,6 +56,7 @@ pub(crate) struct PyTensor {
     targets: Vec<GradTarget>,
     leaf: Option<Rc<LeafState>>,
     backward_graphs: Vec<Rc<BackwardGraph>>,
+    zero_missing_gradients: bool,
     trace: Option<TraceValue>,
 }
 
@@ -162,11 +163,11 @@ impl GradTarget {
         true
     }
 
-    fn accumulate(&self, gradients: &Gradients) -> tynx_core::Result<()> {
+    fn accumulate(&self, gradients: &Gradients, zero_if_missing: bool) -> tynx_core::Result<()> {
         match self {
             Self::Tensor(leaf) => {
                 if let Some(leaf) = leaf.upgrade() {
-                    leaf.accumulate(gradients)?;
+                    leaf.accumulate(gradients, zero_if_missing)?;
                 }
             }
             Self::Parameter {
@@ -188,7 +189,10 @@ impl GradTarget {
                             .unwrap_or_else(|| format!("#{}", slot.id().get()))
                     )));
                 }
-                slot.accumulate_grad(gradients)?;
+                let accumulated = slot.accumulate_grad(gradients)?;
+                if !accumulated && zero_if_missing {
+                    slot.ensure_zero_grad()?;
+                }
             }
         }
         Ok(())
@@ -234,9 +238,17 @@ impl LeafState {
         self.tensor.borrow().clone()
     }
 
-    fn accumulate(&self, gradients: &Gradients) -> tynx_core::Result<()> {
-        let Some(gradient) = self.tensor.borrow().grad(gradients) else {
-            return Ok(());
+    fn accumulate(&self, gradients: &Gradients, zero_if_missing: bool) -> tynx_core::Result<()> {
+        let gradient = match self.tensor.borrow().grad(gradients) {
+            Some(gradient) => gradient,
+            None if zero_if_missing => {
+                if self.grad.borrow().is_some() {
+                    return Ok(());
+                }
+                let tensor = self.tensor.borrow();
+                DynTensor::full(&tensor.dims(), 0.0, &tensor.device(), tensor.dtype())?
+            }
+            None => return Ok(()),
         };
         let gradient = gradient.detach();
         let mut current = self.grad.borrow_mut();
@@ -262,6 +274,7 @@ impl PyTensor {
             targets: Vec::new(),
             leaf: None,
             backward_graphs: Vec::new(),
+            zero_missing_gradients: false,
             trace: None,
         }
     }
@@ -287,6 +300,7 @@ impl PyTensor {
             targets: Vec::new(),
             leaf: None,
             backward_graphs: Vec::new(),
+            zero_missing_gradients: false,
             trace: None,
         }
     }
@@ -304,6 +318,7 @@ impl PyTensor {
             targets: vec![GradTarget::Tensor(Rc::downgrade(&leaf))],
             leaf: Some(leaf),
             backward_graphs: Vec::new(),
+            zero_missing_gradients: false,
             trace: None,
         }
     }
@@ -324,6 +339,7 @@ impl PyTensor {
             targets,
             leaf: None,
             backward_graphs: Vec::new(),
+            zero_missing_gradients: false,
             trace: None,
         }
     }
@@ -362,6 +378,7 @@ impl PyTensor {
             targets,
             leaf: None,
             backward_graphs,
+            zero_missing_gradients: sources.iter().any(|source| source.zero_missing_gradients),
             trace: None,
         }
     }
@@ -664,6 +681,15 @@ impl PyTensor {
         self.trace.as_ref()
     }
 
+    pub(crate) fn zero_missing_gradients(&self) -> bool {
+        self.zero_missing_gradients
+    }
+
+    pub(crate) fn with_zero_missing_gradients(mut self, enabled: bool) -> Self {
+        self.zero_missing_gradients |= enabled;
+        self
+    }
+
     pub(crate) fn with_trace(&self, trace: TraceValue) -> Self {
         Self {
             source: TensorSource::Owned(Box::new(self.source.value())),
@@ -671,6 +697,7 @@ impl PyTensor {
             targets: self.targets.clone(),
             leaf: self.leaf.clone(),
             backward_graphs: self.backward_graphs.clone(),
+            zero_missing_gradients: self.zero_missing_gradients,
             trace: Some(trace),
         }
     }
@@ -682,6 +709,7 @@ impl PyTensor {
             targets: self.targets.clone(),
             leaf: self.leaf.clone(),
             backward_graphs: self.backward_graphs.clone(),
+            zero_missing_gradients: self.zero_missing_gradients,
             trace: None,
         }
     }
@@ -1227,7 +1255,9 @@ impl PyTensor {
             )
         })?;
         for target in &self.targets {
-            target.accumulate(&gradients).map_err(to_python_error)?;
+            target
+                .accumulate(&gradients, self.zero_missing_gradients)
+                .map_err(to_python_error)?;
             target.mark_tape_consumed();
         }
         raise_pending_device_error()?;
@@ -1705,44 +1735,12 @@ impl PyTensor {
     }
 
     fn __matmul__(&self, other: PyRef<'_, Self>) -> PyResult<Self> {
-        self.reject_empty_operation("matmul")?;
-        other.reject_empty_operation("matmul")?;
         let left_shape = self.source.value().dims();
         let right_shape = other.source.value().dims();
-        match (left_shape.as_slice(), right_shape.as_slice()) {
-            ([left], [right]) => {
-                let left = *left;
-                let right = *right;
-                self.binary(&other, BinaryOp::Matmul, move |left_value, right_value| {
-                    left_value
-                        .reshape(vec![1, left])?
-                        .matmul(right_value.reshape(vec![right, 1])?)?
-                        .reshape(vec![1])
-                })
-            }
-            ([rows, inner], [right]) => {
-                let rows = *rows;
-                let _inner = *inner;
-                let right = *right;
-                self.binary(&other, BinaryOp::Matmul, move |left_value, right_value| {
-                    left_value
-                        .matmul(right_value.reshape(vec![right, 1])?)?
-                        .reshape(vec![rows])
-                })
-            }
-            ([left], [inner, columns]) => {
-                let left = *left;
-                let _inner = *inner;
-                let columns = *columns;
-                self.binary(&other, BinaryOp::Matmul, move |left_value, right_value| {
-                    left_value
-                        .reshape(vec![1, left])?
-                        .matmul(right_value)?
-                        .reshape(vec![columns])
-                })
-            }
-            _ => self.binary(&other, BinaryOp::Matmul, DynTensor::matmul),
-        }
+        let has_zero_elements = left_shape.contains(&0) || right_shape.contains(&0);
+        let mut result = self.binary(&other, BinaryOp::Matmul, DynTensor::matmul)?;
+        result.zero_missing_gradients |= has_zero_elements;
+        Ok(result)
     }
 
     fn __imatmul__(&self, _other: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -2022,7 +2020,9 @@ impl PyTensor {
     }
 
     fn reduce(&self, dim: Option<&Bound<'_, PyAny>>, keepdim: bool, sum: bool) -> PyResult<Self> {
-        self.reject_empty_operation(if sum { "sum" } else { "mean" })?;
+        if !sum {
+            self.reject_empty_operation("mean")?;
+        }
         let input_shape = self.source.value().dims();
         let spec = ReductionSpec::from_python(dim, &input_shape, keepdim)?;
         let capture_op = if sum {
@@ -2036,14 +2036,17 @@ impl PyTensor {
                 output_shape: spec.output_shape.clone(),
             }
         };
-        self.unary_captured(capture_op, move |input| {
+        let has_zero_elements = self.numel() == 0;
+        let mut result = self.unary_captured(capture_op, move |input| {
             let reduced = if sum {
                 input.sum_dims(&spec.dims)
             } else {
                 input.mean_dims(&spec.dims)
             };
             reduced.reshape(spec.output_shape)
-        })
+        })?;
+        result.zero_missing_gradients |= sum && has_zero_elements;
+        Ok(result)
     }
 
     fn reduce_extreme(

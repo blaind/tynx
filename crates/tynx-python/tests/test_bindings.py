@@ -160,15 +160,48 @@ def test_tensor_matmul_supports_vector_cases() -> None:
     assert (vector @ vector).tolist() == pytest.approx([5.0])
 
 
-def test_empty_tensor_operations_raise_before_backend_dispatch() -> None:
-    empty_matrix = tynx.zeros(0, 3)
-    right = tynx.ones(3, 4)
+def test_empty_tensor_sum_and_matmul_use_safe_identities() -> None:
+    empty_matrix = tynx.zeros(0, 3, requires_grad=True)
+    right = tynx.ones(3, 4, requires_grad=True)
     empty_vector = tynx.zeros(0)
 
-    with pytest.raises(ValueError, match=r"matmul.*zero elements"):
-        empty_matrix @ right
+    output = empty_matrix @ right
+    assert output.shape == (0, 4)
+    assert output.tolist() == []
+    assert empty_vector.sum().shape == (1,)
+    assert empty_vector.sum().item() == 0.0
+    assert tynx.zeros(0, 3).sum(dim=0).tolist() == [0.0, 0.0, 0.0]
+    assert tynx.zeros(0, 3).sum(dim=1).tolist() == []
+    assert (tynx.zeros(2, 0) @ tynx.zeros(0, 4)).tolist() == [
+        [0.0, 0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 0.0],
+    ]
+    assert (tynx.zeros(0, 2, 3) @ tynx.ones(1, 3, 4)).shape == (0, 2, 4)
+    assert (empty_vector @ empty_vector).item() == 0.0
+
+    output.sum().backward()
+    assert empty_matrix.grad is not None
+    assert empty_matrix.grad.shape == (0, 3)
+    assert right.grad is not None
+    assert right.grad.tolist() == [[0.0, 0.0, 0.0, 0.0]] * 3
+
+    left_zero_inner = tynx.zeros(2, 0, requires_grad=True)
+    right_zero_inner = tynx.zeros(0, 4, requires_grad=True)
+    (left_zero_inner @ right_zero_inner).sum().backward()
+    assert left_zero_inner.grad is not None
+    assert left_zero_inner.grad.tolist() == [[], []]
+    assert right_zero_inner.grad is not None
+    assert right_zero_inner.grad.tolist() == []
+
+    empty_leaf = tynx.zeros(0, requires_grad=True)
+    (empty_leaf @ empty_leaf).backward()
+    assert empty_leaf.grad is not None
+    assert empty_leaf.grad.tolist() == []
+
+
+def test_empty_tensor_undefined_reductions_raise_before_backend_dispatch() -> None:
+    empty_vector = tynx.zeros(0)
     for operation in (
-        empty_vector.sum,
         empty_vector.mean,
         empty_vector.max,
         empty_vector.min,

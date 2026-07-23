@@ -659,6 +659,7 @@ impl PyCaptureSession {
     fn finish(&self, outputs: &Bound<'_, PyTuple>) -> PyResult<Option<PyCapturedGraph>> {
         deactivate(&self.state);
         let mut values = Vec::with_capacity(outputs.len());
+        let mut zero_missing_gradients = Vec::with_capacity(outputs.len());
         for output in outputs.iter() {
             let output = output.extract::<PyRef<'_, PyTensor>>()?;
             let Some(trace) = output.trace() else {
@@ -672,10 +673,13 @@ impl PyCaptureSession {
                 return Ok(None);
             }
             values.push(trace.value);
+            zero_missing_gradients.push(output.zero_missing_gradients());
         }
-        self.state
-            .finish(values)
-            .map(|graph| graph.map(|(graph, constraints)| PyCapturedGraph::new(graph, constraints)))
+        self.state.finish(values).map(|graph| {
+            graph.map(|(graph, constraints)| {
+                PyCapturedGraph::new(graph, constraints, zero_missing_gradients)
+            })
+        })
     }
 
     fn release(&self, output: PyRef<'_, PyTensor>) -> PyTensor {
@@ -700,15 +704,25 @@ pub(crate) struct PyCapturedGraph {
     graph: Graph,
     parameters: Vec<ParameterSlot>,
     index_constraints: Vec<IndexConstraint>,
+    zero_missing_gradients: Vec<bool>,
 }
 
 impl PyCapturedGraph {
-    fn new(graph: Graph, index_constraints: Vec<IndexConstraint>) -> Self {
+    fn new(
+        graph: Graph,
+        index_constraints: Vec<IndexConstraint>,
+        zero_missing_gradients: Vec<bool>,
+    ) -> Self {
         let parameters = graph.parameters();
+        debug_assert_eq!(
+            graph.output_differentiability().len(),
+            zero_missing_gradients.len()
+        );
         Self {
             graph,
             parameters,
             index_constraints,
+            zero_missing_gradients,
         }
     }
 
@@ -774,7 +788,8 @@ impl PyCapturedGraph {
         let outputs = outputs
             .into_iter()
             .zip(self.graph.output_differentiability())
-            .map(|(output, differentiable)| {
+            .zip(&self.zero_missing_gradients)
+            .map(|((output, differentiable), zero_missing_gradients)| {
                 let tensor = match output {
                     tynx_core::Value::Tensor(output) if tracking && *differentiable => {
                         PyTensor::from_imported_operation(
@@ -782,6 +797,7 @@ impl PyCapturedGraph {
                             &sources,
                             self.parameters.iter().cloned(),
                         )
+                        .with_zero_missing_gradients(*zero_missing_gradients)
                     }
                     output => PyTensor::from_runtime_value(output)?,
                 };
