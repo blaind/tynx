@@ -39,6 +39,7 @@ def test_imported_actor_critic_trains_with_user_composed_ppo_loss(tmp_path: Path
     report = model.trainability_report()
     assert sorted(report.output_parameters[logits_name]) == ["policy_bias", "policy_weight"]
     assert sorted(report.output_parameters[values_name]) == ["value_bias", "value_weight"]
+    assert report.warnings == []
 
     observations = tynx.Tensor([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0], [-1.0, 1.0]])
     actions = tynx.Tensor([0, 1, 0, 1], dtype="int64")

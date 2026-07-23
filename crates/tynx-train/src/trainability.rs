@@ -501,6 +501,13 @@ fn analyze(
     let mut by_id = HashMap::<InitializerId, usize>::new();
 
     for (node_index, node) in graph.nodes.iter().enumerate() {
+        // The parser represents ONNX initializers with generated Constant nodes
+        // and also embeds their values at real consumer inputs. The Constant
+        // node's private storage input is provenance scaffolding, not another
+        // semantic use of the initializer.
+        if matches!(node, Node::Constant(_)) {
+            continue;
+        }
         for (input_index, input) in node.inputs().iter().enumerate() {
             if !matches!(
                 input.value_source,
