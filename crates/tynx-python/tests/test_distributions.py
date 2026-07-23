@@ -40,6 +40,16 @@ def test_categorical_sampling_is_seeded_detached_and_advances_rng() -> None:
     assert manual_first.tolist() == manual_repeated.tolist()
 
 
+def test_categorical_sample_shape_leads_batch_shape() -> None:
+    distribution = tynx.distributions.Categorical(logits=tynx.Tensor([[0.0, 1.0], [1.0, 0.0]]))
+
+    first = distribution.sample((3, 4), seed=91)
+    repeated = distribution.sample((3, 4), seed=91)
+
+    assert first.shape == (3, 4, 2)
+    assert first.tolist() == repeated.tolist()
+
+
 def test_categorical_log_prob_broadcasts_leading_sample_dimensions() -> None:
     distribution = tynx.distributions.Categorical(
         logits=tynx.Tensor([[1.0, 2.0, 0.5], [0.0, 1.0, 3.0]])
@@ -110,6 +120,65 @@ def test_normal_log_prob_entropy_gradients_and_seeded_sample() -> None:
     assert tynx.distributions.Normal(loc, 1.0).entropy().shape == (2,)
 
 
+def test_normal_sample_shape_leads_broadcast_batch_shape() -> None:
+    distribution = tynx.distributions.Normal(
+        tynx.Tensor([[0.0, 1.0]]),
+        tynx.Tensor([[1.0], [2.0]]),
+    )
+
+    first = distribution.sample((3,), seed=42)
+    repeated = distribution.sample((3,), seed=42)
+
+    assert first.shape == (3, 2, 2)
+    assert first.tolist() == repeated.tolist()
+    assert not first.requires_grad
+
+
+@pytest.mark.parametrize(
+    ("loc_shape", "scale_shape"),
+    [((0, 1), (1, 3)), ((1, 3), (0, 1))],
+)
+def test_normal_sample_broadcast_preserves_empty_dimensions(
+    loc_shape: tuple[int, ...],
+    scale_shape: tuple[int, ...],
+) -> None:
+    distribution = tynx.distributions.Normal(
+        tynx.zeros(loc_shape),
+        tynx.ones(scale_shape),
+    )
+
+    sample = distribution.sample((2,), seed=42)
+
+    assert sample.shape == (2, 0, 3)
+    assert sample.tolist() == [[], []]
+
+
+def test_normal_sample_rejects_empty_dimension_against_non_unit_dimension() -> None:
+    distribution = tynx.distributions.Normal(
+        tynx.zeros((0,)),
+        tynx.ones((2,)),
+    )
+
+    with pytest.raises(ValueError, match="not broadcastable"):
+        distribution.sample()
+
+
+def test_distribution_sample_shape_is_capturable_and_rng_advances() -> None:
+    @tynx.compile(fullgraph=True)
+    def draw(logits: tynx.Tensor) -> tynx.Tensor:
+        return tynx.distributions.Categorical(logits=logits).sample((32,))
+
+    logits = tynx.Tensor([0.0, 0.0])
+    first = draw(logits)
+    second = draw(logits)
+
+    assert first.shape == (32,)
+    assert second.shape == (32,)
+    assert first.tolist() != second.tolist()
+    assert draw.graph_count == 1
+    assert draw.replay_count == 1
+
+
 def test_distribution_argument_errors_are_visible() -> None:
     with pytest.raises(ValueError, match="exactly one"):
         tynx.distributions.Categorical()
@@ -131,6 +200,10 @@ def test_distribution_argument_errors_are_visible() -> None:
             tynx.distributions.Normal(tynx.Tensor([0.0]), tensor_scale, validate_args=True)
     with pytest.raises(TypeError, match="validate_args must be a bool"):
         tynx.distributions.Normal(0.0, 1.0, validate_args=1)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="sample_shape must be a tuple"):
+        tynx.distributions.Normal(0.0, 1.0).sample([2])  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="non-negative"):
+        tynx.distributions.Categorical(logits=tynx.Tensor([0.0, 1.0])).sample((-1,))
 
 
 def test_normal_tensor_scale_validation_is_explicit() -> None:
