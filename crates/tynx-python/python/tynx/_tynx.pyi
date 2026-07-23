@@ -264,11 +264,15 @@ class _CapturedGraph:
     def __call__(self, *inputs: Tensor) -> tuple[Tensor, ...]: ...
 
 class Device:
+    """Select a construction device without changing the process-wide default."""
+
     def __init__(self, kind: Literal["default", "cpu", "flex"] = "default") -> None: ...
     def __str__(self) -> str: ...
     def __eq__(self, other: object) -> bool: ...
 
 class Tensor:
+    """A typed tensor stored as float32, int64, or bool."""
+
     def __init__(
         self,
         data: TensorData | Tensor | range,
@@ -276,7 +280,9 @@ class Tensor:
         dtype: TensorDType | None = None,
         device: Device | None = None,
         requires_grad: bool = False,
-    ) -> None: ...
+    ) -> None:
+        """Construct a tensor, normalizing NumPy float64/int32 to float32/int64."""
+        ...
     @property
     def shape(self) -> tuple[int, ...]: ...
     @property
