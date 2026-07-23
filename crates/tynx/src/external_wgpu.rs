@@ -223,6 +223,18 @@ impl ExternalWgpuContext {
         }
     }
 
+    /// Adopt a writable engine-owned f32 buffer.
+    ///
+    /// The returned tensor may be populated with eager in-place operations such as
+    /// `Tensor.copy_`. Publication and downstream visibility remain the owner's
+    /// responsibility; Tynx only retains the allocation through queued work.
+    pub fn adopt_f32_write(
+        &self,
+        descriptor: AcquiredExternalTensorDescriptor,
+    ) -> Result<DynTensor> {
+        self.adopt_f32(descriptor)
+    }
+
     /// Adopt an acquired descriptor as a read-only tensor on the autodiff backend.
     ///
     /// The external input does not require its own gradient, but operations that combine it with

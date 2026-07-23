@@ -273,6 +273,22 @@ impl ExternalTensorDescriptor {
         self,
         expected_context: &DeviceContextCapability,
     ) -> Result<ValidatedExternalTensorDescriptor> {
+        self.validate_dense(expected_context, ExternalAccess::ReadOnly)
+    }
+
+    /// Validate a writable dense-contiguous f32 view owned by a trusted engine.
+    pub fn validate_read_write_dense(
+        self,
+        expected_context: &DeviceContextCapability,
+    ) -> Result<ValidatedExternalTensorDescriptor> {
+        self.validate_dense(expected_context, ExternalAccess::ReadWrite)
+    }
+
+    fn validate_dense(
+        self,
+        expected_context: &DeviceContextCapability,
+        expected_access: ExternalAccess,
+    ) -> Result<ValidatedExternalTensorDescriptor> {
         if !self.context.same_context(expected_context) {
             return Err(external_error(
                 "external tensor belongs to a different device/queue context",
@@ -294,10 +310,11 @@ impl ExternalTensorDescriptor {
                 "external buffer is not declared for device storage use",
             ));
         }
-        if self.access != ExternalAccess::ReadOnly {
-            return Err(external_error(
-                "external tensor adoption currently supports read-only access",
-            ));
+        if self.access != expected_access {
+            return Err(external_error(format!(
+                "external tensor access must be {expected_access:?}, got {:?}",
+                self.access
+            )));
         }
         if self.dtype != DType::F32 {
             return Err(external_error(format!(
@@ -637,10 +654,16 @@ mod tests {
         writable.access = ExternalAccess::ReadWrite;
         assert!(
             writable
+                .clone()
+                .validate_read_write_dense(&expected)
+                .is_ok()
+        );
+        assert!(
+            writable
                 .validate_read_only_dense(&expected)
                 .unwrap_err()
                 .to_string()
-                .contains("read-only")
+                .contains("ReadOnly")
         );
 
         let mut integer = descriptor.clone();
