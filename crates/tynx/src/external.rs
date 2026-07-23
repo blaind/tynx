@@ -1,9 +1,8 @@
 //! Binding-neutral contracts for adopting externally owned device tensors.
 //!
-//! This module deliberately stops before backend adoption. The pinned CubeCL storage cannot yet
-//! register an external WGPU allocation, so validation never creates a Tynx tensor and never
-//! stages or copies data. It establishes the capability, ordering, and lifetime types that a
-//! future backend adapter must retain in its storage and autodiff tape.
+//! Validation is backend-neutral and never stages or copies data. Backend adapters consume an
+//! acquired descriptor only after checking its opaque device/queue capability, then retain its
+//! lease through asynchronous work and any autodiff tape that may read the forward activation.
 
 use std::{
     any::Any,
@@ -357,15 +356,20 @@ impl ValidatedExternalTensorDescriptor {
 
 /// Validated external tensor metadata after producer ordering has been established.
 ///
-/// This still is not a Tynx tensor. A future CubeCL adapter must retain this object or an
-/// [`ExternalTensorRetention`] clone in the adopted storage and every autodiff tape that may read
-/// the forward activation.
+/// This still is not a Tynx tensor. A backend adapter must retain this object or an
+/// [`ExternalTensorRetention`] clone in the adopted storage and every autodiff tape that may
+/// read the forward activation.
 #[derive(Debug)]
 pub struct AcquiredExternalTensorDescriptor {
     descriptor: ExternalTensorDescriptor,
 }
 
 impl AcquiredExternalTensorDescriptor {
+    #[cfg(any(feature = "wgpu", feature = "vulkan"))]
+    pub(crate) fn belongs_to(&self, expected_context: &DeviceContextCapability) -> bool {
+        self.descriptor.context.same_context(expected_context)
+    }
+
     /// Return the type-erased external buffer lease.
     pub fn buffer(&self) -> &ExternalBufferLease {
         &self.descriptor.buffer

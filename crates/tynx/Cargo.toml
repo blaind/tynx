@@ -10,6 +10,7 @@ keywords = ["machine-learning", "neural-network", "onnx", "inference", "webgpu"]
 
 [dependencies]
 burn = { git = "https://github.com/tracel-ai/burn", rev = "78f10aec1ca6c6ffb1edd17a0fa131ae59ad5403", default-features = false, features = ["extension", "std"] }
+cubecl = { git = "https://github.com/tracel-ai/cubecl", rev = "ba103c7f118524652647338dec09abf69a24a53e", optional = true, default-features = false }
 log = "0.4"
 onnx-ir = { git = "https://github.com/tracel-ai/burn-onnx", rev = "af2dfb43af43bf363dc2d7d858d933d86e2a65a8" }
 pollster = { version = "0.4", optional = true }
@@ -23,8 +24,8 @@ wgpu = { git = "https://github.com/gfx-rs/wgpu.git", rev = "bde709122f8320571ab1
 default = ["flex"]
 flex = ["burn/flex"]
 training = ["burn/autodiff"]
-vulkan = ["burn/vulkan", "burn/autotune", "flex", "dep:wgpu", "dep:pollster"]
-wgpu = ["burn/wgpu", "burn/autotune", "flex", "dep:wgpu", "dep:pollster"]
+vulkan = ["burn/vulkan", "burn/autotune", "flex", "dep:cubecl", "cubecl/wgpu-spirv", "dep:wgpu", "dep:pollster"]
+wgpu = ["burn/wgpu", "burn/autotune", "flex", "dep:cubecl", "cubecl/wgpu", "dep:wgpu", "dep:pollster"]
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 getrandom = { version = "0.4", features = ["wasm_js"] }
@@ -33,6 +34,7 @@ getrandom = { version = "0.4", features = ["wasm_js"] }
 half = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+wgpu = { git = "https://github.com/gfx-rs/wgpu.git", rev = "bde709122f8320571ab1733ab055dcb54415a483", default-features = false, features = ["noop"] }
 
 [lints]
 workspace = true

@@ -3,6 +3,8 @@
 mod device;
 mod error;
 mod external;
+#[cfg(any(feature = "wgpu", feature = "vulkan"))]
+mod external_wgpu;
 mod initializer;
 mod interpreter;
 mod session;
@@ -16,6 +18,8 @@ pub use external::{
     ExternalBufferUsage, ExternalSubmission, ExternalTensorDescriptor, ExternalTensorRetention,
     SubmissionToken, ValidatedExternalTensorDescriptor,
 };
+#[cfg(any(feature = "wgpu", feature = "vulkan"))]
+pub use external_wgpu::ExternalWgpuContext;
 pub use initializer::InitializerId;
 pub use interpreter::binary::prelu_values as execute_onnx_prelu;
 pub use interpreter::convolution::{
