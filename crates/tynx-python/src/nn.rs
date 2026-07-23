@@ -59,10 +59,10 @@ pub(crate) fn conv2d_py(
         [dilation.0, dilation.1],
         groups,
     )?;
-    Ok(match trace {
+    match trace {
         Some(trace) => result.with_trace(trace),
-        None => result,
-    })
+        None => Ok(result),
+    }
 }
 
 #[pyfunction(name = "_max_pool2d")]
@@ -177,7 +177,7 @@ pub(crate) fn embedding_py(
         )));
     }
     input.validate_index_bounds(weight_shape[0], 0, "embedding")?;
-    let indices = match input.detached_runtime_value() {
+    let indices = match input.detached_runtime_value()? {
         Value::Int(indices) => indices,
         value => {
             return Err(PyTypeError::new_err(format!(
@@ -196,8 +196,8 @@ pub(crate) fn embedding_py(
         PyTensor::from_inner(output)
     };
     let trace = record_embedding(&weight, &input, weight_shape[0], padding_idx)?;
-    Ok(match trace {
+    match trace {
         Some(trace) => result.with_trace(trace),
-        None => result,
-    })
+        None => Ok(result),
+    }
 }

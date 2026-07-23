@@ -35,9 +35,11 @@ fn tensor_refs<'py>(
     items
         .into_iter()
         .map(|item| {
-            item.extract::<PyRef<'py, PyTensor>>().map_err(|_| {
+            let tensor = item.extract::<PyRef<'py, PyTensor>>().map_err(|_| {
                 PyTypeError::new_err(format!("{operation} sequence entries must be Tensors"))
-            })
+            })?;
+            tensor.require_owner_thread()?;
+            Ok(tensor)
         })
         .collect()
 }
@@ -116,10 +118,10 @@ fn combine(values: &Bound<'_, PyAny>, dim: isize, stack: bool) -> PyResult<PyTen
         }
     };
     let trace = record_combine(&sources, axis, stack)?;
-    Ok(match trace {
+    match trace {
         Some(trace) => result.with_trace(trace),
-        None => result,
-    })
+        None => Ok(result),
+    }
 }
 
 #[pyfunction(name = "cat")]
@@ -180,6 +182,7 @@ pub(super) fn split_outputs(
     split_size_or_sections: &Bound<'_, PyAny>,
     dim: isize,
 ) -> PyResult<Vec<PyTensor>> {
+    input.require_owner_thread()?;
     let value = input.source.value();
     let axis = shape::axis_value(dim, value.rank(), false, "split")?;
     let sizes = split_sizes(split_size_or_sections, value.dims()[axis])?;
@@ -225,6 +228,7 @@ pub(super) fn chunk_outputs(
     chunks: usize,
     dim: isize,
 ) -> PyResult<Vec<PyTensor>> {
+    input.require_owner_thread()?;
     let value = input.source.value();
     let axis = shape::axis_value(dim, value.rank(), false, "chunk")?;
     let tracking = is_grad_enabled();
@@ -279,7 +283,7 @@ fn attach_split_traces(
     };
     debug_assert_eq!(outputs.len(), traces.len());
     for (output, trace) in outputs.iter_mut().zip(traces) {
-        *output = output.with_trace(trace);
+        *output = output.with_trace(trace)?;
     }
     Ok(outputs)
 }

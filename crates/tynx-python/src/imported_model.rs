@@ -356,7 +356,7 @@ impl PyImportedModel {
                 PyTensor::from_inner(output.detach())
             };
             let tensor = match traces.as_ref().and_then(|traces| traces.get(index)) {
-                Some(trace) => tensor.with_trace(trace.clone()),
+                Some(trace) => tensor.with_trace(trace.clone())?,
                 None => tensor,
             };
             Py::new(py, tensor)

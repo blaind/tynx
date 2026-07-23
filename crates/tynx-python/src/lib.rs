@@ -192,7 +192,7 @@ impl PySession {
                 value
                     .as_ref()
                     .expect("missing Session inputs were rejected above")
-                    .detached_runtime_value(),
+                    .detached_runtime_value()?,
             );
         }
         let mut result = self.inner.run(env).map_err(to_python_error)?;

@@ -375,7 +375,8 @@ fn like_spec(
     input: &PyTensor,
     dtype: Option<&str>,
     device: Option<PyRef<'_, PyDevice>>,
-) -> (Vec<usize>, String, Device) {
+) -> PyResult<(Vec<usize>, String, Device)> {
+    input.require_owner_thread()?;
     let value = input.source.value();
     let shape = value.dims();
     let dtype = dtype.unwrap_or(value.dtype_name()).to_string();
@@ -383,7 +384,7 @@ fn like_spec(
         || ensure_autodiff(value.device()),
         |device| ensure_autodiff(device.inner.as_ref().clone()),
     );
-    (shape, dtype, device)
+    Ok((shape, dtype, device))
 }
 
 macro_rules! like_full {
@@ -397,7 +398,7 @@ macro_rules! like_full {
             device: Option<PyRef<'_, PyDevice>>,
             requires_grad: bool,
         ) -> PyResult<PyTensor> {
-            let (shape, dtype, device) = like_spec(&input, dtype, device);
+            let (shape, dtype, device) = like_spec(&input, dtype, device)?;
             let value = ($value).into_pyobject(py)?.into_any();
             finish(full_value(&shape, &value, &dtype, &device)?, requires_grad)
         }
@@ -415,7 +416,7 @@ pub(crate) fn empty_like_py(
     device: Option<PyRef<'_, PyDevice>>,
     requires_grad: bool,
 ) -> PyResult<PyTensor> {
-    let (shape, dtype, device) = like_spec(&input, dtype, device);
+    let (shape, dtype, device) = like_spec(&input, dtype, device)?;
     finish(empty_value(&shape, &dtype, &device)?, requires_grad)
 }
 
@@ -428,7 +429,7 @@ pub(crate) fn full_like_py(
     device: Option<PyRef<'_, PyDevice>>,
     requires_grad: bool,
 ) -> PyResult<PyTensor> {
-    let (shape, dtype, device) = like_spec(&input, dtype, device);
+    let (shape, dtype, device) = like_spec(&input, dtype, device)?;
     finish(
         full_value(&shape, fill_value, &dtype, &device)?,
         requires_grad,
@@ -443,7 +444,7 @@ pub(crate) fn rand_like_py(
     device: Option<PyRef<'_, PyDevice>>,
     requires_grad: bool,
 ) -> PyResult<PyTensor> {
-    let (shape, dtype, device) = like_spec(&input, dtype, device);
+    let (shape, dtype, device) = like_spec(&input, dtype, device)?;
     if dtype != "float32" {
         return Err(PyTypeError::new_err(
             "rand_like supports only dtype='float32'",
@@ -463,7 +464,7 @@ pub(crate) fn randn_like_py(
     device: Option<PyRef<'_, PyDevice>>,
     requires_grad: bool,
 ) -> PyResult<PyTensor> {
-    let (shape, dtype, device) = like_spec(&input, dtype, device);
+    let (shape, dtype, device) = like_spec(&input, dtype, device)?;
     if dtype != "float32" {
         return Err(PyTypeError::new_err(
             "randn_like supports only dtype='float32'",

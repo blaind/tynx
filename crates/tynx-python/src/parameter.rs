@@ -6,7 +6,7 @@ use tynx_train::ParameterSlot;
 use crate::{tensor::PyTensor, to_python_error};
 
 /// A trainable tensor with stable mutable identity.
-#[pyclass(name = "Parameter", extends = PyTensor, frozen, unsendable)]
+#[pyclass(name = "Parameter", extends = PyTensor, frozen)]
 pub(crate) struct PyParameter;
 
 pub(crate) fn parameter_from_slot(
@@ -37,7 +37,7 @@ impl PyParameter {
 }
 
 /// A non-trainable tensor with stable mutable identity.
-#[pyclass(name = "Buffer", extends = PyTensor, frozen, unsendable)]
+#[pyclass(name = "Buffer", extends = PyTensor, frozen)]
 pub(crate) struct PyBuffer;
 
 pub(crate) fn buffer_from_slot(py: Python<'_>, slot: ParameterSlot) -> PyResult<Py<PyBuffer>> {
