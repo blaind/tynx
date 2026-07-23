@@ -422,6 +422,7 @@ class ImportedModel:
         simplify: bool = True,
         initializer_names: dict[str, str] | None = None,
         outputs: list[str] | None = None,
+        device: Device | None = None,
     ) -> None: ...
     @property
     def inputs(self) -> list[str]: ...

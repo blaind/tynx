@@ -16,6 +16,7 @@ use tynx_train::{
 
 use crate::{
     capture::record_operation,
+    device::{PyDevice, ensure_autodiff},
     grad_mode::is_grad_enabled,
     parameter::{PyBuffer, PyParameter, buffer_from_slot, parameter_from_slot},
     tensor::PyTensor,
@@ -221,12 +222,20 @@ impl PyTrainabilityReport {
 #[pymethods]
 impl PyImportedModel {
     #[new]
-    #[pyo3(signature = (path, *, simplify=true, initializer_names=None, outputs=None))]
+    #[pyo3(signature = (
+        path,
+        *,
+        simplify=true,
+        initializer_names=None,
+        outputs=None,
+        device=None
+    ))]
     fn new(
         path: PathBuf,
         simplify: bool,
         initializer_names: Option<HashMap<String, String>>,
         outputs: Option<Vec<String>>,
+        device: Option<&PyDevice>,
     ) -> PyResult<Self> {
         let data = std::fs::read(&path).map_err(|error| {
             PyOSError::new_err(format!("could not read '{}': {error}", path.display()))
@@ -238,7 +247,9 @@ impl PyImportedModel {
                 .set_name(report_name, state_name)
                 .map_err(to_python_error)?;
         }
-        let device = Device::autodiff(tynx_core::default_device());
+        let device = device
+            .map(|device| ensure_autodiff(device.inner.as_ref().clone()))
+            .unwrap_or_else(|| Device::autodiff(tynx_core::default_device()));
         let output_names = outputs
             .as_ref()
             .map(|outputs| outputs.iter().map(String::as_str).collect::<Vec<_>>());

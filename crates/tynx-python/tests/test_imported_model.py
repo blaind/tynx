@@ -168,6 +168,25 @@ def test_imported_model_is_callable_and_preserves_the_eager_tape(tmp_path: Path)
     assert parameters["head.bias"].grad.tolist() == pytest.approx([2.0])
 
 
+def test_imported_model_can_target_an_explicit_input_device(tmp_path: Path) -> None:
+    device = tynx.Device("cpu")
+    model = tynx.load(
+        _model_path(tmp_path),
+        trainable="auto",
+        simplify=False,
+        initializer_names={"weight": "head.weight", "bias": "head.bias"},
+        device=device,
+    )
+    input = tynx.Tensor([[2.0], [-1.0]], device=device, requires_grad=True)
+
+    output = model(input)
+    output.sum().backward()
+
+    assert output.device == input.device
+    assert output.flatten().tolist() == pytest.approx([5.0, -1.0])
+    assert input.grad is not None
+
+
 def test_imported_optimizer_update_is_visible_to_the_next_call(tmp_path: Path) -> None:
     model = _load_model(tmp_path)
     optimizer = tynx.optim.SGD(model.named_parameters(), lr=0.1)
