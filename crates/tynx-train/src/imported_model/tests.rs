@@ -1,5 +1,5 @@
 use burn::tensor::{Device, TensorData};
-use protobuf::{Message, MessageField};
+use protobuf::{EnumOrUnknown, Message, MessageField};
 use tynx_core::onnx_ir::{GraphProto, ModelProto, TensorProto, TypeProto, ValueInfoProto};
 use tynx_core::{DynTensor, Env, Session, Value};
 
@@ -437,26 +437,124 @@ fn imported_dropout_is_inactive_or_rejected_before_training() {
 }
 
 #[test]
-fn report_rejects_backward_capable_parameters_without_live_slot_execution() {
+fn imported_prelu_trains_its_live_slope_slot() {
     let session = Session::from_bytes_with(&prelu_model_bytes(), false).unwrap();
+    let names = stable_names(&session, "activation");
     let report = analyze_session_outputs(&session, None, &TrainabilityOverrides::new());
-
+    assert!(report.is_trainable(), "{report}");
+    assert!(report.errors().is_empty());
     assert!(report.backward_issues().is_empty());
-    assert!(!report.is_trainable());
-    assert!(
-        report
-            .errors()
-            .iter()
-            .any(|error| error.contains("slot-backed execution for PRelu"))
-    );
 
-    let error =
-        ImportedModel::from_session(session, Device::autodiff(Device::default())).unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("slot-backed execution for PRelu")
-    );
+    let device = Device::autodiff(Device::default());
+    let model = ImportedModel::from_session_with(
+        session,
+        device.clone(),
+        &TrainabilityOverrides::new(),
+        &names,
+    )
+    .unwrap();
+    let input = tensor(vec![-2.0, 3.0], &[2], &device);
+    let output = model
+        .run(env_with_input(input.clone()))
+        .unwrap()
+        .remove("y")
+        .unwrap()
+        .into_tensor()
+        .unwrap();
+    assert_eq!(values(output.clone()), [-0.5, 3.0]);
+
+    backward(&output.sum_dims(&[0]), model.parameters()).unwrap();
+    let slope = model.parameters().get_by_name("activation.weight").unwrap();
+    assert_eq!(values(slope.grad().unwrap()), [-2.0]);
+    let mut optimizer = Sgd::new(0.1).unwrap();
+    assert_eq!(optimizer.step(model.parameters()).unwrap(), 1);
+
+    let updated = model
+        .run(env_with_input(input))
+        .unwrap()
+        .remove("y")
+        .unwrap()
+        .into_tensor()
+        .unwrap();
+    assert_eq!(values(updated), [-0.9, 3.0]);
+}
+
+#[test]
+fn imported_instance_and_group_normalization_train_live_affine_slots() {
+    let cases = [
+        (
+            instance_norm_model_bytes(),
+            vec![1.0, 3.0, 2.0, 6.0],
+            vec![1, 2, 2],
+        ),
+        (
+            group_norm_model_bytes(),
+            vec![1.0, 3.0, 2.0, 6.0, -1.0, 1.0, 4.0, 8.0],
+            vec![1, 4, 2],
+        ),
+    ];
+
+    for (bytes, input_values, input_shape) in cases {
+        let session = Session::from_bytes_with(&bytes, false).unwrap();
+        let names = stable_names(&session, "norm");
+        let report = analyze_session_outputs(&session, None, &TrainabilityOverrides::new());
+        assert!(report.is_trainable(), "{report}");
+        assert!(report.errors().is_empty());
+        let device = Device::autodiff(Device::default());
+        let model = ImportedModel::from_session_with(
+            session,
+            device.clone(),
+            &TrainabilityOverrides::new(),
+            &names,
+        )
+        .unwrap();
+        let input = tensor(input_values, &input_shape, &device);
+        let output = model
+            .run(env_with_input(input.clone()))
+            .unwrap()
+            .remove("y")
+            .unwrap()
+            .into_tensor()
+            .unwrap();
+        let before = values(output.clone());
+        let axes = (0..output.rank()).collect::<Vec<_>>();
+        let loss = output
+            .clone()
+            .powi_scalar(2)
+            .sum_dims(&axes)
+            .add_broadcast(output.sum_dims(&axes))
+            .unwrap();
+
+        let result = backward(&loss, model.parameters()).unwrap();
+        assert_eq!(result.parameters_with_grad(), 2);
+        assert!(
+            model
+                .parameters()
+                .get_by_name("norm.weight")
+                .unwrap()
+                .grad()
+                .is_some()
+        );
+        assert!(
+            model
+                .parameters()
+                .get_by_name("norm.bias")
+                .unwrap()
+                .grad()
+                .is_some()
+        );
+        let mut optimizer = Sgd::new(0.05).unwrap();
+        assert_eq!(optimizer.step(model.parameters()).unwrap(), 2);
+
+        let after = model
+            .run(env_with_input(input))
+            .unwrap()
+            .remove("y")
+            .unwrap()
+            .into_tensor()
+            .unwrap();
+        assert_ne!(values(after), before);
+    }
 }
 
 fn gemm_model_bytes() -> Vec<u8> {
@@ -578,6 +676,51 @@ fn prelu_model_bytes() -> Vec<u8> {
     graph.initializer = vec![tensor_proto("slope", &[1], &[0.25])];
 
     finish_model(graph, 13)
+}
+
+fn instance_norm_model_bytes() -> Vec<u8> {
+    normalization_model_bytes("InstanceNormalization", 2, 13, None)
+}
+
+fn group_norm_model_bytes() -> Vec<u8> {
+    normalization_model_bytes("GroupNormalization", 4, 18, Some(2))
+}
+
+fn normalization_model_bytes(
+    operator: &str,
+    channels: usize,
+    opset: i64,
+    groups: Option<i64>,
+) -> Vec<u8> {
+    let mut graph = GraphProto::new();
+    graph.name = format!("imported_{operator}_test");
+    graph.input.push(value_info_with_shape(
+        "x",
+        &[Some(1), Some(channels), Some(2)],
+    ));
+    graph.output.push(value_info_with_shape(
+        "y",
+        &[Some(1), Some(channels), Some(2)],
+    ));
+    graph.node.push(Default::default());
+    let node = graph.node.last_mut().unwrap();
+    node.name = "norm".to_string();
+    node.op_type = operator.to_string();
+    node.input = vec!["x".to_string(), "scale".to_string(), "bias".to_string()];
+    node.output = vec!["y".to_string()];
+    if let Some(groups) = groups {
+        node.attribute.push(Default::default());
+        let attribute = node.attribute.last_mut().unwrap();
+        attribute.name = "num_groups".to_string();
+        attribute.type_ = EnumOrUnknown::from_i32(2);
+        attribute.i = groups;
+    }
+    graph.initializer = vec![
+        tensor_proto("scale", &[channels], &vec![1.0; channels]),
+        tensor_proto("bias", &[channels], &vec![0.0; channels]),
+    ];
+
+    finish_model(graph, opset)
 }
 
 fn model_bytes(

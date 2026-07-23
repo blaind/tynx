@@ -1,7 +1,7 @@
 //! Runtime dispatch for individual ONNX nodes.
 
 mod attention;
-mod binary;
+pub(crate) mod binary;
 mod broadcasting;
 mod cast;
 mod classification;

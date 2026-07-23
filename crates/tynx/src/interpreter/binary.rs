@@ -218,6 +218,11 @@ pub(super) fn prelu(node: &PReluNode, env: &Env, device: &Device) -> Result<Vec<
     let input = resolve::at(env, &node.name, &node.inputs, 0, device)?.into_tensor()?;
     let slope = resolve::at(env, &node.name, &node.inputs, 1, device)?.into_tensor()?;
 
+    prelu_values(input, slope)
+}
+
+/// Execute ONNX PRelu from already-resolved tensor values.
+pub fn prelu_values(input: DynTensor, slope: DynTensor) -> Result<Vec<Value>> {
     Ok(vec![Value::Tensor(input.prelu(slope)?)])
 }
 

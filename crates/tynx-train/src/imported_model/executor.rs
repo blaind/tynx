@@ -9,14 +9,19 @@ use tynx_core::onnx_ir::{
         conv2d::Conv2dNode,
         gather::GatherNode,
         gemm::GemmNode,
+        group_norm::GroupNormalizationNode,
+        instance_norm::InstanceNormalizationNode,
         layer_norm::LayerNormalizationNode,
         linear::LinearNode,
         matmul::MatMulNode,
+        prelu::PReluNode,
     },
 };
 use tynx_core::{
     DynTensor, Env, Result, Session, TynxError, Value, execute, execute_onnx_gather,
-    execute_onnx_layer_normalization, execute_onnx_matmul, resolve_onnx_padding2d,
+    execute_onnx_group_normalization, execute_onnx_instance_normalization,
+    execute_onnx_layer_normalization, execute_onnx_matmul, execute_onnx_prelu,
+    resolve_onnx_padding2d,
 };
 
 use crate::{ImportedState, InitializerId, InitializerRole, TrainabilityReport};
@@ -69,7 +74,11 @@ fn supports_slot_input(node: &Node, input_index: usize) -> bool {
         Node::BatchNormalization(_) => matches!(input_index, 1..=4),
         Node::Conv2d(_) => matches!(input_index, 0..=2),
         Node::Gather(_) => input_index == 0,
+        Node::InstanceNormalization(_) | Node::GroupNormalization(_) => {
+            matches!(input_index, 0..=2)
+        }
         Node::LayerNormalization(_) => matches!(input_index, 0..=2),
+        Node::PRelu(_) => matches!(input_index, 0..=1),
         _ => false,
     }
 }
@@ -104,6 +113,13 @@ pub(super) fn run(
             Node::LayerNormalization(node) => {
                 execute_layer_normalization(node, node_index, &env, state, device, tracking)
             }
+            Node::InstanceNormalization(node) => {
+                execute_instance_normalization(node, node_index, &env, state, device, tracking)
+            }
+            Node::GroupNormalization(node) => {
+                execute_group_normalization(node, node_index, &env, state, device, tracking)
+            }
+            Node::PRelu(node) => execute_prelu(node, node_index, &env, state, device, tracking),
             _ => execute(node, &env, device),
         }?;
         if values.len() != node.outputs().len() {
@@ -120,6 +136,54 @@ pub(super) fn run(
     }
 
     session.collect_outputs(&env)
+}
+
+fn execute_instance_normalization(
+    node: &InstanceNormalizationNode,
+    node_index: usize,
+    env: &Env,
+    state: &ImportedState,
+    device: &Device,
+    tracking: bool,
+) -> Result<Vec<Value>> {
+    execute_onnx_instance_normalization(
+        resolve_tensor(node, node_index, 0, env, state, device, tracking)?,
+        resolve_tensor(node, node_index, 1, env, state, device, tracking)?,
+        resolve_tensor(node, node_index, 2, env, state, device, tracking)?,
+        node.config.epsilon,
+    )
+}
+
+fn execute_group_normalization(
+    node: &GroupNormalizationNode,
+    node_index: usize,
+    env: &Env,
+    state: &ImportedState,
+    device: &Device,
+    tracking: bool,
+) -> Result<Vec<Value>> {
+    execute_onnx_group_normalization(
+        resolve_tensor(node, node_index, 0, env, state, device, tracking)?,
+        resolve_tensor(node, node_index, 1, env, state, device, tracking)?,
+        resolve_tensor(node, node_index, 2, env, state, device, tracking)?,
+        node.config.num_groups,
+        node.config.epsilon,
+        node.config.full_precision,
+    )
+}
+
+fn execute_prelu(
+    node: &PReluNode,
+    node_index: usize,
+    env: &Env,
+    state: &ImportedState,
+    device: &Device,
+    tracking: bool,
+) -> Result<Vec<Value>> {
+    execute_onnx_prelu(
+        resolve_tensor(node, node_index, 0, env, state, device, tracking)?,
+        resolve_tensor(node, node_index, 1, env, state, device, tracking)?,
+    )
 }
 
 fn execute_layer_normalization(
@@ -485,5 +549,8 @@ impl_node_inputs!(
     BatchNormalizationNode,
     Conv2dNode,
     GatherNode,
+    GroupNormalizationNode,
+    InstanceNormalizationNode,
     LayerNormalizationNode,
+    PReluNode,
 );

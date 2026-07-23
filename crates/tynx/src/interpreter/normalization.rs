@@ -64,27 +64,42 @@ pub(super) fn instance_normalization(
     device: &Device,
 ) -> Result<Vec<Value>> {
     let input = resolve::at(env, &node.name, &node.inputs, 0, device)?.into_tensor()?;
+    let scale = resolve::at(env, &node.name, &node.inputs, 1, device)?.into_tensor()?;
+    let bias = resolve::at(env, &node.name, &node.inputs, 2, device)?.into_tensor()?;
+    instance_normalization_values(input, scale, bias, node.config.epsilon)
+}
+
+/// Execute ONNX InstanceNormalization from already-resolved tensor values.
+pub fn instance_normalization_values(
+    input: DynTensor,
+    scale: DynTensor,
+    bias: DynTensor,
+    epsilon: f64,
+) -> Result<Vec<Value>> {
     let rank = input.rank();
-    let channels = channels(&input, "InstanceNormalization", 3)?;
+    let channel_count = channels(&input, "InstanceNormalization", 3)?;
     let dtype = input.dtype();
-    let parameters = ChannelParameters {
-        node_name: &node.name,
-        inputs: &node.inputs,
-        channels,
-        input_rank: rank,
+    let scale = channel_parameter_value(
+        scale,
+        channel_count,
+        rank,
         dtype,
-        env,
-        device,
-    };
-    let scale = parameters.get(1)?;
-    let bias = parameters.get(2)?;
+        "InstanceNormalization scale",
+    )?;
+    let bias = channel_parameter_value(
+        bias,
+        channel_count,
+        rank,
+        dtype,
+        "InstanceNormalization bias",
+    )?;
     let spatial_axes = (2..rank).collect::<Vec<_>>();
     let mean = input.clone().mean_dims(&spatial_axes);
     let centered = input.sub_broadcast(mean)?;
     let variance = centered.clone().powi_scalar(2).mean_dims(&spatial_axes);
 
     let output = centered
-        .div_broadcast(variance.add_scalar(node.config.epsilon).sqrt())?
+        .div_broadcast(variance.add_scalar(epsilon).sqrt())?
         .mul_broadcast(scale)?
         .add_broadcast(bias)?;
     Ok(vec![Value::Tensor(output)])
@@ -182,12 +197,32 @@ pub(super) fn group_normalization(
     device: &Device,
 ) -> Result<Vec<Value>> {
     let input = resolve::at(env, &node.name, &node.inputs, 0, device)?.into_tensor()?;
+    let scale = resolve::at(env, &node.name, &node.inputs, 1, device)?.into_tensor()?;
+    let bias = resolve::at(env, &node.name, &node.inputs, 2, device)?.into_tensor()?;
+    group_normalization_values(
+        input,
+        scale,
+        bias,
+        node.config.num_groups,
+        node.config.epsilon,
+        node.config.full_precision,
+    )
+}
+
+/// Execute ONNX GroupNormalization from already-resolved tensor values.
+pub fn group_normalization_values(
+    input: DynTensor,
+    scale: DynTensor,
+    bias: DynTensor,
+    num_groups: usize,
+    epsilon: f64,
+    full_precision: bool,
+) -> Result<Vec<Value>> {
     let dims = input.dims();
-    let channels = channels(&input, "GroupNormalization", 3)?;
-    if node.config.num_groups == 0 || !channels.is_multiple_of(node.config.num_groups) {
+    let channel_count = channels(&input, "GroupNormalization", 3)?;
+    if num_groups == 0 || !channel_count.is_multiple_of(num_groups) {
         return Err(TynxError::Shape(format!(
-            "GroupNormalization channels {channels} are not divisible by {} groups",
-            node.config.num_groups
+            "GroupNormalization channels {channel_count} are not divisible by {num_groups} groups"
         )));
     }
     if input.rank() >= crate::MAX_RANK {
@@ -198,16 +233,15 @@ pub(super) fn group_normalization(
         )));
     }
     let output_dtype = input.dtype();
-    let compute_dtype =
-        if node.config.full_precision && matches!(output_dtype, DType::F16 | DType::BF16) {
-            DType::F32
-        } else {
-            output_dtype
-        };
+    let compute_dtype = if full_precision && matches!(output_dtype, DType::F16 | DType::BF16) {
+        DType::F32
+    } else {
+        output_dtype
+    };
     let mut grouped_dims = Vec::with_capacity(dims.len() + 1);
     grouped_dims.push(dims[0]);
-    grouped_dims.push(node.config.num_groups);
-    grouped_dims.push(channels / node.config.num_groups);
+    grouped_dims.push(num_groups);
+    grouped_dims.push(channel_count / num_groups);
     grouped_dims.extend_from_slice(&dims[2..]);
     let grouped = input.cast(compute_dtype).reshape(grouped_dims)?;
     let axes = (2..grouped.rank()).collect::<Vec<_>>();
@@ -215,20 +249,25 @@ pub(super) fn group_normalization(
     let centered = grouped.sub_broadcast(mean)?;
     let variance = centered.clone().powi_scalar(2).mean_dims(&axes);
     let normalized = centered
-        .div_broadcast(variance.add_scalar(node.config.epsilon).sqrt())?
+        .div_broadcast(variance.add_scalar(epsilon).sqrt())?
         .reshape(dims.clone())?;
-    let parameters = ChannelParameters {
-        node_name: &node.name,
-        inputs: &node.inputs,
-        channels,
-        input_rank: dims.len(),
-        dtype: compute_dtype,
-        env,
-        device,
-    };
+    let scale = channel_parameter_value(
+        scale,
+        channel_count,
+        dims.len(),
+        compute_dtype,
+        "GroupNormalization scale",
+    )?;
+    let bias = channel_parameter_value(
+        bias,
+        channel_count,
+        dims.len(),
+        compute_dtype,
+        "GroupNormalization bias",
+    )?;
     let output = normalized
-        .mul_broadcast(parameters.get(1)?)?
-        .add_broadcast(parameters.get(2)?)?
+        .mul_broadcast(scale)?
+        .add_broadcast(bias)?
         .cast(output_dtype);
     Ok(vec![Value::Tensor(output)])
 }
@@ -327,6 +366,24 @@ fn channels(input: &DynTensor, operator: &str, minimum_rank: usize) -> Result<us
         )));
     }
     Ok(input.dims()[1])
+}
+
+fn channel_parameter_value(
+    parameter: DynTensor,
+    channels: usize,
+    input_rank: usize,
+    dtype: DType,
+    label: &str,
+) -> Result<DynTensor> {
+    if parameter.dims() != [channels] {
+        return Err(TynxError::Shape(format!(
+            "{label} has shape {:?}; expected [{channels}]",
+            parameter.dims()
+        )));
+    }
+    let mut dims = vec![1; input_rank];
+    dims[1] = channels;
+    parameter.cast(dtype).reshape(dims)
 }
 
 #[cfg(test)]

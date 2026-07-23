@@ -11,9 +11,14 @@ mod value;
 pub use device::{default_device, synchronize, take_device_error};
 pub use error::{Result, TynxError};
 pub use initializer::InitializerId;
+pub use interpreter::binary::prelu_values as execute_onnx_prelu;
 pub use interpreter::gather::gather_values as execute_onnx_gather;
 pub use interpreter::matrix::matmul_values as execute_onnx_matmul;
-pub use interpreter::normalization::layer_normalization_values as execute_onnx_layer_normalization;
+pub use interpreter::normalization::{
+    group_normalization_values as execute_onnx_group_normalization,
+    instance_normalization_values as execute_onnx_instance_normalization,
+    layer_normalization_values as execute_onnx_layer_normalization,
+};
 pub use interpreter::spatial::padding2d as resolve_onnx_padding2d;
 pub use interpreter::{Env, execute};
 pub use session::{PreparedSession, Session};
