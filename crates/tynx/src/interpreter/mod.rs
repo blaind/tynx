@@ -10,7 +10,7 @@ mod col2im;
 mod comparison;
 mod concat;
 mod control_flow;
-mod convolution;
+pub(crate) mod convolution;
 mod cumsum;
 mod deform_conv;
 mod dft;

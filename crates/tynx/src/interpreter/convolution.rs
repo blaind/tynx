@@ -15,9 +15,12 @@ use onnx_ir::{
     ModelProto, Node, TensorProto, ValueInfoProto,
     ir::{Argument, OnnxGraph},
     node::{
-        conv_transpose1d::ConvTranspose1dNode, conv_transpose2d::ConvTranspose2dNode,
-        conv_transpose3d::ConvTranspose3dNode, conv1d::Conv1dNode, conv2d::Conv2dNode,
-        conv3d::Conv3dNode,
+        conv_transpose1d::{ConvTranspose1dConfig, ConvTranspose1dNode},
+        conv_transpose2d::{ConvTranspose2dConfig, ConvTranspose2dNode},
+        conv_transpose3d::{ConvTranspose3dConfig, ConvTranspose3dNode},
+        conv1d::{Conv1dConfig, Conv1dNode},
+        conv2d::Conv2dNode,
+        conv3d::{Conv3dConfig, Conv3dNode},
     },
 };
 use protobuf::Message;
@@ -192,30 +195,39 @@ impl_conv_node!(
 );
 
 pub(super) fn conv1d(node: &Conv1dNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
-    let input = rank3(resolve::at(env, &node.name, &node.inputs, 0, device)?.into_tensor()?)?;
+    let input = resolve::at(env, &node.name, &node.inputs, 0, device)?.into_tensor()?;
+    let weight = resolve::at(env, &node.name, &node.inputs, 1, device)?.into_tensor()?;
+    let bias = resolve_bias(&node.name, &node.inputs, env, device)?;
+    conv1d_values(input, weight, bias, &node.config)
+}
+
+/// Execute ONNX Conv1d from already-resolved tensor values.
+pub fn conv1d_values(
+    input: DynTensor,
+    weight: DynTensor,
+    bias: Option<DynTensor>,
+    config: &Conv1dConfig,
+) -> Result<Vec<Value>> {
+    let input = rank3(input)?;
     let dtype = input.dtype();
-    let weight = rank3(
-        resolve::at(env, &node.name, &node.inputs, 1, device)?
-            .into_tensor()?
-            .cast(dtype),
-    )?;
-    let bias = bias(&node.name, &node.inputs, env, device, dtype)?;
+    let weight = rank3(weight.cast(dtype))?;
+    let bias = bias_value(bias, dtype)?;
     let dims = input.dims();
     let [(left, right)] = padding1d(
         dims[2],
-        node.config.kernel_size,
-        node.config.stride,
-        node.config.dilation,
-        &node.config.padding,
-        &node.config.auto_pad,
+        config.kernel_size,
+        config.stride,
+        config.dilation,
+        &config.padding,
+        &config.auto_pad,
         false,
     );
     let options = PaddedConvOptions::asymmetric(
-        [node.config.stride],
+        [config.stride],
         [left],
         [right],
-        [node.config.dilation],
-        node.config.groups,
+        [config.dilation],
+        config.groups,
     );
     Ok(vec![Value::Tensor(DynTensor::R3(burn_conv1d(
         input, weight, bias, options,
@@ -230,7 +242,7 @@ pub(super) fn conv2d(node: &Conv2dNode, env: &Env, device: &Device) -> Result<Ve
             .into_tensor()?
             .cast(dtype),
     )?;
-    let bias = bias(&node.name, &node.inputs, env, device, dtype)?;
+    let bias = bias_value(resolve_bias(&node.name, &node.inputs, env, device)?, dtype)?;
     let dims = input.dims();
     let [(top, bottom), (left, right)] = padding2d(
         [dims[2], dims[3]],
@@ -254,31 +266,35 @@ pub(super) fn conv2d(node: &Conv2dNode, env: &Env, device: &Device) -> Result<Ve
 }
 
 pub(super) fn conv3d(node: &Conv3dNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
-    let input = rank5(resolve::at(env, &node.name, &node.inputs, 0, device)?.into_tensor()?)?;
+    let input = resolve::at(env, &node.name, &node.inputs, 0, device)?.into_tensor()?;
+    let weight = resolve::at(env, &node.name, &node.inputs, 1, device)?.into_tensor()?;
+    let bias = resolve_bias(&node.name, &node.inputs, env, device)?;
+    conv3d_values(input, weight, bias, &node.config)
+}
+
+/// Execute ONNX Conv3d from already-resolved tensor values.
+pub fn conv3d_values(
+    input: DynTensor,
+    weight: DynTensor,
+    bias: Option<DynTensor>,
+    config: &Conv3dConfig,
+) -> Result<Vec<Value>> {
+    let input = rank5(input)?;
     let dtype = input.dtype();
-    let weight = rank5(
-        resolve::at(env, &node.name, &node.inputs, 1, device)?
-            .into_tensor()?
-            .cast(dtype),
-    )?;
-    let bias = bias(&node.name, &node.inputs, env, device, dtype)?;
+    let weight = rank5(weight.cast(dtype))?;
+    let bias = bias_value(bias, dtype)?;
     let dims = input.dims();
     let padding = padding3d(
         [dims[2], dims[3], dims[4]],
-        node.config.kernel_size,
-        node.config.stride,
-        node.config.dilation,
-        &node.config.padding,
-        &node.config.auto_pad,
+        config.kernel_size,
+        config.stride,
+        config.dilation,
+        &config.padding,
+        &config.auto_pad,
         false,
     );
     let input = input.pad(padding, PadMode::Constant(0.0));
-    let options = ConvOptions::new(
-        node.config.stride,
-        [0; 3],
-        node.config.dilation,
-        node.config.groups,
-    );
+    let options = ConvOptions::new(config.stride, [0; 3], config.dilation, config.groups);
     Ok(vec![Value::Tensor(DynTensor::R5(burn_conv3d(
         input, weight, bias, options,
     )))])
@@ -289,20 +305,29 @@ pub(super) fn conv_transpose1d(
     env: &Env,
     device: &Device,
 ) -> Result<Vec<Value>> {
-    let input = rank3(resolve::at(env, &node.name, &node.inputs, 0, device)?.into_tensor()?)?;
+    let input = resolve::at(env, &node.name, &node.inputs, 0, device)?.into_tensor()?;
+    let weight = resolve::at(env, &node.name, &node.inputs, 1, device)?.into_tensor()?;
+    let bias = resolve_bias(&node.name, &node.inputs, env, device)?;
+    conv_transpose1d_values(input, weight, bias, &node.config)
+}
+
+/// Execute ONNX ConvTranspose1d from already-resolved tensor values.
+pub fn conv_transpose1d_values(
+    input: DynTensor,
+    weight: DynTensor,
+    bias: Option<DynTensor>,
+    config: &ConvTranspose1dConfig,
+) -> Result<Vec<Value>> {
+    let input = rank3(input)?;
     let dtype = input.dtype();
-    let weight = rank3(
-        resolve::at(env, &node.name, &node.inputs, 1, device)?
-            .into_tensor()?
-            .cast(dtype),
-    )?;
-    let bias = bias(&node.name, &node.inputs, env, device, dtype)?;
+    let weight = rank3(weight.cast(dtype))?;
+    let bias = bias_value(bias, dtype)?;
     let options = ConvTransposeOptions::new(
-        [node.config.stride],
-        [node.config.padding],
-        [node.config.padding_out],
-        [node.config.dilation],
-        node.config.groups,
+        [config.stride],
+        [config.padding],
+        [config.padding_out],
+        [config.dilation],
+        config.groups,
     );
     Ok(vec![Value::Tensor(DynTensor::R3(burn_conv_transpose1d(
         input, weight, bias, options,
@@ -314,20 +339,29 @@ pub(super) fn conv_transpose2d(
     env: &Env,
     device: &Device,
 ) -> Result<Vec<Value>> {
-    let input = rank4(resolve::at(env, &node.name, &node.inputs, 0, device)?.into_tensor()?)?;
+    let input = resolve::at(env, &node.name, &node.inputs, 0, device)?.into_tensor()?;
+    let weight = resolve::at(env, &node.name, &node.inputs, 1, device)?.into_tensor()?;
+    let bias = resolve_bias(&node.name, &node.inputs, env, device)?;
+    conv_transpose2d_values(input, weight, bias, &node.config)
+}
+
+/// Execute ONNX ConvTranspose2d from already-resolved tensor values.
+pub fn conv_transpose2d_values(
+    input: DynTensor,
+    weight: DynTensor,
+    bias: Option<DynTensor>,
+    config: &ConvTranspose2dConfig,
+) -> Result<Vec<Value>> {
+    let input = rank4(input)?;
     let dtype = input.dtype();
-    let weight = rank4(
-        resolve::at(env, &node.name, &node.inputs, 1, device)?
-            .into_tensor()?
-            .cast(dtype),
-    )?;
-    let bias = bias(&node.name, &node.inputs, env, device, dtype)?;
+    let weight = rank4(weight.cast(dtype))?;
+    let bias = bias_value(bias, dtype)?;
     let options = ConvTransposeOptions::new(
-        node.config.stride,
-        node.config.padding,
-        node.config.padding_out,
-        node.config.dilation,
-        node.config.groups,
+        config.stride,
+        config.padding,
+        config.padding_out,
+        config.dilation,
+        config.groups,
     );
     Ok(vec![Value::Tensor(DynTensor::R4(burn_conv_transpose2d(
         input, weight, bias, options,
@@ -339,48 +373,59 @@ pub(super) fn conv_transpose3d(
     env: &Env,
     device: &Device,
 ) -> Result<Vec<Value>> {
-    let input = rank5(resolve::at(env, &node.name, &node.inputs, 0, device)?.into_tensor()?)?;
+    let input = resolve::at(env, &node.name, &node.inputs, 0, device)?.into_tensor()?;
+    let weight = resolve::at(env, &node.name, &node.inputs, 1, device)?.into_tensor()?;
+    let bias = resolve_bias(&node.name, &node.inputs, env, device)?;
+    conv_transpose3d_values(input, weight, bias, &node.config)
+}
+
+/// Execute ONNX ConvTranspose3d from already-resolved tensor values.
+pub fn conv_transpose3d_values(
+    input: DynTensor,
+    weight: DynTensor,
+    bias: Option<DynTensor>,
+    config: &ConvTranspose3dConfig,
+) -> Result<Vec<Value>> {
+    let input = rank5(input)?;
     let dtype = input.dtype();
-    let weight = rank5(
-        resolve::at(env, &node.name, &node.inputs, 1, device)?
-            .into_tensor()?
-            .cast(dtype),
-    )?;
-    let bias = bias(&node.name, &node.inputs, env, device, dtype)?;
+    let weight = rank5(weight.cast(dtype))?;
+    let bias = bias_value(bias, dtype)?;
     let options = ConvTransposeOptions::new(
-        node.config.stride,
-        node.config.padding,
-        node.config.padding_out,
-        node.config.dilation,
-        node.config.groups,
+        config.stride,
+        config.padding,
+        config.padding_out,
+        config.dilation,
+        config.groups,
     );
     Ok(vec![Value::Tensor(DynTensor::R5(burn_conv_transpose3d(
         input, weight, bias, options,
     )))])
 }
 
-fn bias(
+fn resolve_bias(
     node_name: &str,
     inputs: &[Argument],
     env: &Env,
     device: &Device,
-    dtype: DType,
-) -> Result<Option<Tensor<1>>> {
+) -> Result<Option<DynTensor>> {
     if !inputs.get(2).is_some_and(|input| !input.is_optional()) {
         return Ok(None);
     }
-    match resolve::at(env, node_name, inputs, 2, device)?
-        .into_tensor()?
-        .cast(dtype)
-    {
-        DynTensor::R1(tensor) => Ok(Some(tensor)),
-        tensor => Err(TynxError::Shape(format!(
+    resolve::at(env, node_name, inputs, 2, device)?
+        .into_tensor()
+        .map(Some)
+}
+
+fn bias_value(bias: Option<DynTensor>, dtype: DType) -> Result<Option<Tensor<1>>> {
+    match bias.map(|bias| bias.cast(dtype)) {
+        None => Ok(None),
+        Some(DynTensor::R1(tensor)) => Ok(Some(tensor)),
+        Some(tensor) => Err(TynxError::Shape(format!(
             "convolution bias must have rank 1, got rank {}",
             tensor.rank()
         ))),
     }
 }
-
 #[cfg(test)]
 mod tests {
     use burn::tensor::TensorData;

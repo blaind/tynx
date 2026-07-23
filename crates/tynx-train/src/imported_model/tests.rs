@@ -298,6 +298,93 @@ fn imported_conv2d_learns_with_live_weight_and_bias_slots() {
 }
 
 #[test]
+fn imported_remaining_convolution_variants_train_live_slots() {
+    let cases = [
+        (
+            convolution_model_bytes("Conv", &[1, 1, 2], &[1, 1, 1]),
+            vec![1.0, 2.0],
+            vec![1, 1, 2],
+        ),
+        (
+            convolution_model_bytes("Conv", &[1, 1, 1, 1, 2], &[1, 1, 1, 1, 1]),
+            vec![1.0, 2.0],
+            vec![1, 1, 1, 1, 2],
+        ),
+        (
+            convolution_model_bytes("ConvTranspose", &[1, 1, 2], &[1, 1, 1]),
+            vec![1.0, 2.0],
+            vec![1, 1, 2],
+        ),
+        (
+            convolution_model_bytes("ConvTranspose", &[1, 1, 1, 2], &[1, 1, 1, 1]),
+            vec![1.0, 2.0],
+            vec![1, 1, 1, 2],
+        ),
+        (
+            convolution_model_bytes("ConvTranspose", &[1, 1, 1, 1, 2], &[1, 1, 1, 1, 1]),
+            vec![1.0, 2.0],
+            vec![1, 1, 1, 1, 2],
+        ),
+    ];
+
+    for (bytes, input_values, input_shape) in cases {
+        let session = Session::from_bytes_with(&bytes, false).unwrap();
+        let names = stable_names(&session, "conv");
+        let report = analyze_session_outputs(&session, None, &TrainabilityOverrides::new());
+        assert!(report.is_trainable(), "{report}");
+        assert!(report.errors().is_empty());
+        let device = Device::autodiff(Device::default());
+        let model = ImportedModel::from_session_with(
+            session,
+            device.clone(),
+            &TrainabilityOverrides::new(),
+            &names,
+        )
+        .unwrap();
+        let input = tensor(input_values, &input_shape, &device);
+        let output = model
+            .run(env_with_input(input.clone()))
+            .unwrap()
+            .remove("y")
+            .unwrap()
+            .into_tensor()
+            .unwrap();
+        let before = values(output.clone());
+        let axes = (0..output.rank()).collect::<Vec<_>>();
+
+        let result = backward(&output.sum_dims(&axes), model.parameters()).unwrap();
+        assert_eq!(result.parameters_with_grad(), 2);
+        let mut optimizer = Sgd::new(0.1).unwrap();
+        assert_eq!(optimizer.step(model.parameters()).unwrap(), 2);
+
+        let after = model
+            .run(env_with_input(input))
+            .unwrap()
+            .remove("y")
+            .unwrap()
+            .into_tensor()
+            .unwrap();
+        assert_ne!(values(after), before);
+        assert_eq!(
+            model
+                .parameters()
+                .get_by_name("conv.weight")
+                .unwrap()
+                .value_generation(),
+            1
+        );
+        assert_eq!(
+            model
+                .parameters()
+                .get_by_name("conv.bias")
+                .unwrap()
+                .value_generation(),
+            1
+        );
+    }
+}
+
+#[test]
 fn imported_model_accepts_only_declared_dynamic_dimensions() {
     let session = Session::from_bytes_with(&dynamic_batch_gemm_model_bytes(), false).unwrap();
     let names = stable_names(&session, "head");
@@ -657,6 +744,26 @@ fn conv_model_bytes() -> Vec<u8> {
         &[1, 1, 2, 2],
         vec![
             tensor_proto("weight", &[1, 1, 1, 1], &[1.0]),
+            tensor_proto("bias", &[1], &[0.0]),
+        ],
+    )
+}
+
+fn convolution_model_bytes(
+    operator: &str,
+    input_shape: &[usize],
+    weight_shape: &[usize],
+) -> Vec<u8> {
+    model_bytes(
+        operator,
+        input_shape,
+        input_shape,
+        vec![
+            tensor_proto(
+                "weight",
+                weight_shape,
+                &vec![1.0; weight_shape.iter().product()],
+            ),
             tensor_proto("bias", &[1], &[0.0]),
         ],
     )

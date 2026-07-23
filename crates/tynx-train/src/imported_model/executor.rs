@@ -6,7 +6,12 @@ use tynx_core::onnx_ir::{
     ir::{ArgType, Argument, OnnxGraph},
     node::{
         batch_norm::{BatchNormConfig, BatchNormalizationNode},
+        conv_transpose1d::ConvTranspose1dNode,
+        conv_transpose2d::ConvTranspose2dNode,
+        conv_transpose3d::ConvTranspose3dNode,
+        conv1d::Conv1dNode,
         conv2d::Conv2dNode,
+        conv3d::Conv3dNode,
         gather::GatherNode,
         gemm::GemmNode,
         group_norm::GroupNormalizationNode,
@@ -18,10 +23,11 @@ use tynx_core::onnx_ir::{
     },
 };
 use tynx_core::{
-    DynTensor, Env, Result, Session, TynxError, Value, execute, execute_onnx_gather,
-    execute_onnx_group_normalization, execute_onnx_instance_normalization,
-    execute_onnx_layer_normalization, execute_onnx_matmul, execute_onnx_prelu,
-    resolve_onnx_padding2d,
+    DynTensor, Env, Result, Session, TynxError, Value, execute, execute_onnx_conv_transpose1d,
+    execute_onnx_conv_transpose2d, execute_onnx_conv_transpose3d, execute_onnx_conv1d,
+    execute_onnx_conv3d, execute_onnx_gather, execute_onnx_group_normalization,
+    execute_onnx_instance_normalization, execute_onnx_layer_normalization, execute_onnx_matmul,
+    execute_onnx_prelu, resolve_onnx_padding2d,
 };
 
 use crate::{ImportedState, InitializerId, InitializerRole, TrainabilityReport};
@@ -72,7 +78,12 @@ fn supports_slot_input(node: &Node, input_index: usize) -> bool {
         Node::Linear(_) | Node::Gemm(_) => matches!(input_index, 1 | 2),
         Node::MatMul(_) => matches!(input_index, 0 | 1),
         Node::BatchNormalization(_) => matches!(input_index, 1..=4),
-        Node::Conv2d(_) => matches!(input_index, 0..=2),
+        Node::Conv1d(_)
+        | Node::Conv2d(_)
+        | Node::Conv3d(_)
+        | Node::ConvTranspose1d(_)
+        | Node::ConvTranspose2d(_)
+        | Node::ConvTranspose3d(_) => matches!(input_index, 0..=2),
         Node::Gather(_) => input_index == 0,
         Node::InstanceNormalization(_) | Node::GroupNormalization(_) => {
             matches!(input_index, 0..=2)
@@ -108,7 +119,18 @@ pub(super) fn run(
             Node::BatchNormalization(node) => {
                 execute_batch_normalization(node, node_index, &env, state, device, tracking)
             }
+            Node::Conv1d(node) => execute_conv1d(node, node_index, &env, state, device, tracking),
             Node::Conv2d(node) => execute_conv2d(node, node_index, &env, state, device, tracking),
+            Node::Conv3d(node) => execute_conv3d(node, node_index, &env, state, device, tracking),
+            Node::ConvTranspose1d(node) => {
+                execute_conv_transpose1d(node, node_index, &env, state, device, tracking)
+            }
+            Node::ConvTranspose2d(node) => {
+                execute_conv_transpose2d(node, node_index, &env, state, device, tracking)
+            }
+            Node::ConvTranspose3d(node) => {
+                execute_conv_transpose3d(node, node_index, &env, state, device, tracking)
+            }
             Node::Gather(node) => execute_gather(node, node_index, &env, state, device, tracking),
             Node::LayerNormalization(node) => {
                 execute_layer_normalization(node, node_index, &env, state, device, tracking)
@@ -136,6 +158,71 @@ pub(super) fn run(
     }
 
     session.collect_outputs(&env)
+}
+
+fn execute_conv1d(
+    node: &Conv1dNode,
+    node_index: usize,
+    env: &Env,
+    state: &ImportedState,
+    device: &Device,
+    tracking: bool,
+) -> Result<Vec<Value>> {
+    let (input, weight, bias) =
+        resolve_convolution_inputs(node, node_index, env, state, device, tracking)?;
+    execute_onnx_conv1d(input, weight, bias, &node.config)
+}
+
+fn execute_conv3d(
+    node: &Conv3dNode,
+    node_index: usize,
+    env: &Env,
+    state: &ImportedState,
+    device: &Device,
+    tracking: bool,
+) -> Result<Vec<Value>> {
+    let (input, weight, bias) =
+        resolve_convolution_inputs(node, node_index, env, state, device, tracking)?;
+    execute_onnx_conv3d(input, weight, bias, &node.config)
+}
+
+fn execute_conv_transpose1d(
+    node: &ConvTranspose1dNode,
+    node_index: usize,
+    env: &Env,
+    state: &ImportedState,
+    device: &Device,
+    tracking: bool,
+) -> Result<Vec<Value>> {
+    let (input, weight, bias) =
+        resolve_convolution_inputs(node, node_index, env, state, device, tracking)?;
+    execute_onnx_conv_transpose1d(input, weight, bias, &node.config)
+}
+
+fn execute_conv_transpose2d(
+    node: &ConvTranspose2dNode,
+    node_index: usize,
+    env: &Env,
+    state: &ImportedState,
+    device: &Device,
+    tracking: bool,
+) -> Result<Vec<Value>> {
+    let (input, weight, bias) =
+        resolve_convolution_inputs(node, node_index, env, state, device, tracking)?;
+    execute_onnx_conv_transpose2d(input, weight, bias, &node.config)
+}
+
+fn execute_conv_transpose3d(
+    node: &ConvTranspose3dNode,
+    node_index: usize,
+    env: &Env,
+    state: &ImportedState,
+    device: &Device,
+    tracking: bool,
+) -> Result<Vec<Value>> {
+    let (input, weight, bias) =
+        resolve_convolution_inputs(node, node_index, env, state, device, tracking)?;
+    execute_onnx_conv_transpose3d(input, weight, bias, &node.config)
 }
 
 fn execute_instance_normalization(
@@ -233,14 +320,8 @@ fn execute_conv2d(
     device: &Device,
     tracking: bool,
 ) -> Result<Vec<Value>> {
-    let input = resolve_tensor(node, node_index, 0, env, state, device, tracking)?;
-    let weight = resolve_tensor(node, node_index, 1, env, state, device, tracking)?;
-    let bias = node
-        .inputs
-        .get(2)
-        .filter(|input| !input.is_optional())
-        .map(|_| resolve_tensor(node, node_index, 2, env, state, device, tracking))
-        .transpose()?;
+    let (input, weight, bias) =
+        resolve_convolution_inputs(node, node_index, env, state, device, tracking)?;
     let shape = input.dims();
     if shape.len() != 4 {
         return Err(TynxError::Shape(format!(
@@ -266,6 +347,25 @@ fn execute_conv2d(
         node.config.groups,
     )?;
     Ok(vec![Value::Tensor(output)])
+}
+
+fn resolve_convolution_inputs<N: NodeInputs>(
+    node: &N,
+    node_index: usize,
+    env: &Env,
+    state: &ImportedState,
+    device: &Device,
+    tracking: bool,
+) -> Result<(DynTensor, DynTensor, Option<DynTensor>)> {
+    let input = resolve_tensor(node, node_index, 0, env, state, device, tracking)?;
+    let weight = resolve_tensor(node, node_index, 1, env, state, device, tracking)?;
+    let bias = node
+        .inputs()
+        .get(2)
+        .filter(|input| !input.is_optional())
+        .map(|_| resolve_tensor(node, node_index, 2, env, state, device, tracking))
+        .transpose()?;
+    Ok((input, weight, bias))
 }
 
 fn execute_batch_normalization(
@@ -547,7 +647,12 @@ impl_node_inputs!(
     GemmNode,
     MatMulNode,
     BatchNormalizationNode,
+    Conv1dNode,
     Conv2dNode,
+    Conv3dNode,
+    ConvTranspose1dNode,
+    ConvTranspose2dNode,
+    ConvTranspose3dNode,
     GatherNode,
     GroupNormalizationNode,
     InstanceNormalizationNode,

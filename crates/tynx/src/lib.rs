@@ -12,6 +12,12 @@ pub use device::{default_device, synchronize, take_device_error};
 pub use error::{Result, TynxError};
 pub use initializer::InitializerId;
 pub use interpreter::binary::prelu_values as execute_onnx_prelu;
+pub use interpreter::convolution::{
+    conv_transpose1d_values as execute_onnx_conv_transpose1d,
+    conv_transpose2d_values as execute_onnx_conv_transpose2d,
+    conv_transpose3d_values as execute_onnx_conv_transpose3d, conv1d_values as execute_onnx_conv1d,
+    conv3d_values as execute_onnx_conv3d,
+};
 pub use interpreter::gather::gather_values as execute_onnx_gather;
 pub use interpreter::matrix::matmul_values as execute_onnx_matmul;
 pub use interpreter::normalization::{
