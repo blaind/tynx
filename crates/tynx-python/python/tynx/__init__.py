@@ -1,7 +1,9 @@
 """Python bindings for the Tynx neural network runtime."""
 
+import atexit as _atexit
 import builtins as _builtins
 from collections.abc import Mapping as _Mapping
+from contextlib import suppress as _suppress
 from numbers import Integral as _Integral
 from numbers import Real as _Real
 from os import PathLike as _PathLike
@@ -21,6 +23,7 @@ from ._tynx import (
     Tensor,
     TrainabilityReport,
     __version__,
+    _synchronize_at_exit,
     arange,
     argsort,
     cat,
@@ -57,6 +60,17 @@ from ._tynx import (
 )
 from .checkpoint import load_checkpoint, save_checkpoint
 from .compiler import CompiledFunction, compile
+
+
+def _quiesce_device_at_exit() -> None:
+    """Drain initialized device work before extension and driver teardown."""
+    # Interpreter shutdown cannot usefully surface a synchronization failure. Normal
+    # execution remains observable through the public synchronize() API.
+    with _suppress(Exception):
+        _synchronize_at_exit()
+
+
+_atexit.register(_quiesce_device_at_exit)
 
 
 def manual_seed(seed: int) -> None:

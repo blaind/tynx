@@ -15,6 +15,20 @@ def test_module_metadata() -> None:
     assert tynx.__version__
 
 
+def test_shutdown_quiesce_is_best_effort(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = 0
+
+    def fail_after_recording() -> None:
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("simulated shutdown synchronization failure")
+
+    monkeypatch.setattr(tynx, "_synchronize_at_exit", fail_after_recording)
+    tynx._quiesce_device_at_exit()
+
+    assert calls == 1
+
+
 def test_public_modules_do_not_expose_imported_typing_helpers() -> None:
     assert not {
         "Literal",
