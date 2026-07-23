@@ -515,18 +515,22 @@ fn analyze(
 ) -> TrainabilityReport {
     let mut entries = Vec::<WorkEntry>::new();
     let mut by_id = HashMap::<InitializerId, usize>::new();
-    let constant_outputs = graph
-        .nodes
-        .iter()
-        .filter_map(|node| match node {
-            Node::Constant(node) => Some(node.outputs.iter()),
-            _ => None,
-        })
-        .flatten()
-        .filter(|output| !output.name.is_empty())
-        .filter(|output| !stable_names.contains_key(&InitializerId::Named(output.name.clone())))
-        .map(|output| output.name.as_str())
-        .collect::<HashSet<_>>();
+    let constant_outputs = if stable_names.is_empty() {
+        HashSet::new()
+    } else {
+        graph
+            .nodes
+            .iter()
+            .filter_map(|node| match node {
+                Node::Constant(node) => Some(node.outputs.iter()),
+                _ => None,
+            })
+            .flatten()
+            .filter(|output| !output.name.is_empty())
+            .filter(|output| !stable_names.contains_key(&InitializerId::Named(output.name.clone())))
+            .map(|output| output.name.as_str())
+            .collect::<HashSet<_>>()
+    };
 
     for (node_index, node) in graph.nodes.iter().enumerate() {
         // The parser represents ONNX initializers with generated Constant nodes
@@ -1288,7 +1292,17 @@ mod tests {
             }),
         ]);
 
-        let report = TrainabilityReport::analyze_initializers(&graph);
+        // Session-backed analysis has provenance entries that distinguish
+        // literal Constant outputs from generated initializer Constant nodes.
+        let stable_names = HashMap::from([(
+            InitializerId::Named("unrelated_initializer".to_string()),
+            "unrelated_initializer".to_string(),
+        )]);
+        let report = TrainabilityReport::analyze_initializers_with_names(
+            &graph,
+            &TrainabilityOverrides::new(),
+            &stable_names,
+        );
 
         assert_eq!(report.initializers().len(), 1);
         assert_eq!(report.constants().next().unwrap().name(), "literal");
