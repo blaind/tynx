@@ -21,10 +21,15 @@ class MaxPool2d(Module):
         ceil_mode: bool = False,
     ) -> None:
         super().__init__()
-        self.kernel_size = _pair(kernel_size, "kernel_size", positive=True)
-        self.stride = None if stride is None else _pair(stride, "stride", positive=True)
-        self.padding = _pair(padding, "padding", positive=False)
-        self.dilation = _pair(dilation, "dilation", positive=True)
+        _pair(kernel_size, "kernel_size", positive=True)
+        if stride is not None:
+            _pair(stride, "stride", positive=True)
+        _pair(padding, "padding", positive=False)
+        _pair(dilation, "dilation", positive=True)
+        self.kernel_size = kernel_size
+        self.stride = stride
+        self.padding = padding
+        self.dilation = dilation
         self.return_indices = _bool(return_indices, "return_indices")
         self.ceil_mode = _bool(ceil_mode, "ceil_mode")
         if self.return_indices:
@@ -60,9 +65,13 @@ class AvgPool2d(Module):
         divisor_override: _Optional[int] = None,
     ) -> None:
         super().__init__()
-        self.kernel_size = _pair(kernel_size, "kernel_size", positive=True)
-        self.stride = None if stride is None else _pair(stride, "stride", positive=True)
-        self.padding = _pair(padding, "padding", positive=False)
+        _pair(kernel_size, "kernel_size", positive=True)
+        if stride is not None:
+            _pair(stride, "stride", positive=True)
+        _pair(padding, "padding", positive=False)
+        self.kernel_size = kernel_size
+        self.stride = stride
+        self.padding = padding
         self.ceil_mode = _bool(ceil_mode, "ceil_mode")
         self.count_include_pad = _bool(count_include_pad, "count_include_pad")
         self.divisor_override = divisor_override
@@ -92,7 +101,8 @@ class AdaptiveAvgPool2d(Module):
 
     def __init__(self, output_size: _IntOrPair) -> None:
         super().__init__()
-        self.output_size = _pair(output_size, "output_size", positive=True)
+        _pair(output_size, "output_size", positive=True)
+        self.output_size = output_size
 
     def forward(self, input: Tensor) -> Tensor:
         return adaptive_avg_pool2d(input, self.output_size)

@@ -80,14 +80,34 @@ def test_authored_pooling_modules_project_functionals() -> None:
     average = tynx.nn.AvgPool2d(2, stride=1)
     adaptive = tynx.nn.AdaptiveAvgPool2d(1)
 
-    assert maximum.kernel_size == (2, 2)
-    assert maximum.stride == (1, 1)
-    assert average.kernel_size == (2, 2)
-    assert average.stride == (1, 1)
-    assert adaptive.output_size == (1, 1)
+    assert maximum.kernel_size == 2
+    assert maximum.stride == 1
+    assert average.kernel_size == 2
+    assert average.stride == 1
+    assert adaptive.output_size == 1
     assert maximum(value).shape == (1, 1, 2, 2)
     assert average(value).shape == (1, 1, 2, 2)
     assert adaptive(value).shape == (1, 1, 1, 1)
+
+
+def test_pooling_modules_preserve_tuple_configuration_forms() -> None:
+    maximum = tynx.nn.MaxPool2d(
+        (2, 3),
+        stride=(1, 2),
+        padding=(0, 1),
+        dilation=(1, 1),
+    )
+    average = tynx.nn.AvgPool2d((2, 3), stride=(1, 2), padding=(0, 1))
+    adaptive = tynx.nn.AdaptiveAvgPool2d((2, 3))
+
+    assert maximum.kernel_size == (2, 3)
+    assert maximum.stride == (1, 2)
+    assert maximum.padding == (0, 1)
+    assert maximum.dilation == (1, 1)
+    assert average.kernel_size == (2, 3)
+    assert average.stride == (1, 2)
+    assert average.padding == (0, 1)
+    assert adaptive.output_size == (2, 3)
 
 
 def test_pooling_rejects_unsupported_options_and_shapes() -> None:
