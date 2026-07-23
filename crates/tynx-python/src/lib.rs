@@ -34,6 +34,37 @@ use tensor::{
     topk_py, where_py, zeros_like_py, zeros_py,
 };
 
+/// Validate Burn's process-default device override before its infallible parser sees it.
+#[pyfunction]
+fn _validate_device_environment() -> PyResult<()> {
+    let Ok(raw) = std::env::var("BURN_DEVICE") else {
+        return Ok(());
+    };
+    let value = raw.to_lowercase();
+    let supported = value == "flex"
+        || (cfg!(feature = "wgpu") && value == "wgpu")
+        || (cfg!(feature = "vulkan") && value == "vulkan");
+    if supported {
+        return Ok(());
+    }
+
+    let mut expected = vec!["flex"];
+    if cfg!(feature = "wgpu") {
+        expected.push("wgpu");
+    }
+    if cfg!(feature = "vulkan") {
+        expected.push("vulkan");
+    }
+    Err(PyValueError::new_err(format!(
+        "unsupported BURN_DEVICE value {raw:?} for this Tynx build; expected {}",
+        expected
+            .into_iter()
+            .map(|item| format!("{item:?}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )))
+}
+
 /// Return the process-default execution device.
 #[pyfunction]
 fn get_default_device() -> PyDevice {
@@ -257,6 +288,7 @@ fn _tynx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(no_grad, module)?)?;
     module.add_function(wrap_pyfunction!(is_grad_enabled_py, module)?)?;
     module.add_function(wrap_pyfunction!(get_default_device, module)?)?;
+    module.add_function(wrap_pyfunction!(_validate_device_environment, module)?)?;
     module.add_function(wrap_pyfunction!(synchronize, module)?)?;
     module.add_function(wrap_pyfunction!(_synchronize_at_exit, module)?)?;
     module.add_function(wrap_pyfunction!(where_py, module)?)?;

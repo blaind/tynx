@@ -24,6 +24,7 @@ from ._tynx import (
     TrainabilityReport,
     __version__,
     _synchronize_at_exit,
+    _validate_device_environment,
     arange,
     argsort,
     cat,
@@ -60,6 +61,8 @@ from ._tynx import (
 )
 from .checkpoint import load_checkpoint, save_checkpoint
 from .compiler import CompiledFunction, compile
+
+_validate_device_environment()
 
 
 def _quiesce_device_at_exit() -> None:
