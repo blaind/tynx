@@ -1377,6 +1377,18 @@ impl PyTensor {
         self.reshape_value(output)
     }
 
+    /// PyTorch-compatible alias for `reshape`.
+    #[pyo3(signature = (*shape))]
+    fn view(&self, shape: &Bound<'_, PyTuple>) -> PyResult<Self> {
+        let output = shape::reshape(shape, self.numel())?;
+        self.reshape_value(output)
+    }
+
+    /// Return a layout-safe tensor with the same values.
+    fn contiguous(&self) -> PyResult<Self> {
+        self.reshape_value(self.source.value().dims())
+    }
+
     /// Broadcast singleton dimensions to a larger shape.
     #[pyo3(signature = (*shape))]
     fn expand(&self, shape: &Bound<'_, PyTuple>) -> PyResult<Self> {
@@ -1461,6 +1473,21 @@ impl PyTensor {
         let dim1 = shape::axis(dim1, rank, false, "transpose")?;
         let mut axes = (0..rank).collect::<Vec<_>>();
         axes.swap(dim0, dim1);
+        self.unary_captured(UnaryOp::Permute(axes.clone()), move |input| {
+            input.permute(axes)
+        })
+    }
+
+    /// Matrix transpose shorthand.
+    #[getter(T)]
+    fn matrix_transpose(&self) -> PyResult<Self> {
+        if self.ndim() != 2 {
+            return Err(PyValueError::new_err(format!(
+                "Tensor.T requires a rank-2 matrix, got shape {:?}",
+                self.source.value().dims()
+            )));
+        }
+        let axes = vec![1, 0];
         self.unary_captured(UnaryOp::Permute(axes.clone()), move |input| {
             input.permute(axes)
         })
@@ -1676,7 +1703,7 @@ impl PyTensor {
         self.unary_captured(UnaryOp::Negate, |input| Ok(input.negated()))
     }
 
-    fn __abs__(&self) -> PyResult<Self> {
+    fn abs(&self) -> PyResult<Self> {
         match self.source.value() {
             TensorValue::Float(_) => self.unary(|input| Ok(input.abs())),
             TensorValue::Int(value) => Ok(Self::from_value(TensorValue::Int(value.abs()))),
@@ -1684,6 +1711,10 @@ impl PyTensor {
                 Err(PyTypeError::new_err("abs() does not support bool Tensors"))
             }
         }
+    }
+
+    fn __abs__(&self) -> PyResult<Self> {
+        self.abs()
     }
 
     fn __pow__(

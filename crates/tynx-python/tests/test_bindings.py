@@ -93,8 +93,23 @@ def test_tensor_python_numeric_protocols() -> None:
     values = tynx.Tensor([-2.0, 3.0])
 
     assert abs(values).tolist() == [2.0, 3.0]
+    assert values.abs().tolist() == [2.0, 3.0]
     assert (values**2).tolist() == pytest.approx([4.0, 9.0])
     assert (2 ** tynx.Tensor([1.0, 3.0])).tolist() == pytest.approx([2.0, 8.0])
+
+
+def test_tensor_matrix_and_layout_aliases_preserve_gradients() -> None:
+    values = tynx.Tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], requires_grad=True)
+
+    output = values.T.contiguous().view(6)
+    output.sum().backward()
+
+    assert values.T.tolist() == [[1.0, 4.0], [2.0, 5.0], [3.0, 6.0]]
+    assert output.shape == (6,)
+    assert values.grad is not None
+    assert values.grad.tolist() == [[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]]
+    with pytest.raises(ValueError, match="rank-2 matrix"):
+        _ = tynx.Tensor([1.0, 2.0]).T
 
 
 def test_tensor_matmul_supports_vector_cases() -> None:
