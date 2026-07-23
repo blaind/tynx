@@ -134,6 +134,15 @@ impl ExternalWgpuContext {
         self.capability.clone()
     }
 
+    /// Retire this engine device/queue generation after device loss or runtime replacement.
+    ///
+    /// New leases and adoptions fail after retirement. Already adopted tensors are not cancelled:
+    /// callers must stop executing them, drop every derived tensor and autodiff tape, then call
+    /// [`Self::reclaim_unused_external_buffers`] or drop the old context.
+    pub fn retire(&self) {
+        self.capability.retire();
+    }
+
     /// Return the inference device backed by the shared engine context.
     pub fn device(&self) -> Device {
         self.device.clone()
@@ -241,12 +250,17 @@ impl ExternalWgpuContext {
     }
 
     fn ensure_context(&self, descriptor: &AcquiredExternalTensorDescriptor) -> Result<()> {
-        if descriptor.belongs_to(&self.capability) {
-            return Ok(());
+        if !descriptor.belongs_to(&self.capability) {
+            return Err(external_error(
+                "external tensor was validated for a different WGPU context",
+            ));
         }
-        Err(external_error(
-            "external tensor was validated for a different WGPU context",
-        ))
+        if !self.capability.is_active() {
+            return Err(external_error(
+                "external device/queue context generation is retired",
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -704,5 +718,17 @@ mod tests {
                 .to_string()
                 .contains("validated for a different WGPU context")
         );
+    }
+
+    #[test]
+    fn rejects_an_acquired_descriptor_after_the_context_is_retired() {
+        let (context, buffer) = context_and_buffer();
+        let (descriptor, _, _, calls) = descriptor(&context, buffer);
+
+        context.retire();
+        let error = context.adopt_f32(descriptor).unwrap_err();
+
+        assert!(error.to_string().contains("generation is retired"));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 }

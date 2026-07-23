@@ -192,6 +192,48 @@ fn wraps_an_adopted_autodiff_tensor_as_a_python_constant() {
 }
 
 #[test]
+fn pending_python_tensor_is_drop_only_after_context_retirement() {
+    let _serial = PYTHON_TEST.lock().unwrap();
+    Python::initialize();
+    let (context, device, queue) = noop_context();
+    let (descriptor, owner) = descriptor(&context, &device, &queue);
+    let external = context.adopt_f32_training(descriptor).unwrap();
+    let tensor = Python::attach(|py| wrap_external_tensor(py, external)).unwrap();
+
+    context.retire();
+    assert!(!context.capability().is_active());
+    Python::attach(|py| {
+        assert_eq!(
+            tensor
+                .bind(py)
+                .getattr("shape")
+                .unwrap()
+                .extract::<Vec<usize>>()
+                .unwrap(),
+            [4]
+        );
+    });
+    assert!(owner.upgrade().is_some());
+
+    let rejected = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("rejected retired-context allocation"),
+        size: 16,
+        usage: wgpu::BufferUsages::STORAGE,
+        mapped_at_creation: false,
+    });
+    assert!(
+        context
+            .lease_buffer(rejected, Arc::new(AllocationOwner))
+            .unwrap_err()
+            .to_string()
+            .contains("generation is retired")
+    );
+
+    Python::attach(|_| drop(tensor));
+    context.reclaim_unused_external_buffers().unwrap();
+}
+
+#[test]
 fn backward_retains_an_external_input_after_its_python_wrapper_drops() {
     let _serial = PYTHON_TEST.lock().unwrap();
     Python::initialize();

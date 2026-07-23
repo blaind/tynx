@@ -7,7 +7,10 @@
 use std::{
     any::Any,
     fmt::{Debug, Formatter},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use crate::{DType, MAX_RANK, Result, TynxError};
@@ -19,20 +22,50 @@ use crate::{DType, MAX_RANK, Result, TynxError};
 /// buffer and submission token associated with that device and queue.
 #[derive(Clone)]
 pub struct DeviceContextCapability {
-    identity: Arc<()>,
+    state: Arc<DeviceContextState>,
+}
+
+struct DeviceContextState {
+    active: AtomicBool,
 }
 
 impl DeviceContextCapability {
     /// Create a fresh opaque context capability.
     pub fn new() -> Self {
         Self {
-            identity: Arc::new(()),
+            state: Arc::new(DeviceContextState {
+                active: AtomicBool::new(true),
+            }),
         }
     }
 
     /// Return whether two capabilities identify the same device and queue context.
     pub fn same_context(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.identity, &other.identity)
+        Arc::ptr_eq(&self.state, &other.state)
+    }
+
+    /// Irreversibly retire this device/queue generation.
+    ///
+    /// Retirement is a logical submission fence for an engine-reported device loss or runtime
+    /// replacement. It rejects later validation and adoption but does not cancel queued work or
+    /// release live tensor/tape leases. The integration must stop executing existing tensors,
+    /// drop them and their tapes, and then reclaim or drop the old backend context.
+    pub fn retire(&self) {
+        self.state.active.store(false, Ordering::Release);
+    }
+
+    /// Return whether this device/queue generation still accepts new external work.
+    pub fn is_active(&self) -> bool {
+        self.state.active.load(Ordering::Acquire)
+    }
+
+    fn ensure_active(&self) -> Result<()> {
+        if self.is_active() {
+            return Ok(());
+        }
+        Err(external_error(
+            "external device/queue context generation is retired",
+        ))
     }
 }
 
@@ -93,6 +126,7 @@ impl ExternalBufferLease {
     where
         R: Any + Send + Sync,
     {
+        context.ensure_active()?;
         if byte_length == 0 {
             return Err(external_error(
                 "external buffer byte length must be positive",
@@ -244,6 +278,7 @@ impl ExternalTensorDescriptor {
                 "external tensor belongs to a different device/queue context",
             ));
         }
+        self.context.ensure_active()?;
         if !self.buffer.context.same_context(&self.context) {
             return Err(external_error(
                 "external buffer lease belongs to a different device/queue context",
@@ -347,6 +382,7 @@ pub struct ValidatedExternalTensorDescriptor {
 impl ValidatedExternalTensorDescriptor {
     /// Apply producer-before-consumer ordering and retain the descriptor for backend adoption.
     pub fn acquire(self) -> Result<AcquiredExternalTensorDescriptor> {
+        self.descriptor.context.ensure_active()?;
         self.descriptor.producer_token.ensure_visible()?;
         Ok(AcquiredExternalTensorDescriptor {
             descriptor: self.descriptor,
@@ -715,5 +751,34 @@ mod tests {
 
         assert!(error.to_string().contains("producer submission failed"));
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn retirement_fences_validation_and_acquisition_without_running_submission() {
+        let (descriptor, calls) = descriptor();
+        let context = descriptor.context.clone();
+        let validated = descriptor
+            .clone()
+            .validate_read_only_dense(&context)
+            .unwrap();
+
+        context.retire();
+
+        assert!(!context.is_active());
+        assert!(
+            descriptor
+                .validate_read_only_dense(&context)
+                .unwrap_err()
+                .to_string()
+                .contains("generation is retired")
+        );
+        assert!(
+            validated
+                .acquire()
+                .unwrap_err()
+                .to_string()
+                .contains("generation is retired")
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
 }
