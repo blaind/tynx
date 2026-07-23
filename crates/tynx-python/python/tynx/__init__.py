@@ -1,5 +1,6 @@
 """Python bindings for the Tynx neural network runtime."""
 
+import builtins as _builtins
 from collections.abc import Mapping as _Mapping
 from os import PathLike as _PathLike
 from typing import Literal as _Literal
@@ -65,7 +66,7 @@ def load(
     path: _Union[str, _PathLike[str]],
     *,
     trainable: _Literal[True, "auto"],
-    simplify: bool = True,
+    simplify: _builtins.bool = True,
     initializer_names: _Optional[_Mapping[str, str]] = None,
     outputs: _Optional[list[str]] = None,
 ) -> ImportedModel: ...
@@ -76,7 +77,7 @@ def load(
     path: _Union[str, _PathLike[str]],
     *,
     trainable: _Literal[False] = False,
-    simplify: bool = True,
+    simplify: _builtins.bool = True,
     initializer_names: None = None,
     outputs: None = None,
 ) -> Session: ...
@@ -85,8 +86,8 @@ def load(
 def load(
     path: _Union[str, _PathLike[str]],
     *,
-    trainable: _Union[bool, _Literal["auto"]] = False,
-    simplify: bool = True,
+    trainable: _Union[_builtins.bool, _Literal["auto"]] = False,
+    simplify: _builtins.bool = True,
     initializer_names: _Optional[_Mapping[str, str]] = None,
     outputs: _Optional[list[str]] = None,
 ) -> _Union[Session, ImportedModel]:
@@ -105,6 +106,13 @@ def load(
     )
 
 
+# These public sentinels remain the canonical strings accepted by the native
+# projection; they add PyTorch-style spelling without a second dtype system.
+float32: _Literal["float32"] = "float32"
+int64: _Literal["int64"] = "int64"
+bool: _Literal["bool"] = "bool"
+
+
 __all__ = [
     "Buffer",
     "CompiledFunction",
@@ -117,16 +125,19 @@ __all__ = [
     "__version__",
     "arange",
     "argsort",
+    "bool",
     "cat",
     "chunk",
     "compile",
     "distributions",
     "empty",
     "empty_like",
+    "float32",
     "full",
     "full_like",
     "get_default_device",
     "index_select",
+    "int64",
     "is_grad_enabled",
     "load",
     "load_checkpoint",
