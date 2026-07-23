@@ -374,8 +374,11 @@ fn reclaim_unused_external<C: WgpuCompiler>(
     runtime_device: &WgpuDevice,
     device: &Device,
 ) -> Result<()> {
+    // Complete queued bindings before asking CubeCL which external registrations are unused.
+    // Cleaning first leaves the just-submitted binding live until an unrelated later cleanup.
+    crate::synchronize(device)?;
     WgpuRuntime::<C>::client(runtime_device).memory_cleanup();
-    crate::synchronize(device)
+    Ok(())
 }
 
 fn existing_device_kind(device: &WgpuDevice) -> Result<DeviceKind> {
