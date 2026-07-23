@@ -862,6 +862,15 @@ impl PyTensor {
         self.source.value().dims().into_iter().product()
     }
 
+    fn reject_empty_operation(&self, operation: &str) -> PyResult<()> {
+        if self.numel() == 0 {
+            return Err(PyValueError::new_err(format!(
+                "{operation} does not yet support tensors with zero elements"
+            )));
+        }
+        Ok(())
+    }
+
     fn __len__(&self) -> usize {
         self.source.value().dims()[0]
     }
@@ -1696,6 +1705,8 @@ impl PyTensor {
     }
 
     fn __matmul__(&self, other: PyRef<'_, Self>) -> PyResult<Self> {
+        self.reject_empty_operation("matmul")?;
+        other.reject_empty_operation("matmul")?;
         let left_shape = self.source.value().dims();
         let right_shape = other.source.value().dims();
         match (left_shape.as_slice(), right_shape.as_slice()) {
@@ -2011,6 +2022,7 @@ impl PyTensor {
     }
 
     fn reduce(&self, dim: Option<&Bound<'_, PyAny>>, keepdim: bool, sum: bool) -> PyResult<Self> {
+        self.reject_empty_operation(if sum { "sum" } else { "mean" })?;
         let input_shape = self.source.value().dims();
         let spec = ReductionSpec::from_python(dim, &input_shape, keepdim)?;
         let capture_op = if sum {
@@ -2040,6 +2052,7 @@ impl PyTensor {
         keepdim: bool,
         extremum: Extremum,
     ) -> PyResult<Self> {
+        self.reject_empty_operation(extremum.name())?;
         let input_shape = self.source.value().dims();
         let spec = ReductionSpec::from_python(dim, &input_shape, keepdim)?;
         let reduce_all = dim.is_none() && input_shape.len() > 1;
@@ -2084,6 +2097,7 @@ impl PyTensor {
     ) -> PyResult<Self> {
         let input_shape = self.source.value().dims();
         let operation = if maximum { "argmax" } else { "argmin" };
+        self.reject_empty_operation(operation)?;
         let (value, axis, output_shape) = match dim {
             Some(dim) => {
                 let axis = shape::axis(dim, input_shape.len(), false, operation)?;
