@@ -861,6 +861,17 @@ def test_module_sequential_discovery_and_recursive_modes() -> None:
     assert all(module.training for module in (model, model[0], model[1], model[2]))
 
 
+def test_module_zero_grad_clears_all_recursive_parameter_gradients() -> None:
+    model = tynx.nn.Sequential(tynx.nn.Linear(2, 3), tynx.nn.ReLU(), tynx.nn.Linear(3, 1))
+
+    model(tynx.Tensor([[1.0, 2.0]])).sum().backward()
+    assert all(parameter.grad is not None for parameter in model.parameters())
+
+    model.zero_grad()
+
+    assert all(parameter.grad is None for parameter in model.parameters())
+
+
 def test_linear_and_sequential_validate_construction_and_inputs() -> None:
     with pytest.raises(ValueError, match="positive integer"):
         tynx.nn.Linear(0, 2)
