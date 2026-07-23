@@ -118,6 +118,7 @@ def save_checkpoint(
         raise
 
 
+@overload
 def load_checkpoint(
     path: _Path,
     model: object,
@@ -125,37 +126,82 @@ def load_checkpoint(
     strict: bool = True,
     *,
     scheduler: Optional[_Scheduler] = None,
+) -> LoadStateResult: ...
+
+
+@overload
+def load_checkpoint(
+    path: object,
+    model: _Path,
+    optimizer: None = None,
+    strict: bool = True,
+    *,
+    scheduler: None = None,
+) -> LoadStateResult: ...
+
+
+@overload
+def load_checkpoint(
+    path: object,
+    model: _Optimizer,
+    optimizer: _Path,
+    strict: bool = True,
+    *,
+    scheduler: Optional[_Scheduler] = None,
+) -> LoadStateResult: ...
+
+
+def load_checkpoint(
+    path: object,
+    model: object,
+    optimizer: object = None,
+    strict: bool = True,
+    *,
+    scheduler: Optional[_Scheduler] = None,
 ) -> LoadStateResult:
-    """Restore combined state without publishing a partially validated component."""
-    payload = _read_payload(path)
+    """Restore combined state without publishing a partially validated component.
+
+    Both ``load_checkpoint(path, model, optimizer)`` and the PyTorch-shaped
+    ``load_checkpoint(model, optimizer, path)`` order are accepted. For weights-only
+    checkpoints, use either ``load_checkpoint(path, model)`` or
+    ``load_checkpoint(model, path)``.
+    """
+    target, destination_model, destination_optimizer = _normalize_load_arguments(
+        path, model, optimizer
+    )
+    payload = _read_payload(target)
     model_state = _decode_state_dictionary(_required(payload, "model"), "model")
     if not model_state:
         raise ValueError("cannot load checkpoint: model state is empty")
     encoded_optimizer = _required(payload, "optimizer")
-    optimizer_state = None if optimizer is None else _decode_optimizer_dictionary(encoded_optimizer)
-    _validate_scheduler(optimizer, scheduler)
+    optimizer_state = (
+        None if destination_optimizer is None else _decode_optimizer_dictionary(encoded_optimizer)
+    )
+    _validate_scheduler(destination_optimizer, scheduler)
     encoded_scheduler = payload.get("scheduler")
     scheduler_state = (
         None if scheduler is None else _decode_component_dictionary(encoded_scheduler, "scheduler")
     )
 
-    current, prepared, result = _prepare_state_dict_load(model, model_state, strict)
-    previous_model = get_state_dict(model)
-    previous_optimizer = None if optimizer is None else optimizer.state_dict()
+    current, prepared, result = _prepare_state_dict_load(destination_model, model_state, strict)
+    previous_model = get_state_dict(destination_model)
+    previous_optimizer = (
+        None if destination_optimizer is None else destination_optimizer.state_dict()
+    )
     previous_scheduler = None if scheduler is None else scheduler.state_dict()
     try:
-        if optimizer is not None:
+        if destination_optimizer is not None:
             assert optimizer_state is not None
-            optimizer.load_state_dict(optimizer_state)
+            destination_optimizer.load_state_dict(optimizer_state)
         if scheduler is not None:
             assert scheduler_state is not None
             scheduler.load_state_dict(scheduler_state)
         _apply_prepared_state(current, prepared)
     except BaseException:
-        load_state_dict(model, previous_model)
-        if optimizer is not None:
+        load_state_dict(destination_model, previous_model)
+        if destination_optimizer is not None:
             assert previous_optimizer is not None
-            optimizer.load_state_dict(previous_optimizer)
+            destination_optimizer.load_state_dict(previous_optimizer)
         if scheduler is not None:
             assert previous_scheduler is not None
             scheduler.load_state_dict(previous_scheduler)
@@ -193,6 +239,41 @@ def _normalize_save_arguments(
         if not callable(state_dict):
             raise TypeError("save_checkpoint optimizer must provide state_dict()")
     return path, source_model, cast(Optional[_Optimizer], source_optimizer)
+
+
+def _normalize_load_arguments(
+    first: object,
+    second: object,
+    third: object,
+) -> tuple[Path, object, Optional[_Optimizer]]:
+    destination_optimizer: object
+    if isinstance(first, (str, os.PathLike)):
+        path = Path(first)
+        destination_model = second
+        destination_optimizer = third
+    elif isinstance(third, (str, os.PathLike)):
+        path = Path(third)
+        destination_model = first
+        destination_optimizer = second
+    elif isinstance(second, (str, os.PathLike)) and third is None:
+        path = Path(second)
+        destination_model = first
+        destination_optimizer = None
+    else:
+        raise TypeError(
+            "load_checkpoint expects (path, model[, optimizer]) or (model[, optimizer], path)"
+        )
+
+    if isinstance(destination_model, (str, os.PathLike)):
+        raise TypeError("load_checkpoint model must be a model object, not a path")
+    if destination_optimizer is not None:
+        state_dict = getattr(destination_optimizer, "state_dict", None)
+        load_state = getattr(destination_optimizer, "load_state_dict", None)
+        if not callable(state_dict) or not callable(load_state):
+            raise TypeError(
+                "load_checkpoint optimizer must provide state_dict() and load_state_dict()"
+            )
+    return path, destination_model, cast(Optional[_Optimizer], destination_optimizer)
 
 
 def _validate_scheduler(optimizer: Optional[_Optimizer], scheduler: Optional[_Scheduler]) -> None:

@@ -262,9 +262,23 @@ def test_checkpoint_supports_model_optimizer_path_order(tmp_path: Path) -> None:
 
     resumed = tynx.nn.Linear(1, 1)
     resumed_optimizer = tynx.optim.Adam(resumed.named_parameters())
-    tynx.load_checkpoint(checkpoint, resumed, resumed_optimizer)
+    tynx.load_checkpoint(resumed, resumed_optimizer, checkpoint)
     for name, value in resumed.state_dict().items():
         assert value.tolist() == model.state_dict()[name].tolist()
+
+
+def test_load_weights_only_checkpoint_supports_model_path_order(tmp_path: Path) -> None:
+    source = _initialized_model()
+    checkpoint = tmp_path / "weights-only.tynx"
+    tynx.save_checkpoint(source, checkpoint)
+
+    destination = tynx.nn.Linear(1, 1)
+    result = tynx.load_checkpoint(destination, checkpoint)
+
+    assert result.missing_keys == ()
+    assert result.unexpected_keys == ()
+    for name, value in destination.state_dict().items():
+        assert value.tolist() == source.state_dict()[name].tolist()
 
 
 def test_checkpoint_rejects_invalid_argument_order_up_front(tmp_path: Path) -> None:
@@ -277,3 +291,9 @@ def test_checkpoint_rejects_invalid_argument_order_up_front(tmp_path: Path) -> N
         tynx.save_checkpoint(tmp_path / "bad.tynx", "not-a-model", optimizer)
     with pytest.raises(TypeError, match=r"optimizer must provide state_dict\(\)"):
         cast(Any, tynx.save_checkpoint)(tmp_path / "bad.tynx", model, object())
+    with pytest.raises(TypeError, match="expects"):
+        cast(Any, tynx.load_checkpoint)(model, optimizer)
+    with pytest.raises(TypeError, match="model must be a model object"):
+        cast(Any, tynx.load_checkpoint)(tmp_path / "bad.tynx", "not-a-model", optimizer)
+    with pytest.raises(TypeError, match=r"optimizer must provide state_dict\(\)"):
+        cast(Any, tynx.load_checkpoint)(tmp_path / "bad.tynx", model, object())
