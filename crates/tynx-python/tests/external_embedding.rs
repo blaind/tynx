@@ -231,6 +231,10 @@ fn pending_python_tensor_is_drop_only_after_context_retirement() {
 
     Python::attach(|_| drop(tensor));
     context.reclaim_unused_external_buffers().unwrap();
+    assert!(
+        owner.upgrade().is_none(),
+        "retired external owner was not reclaimed after its Python tensor dropped"
+    );
 }
 
 #[test]

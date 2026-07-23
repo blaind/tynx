@@ -186,9 +186,10 @@ impl ExternalWgpuContext {
 
     /// Retire this engine device/queue generation after device loss or runtime replacement.
     ///
-    /// New leases and adoptions fail after retirement. Already adopted tensors are not cancelled:
-    /// callers must stop executing them, drop every derived tensor and autodiff tape, then call
-    /// [`Self::reclaim_unused_external_buffers`] or drop the old context.
+    /// New leases, adoptions, and context-routed copies fail after retirement. Already adopted
+    /// tensors cannot be cancelled or retroactively guarded, so they become drop-only: callers
+    /// must not execute them or run their pending autodiff tapes. Drop every derived tensor and
+    /// tape, then call [`Self::reclaim_unused_external_buffers`] or drop the old context.
     pub fn retire(&self) {
         self.capability.retire();
     }
@@ -239,8 +240,10 @@ impl ExternalWgpuContext {
     ///
     /// CubeCL deliberately keeps external registrations out of its reusable allocation pools.
     /// Calling this at an engine transaction boundary lets the external owner recycle completed
-    /// slots without waiting for an unrelated later dispatch. Live tensors and autodiff tapes
-    /// remain retained.
+    /// slots without waiting for an unrelated later dispatch. This is the only context operation
+    /// intentionally allowed after retirement. Live tensors and autodiff tapes remain retained.
+    /// If the adapter is actually lost, synchronization may return a visible device error; the
+    /// integration must still drop the old context after dropping its tensors and tapes.
     pub fn reclaim_unused_external_buffers(&self) -> Result<()> {
         match self.compiler {
             #[cfg(feature = "wgpu")]
@@ -292,6 +295,7 @@ impl ExternalWgpuContext {
     /// stages through host memory. A training result should be detached and converted with
     /// [`DynTensor::inner`] before calling this method.
     pub fn copy_f32_into(&self, source: DynTensor, destination: DynTensor) -> Result<()> {
+        self.ensure_active()?;
         if source.dims() != destination.dims() {
             return Err(external_error(format!(
                 "external copy requires matching shapes, got {:?} and {:?}",
@@ -361,6 +365,10 @@ impl ExternalWgpuContext {
                 "external tensor was validated for a different WGPU context",
             ));
         }
+        self.ensure_active()
+    }
+
+    fn ensure_active(&self) -> Result<()> {
         if !self.capability.is_active() {
             return Err(external_error(
                 "external device/queue context generation is retired",
@@ -891,5 +899,45 @@ mod tests {
 
         assert!(error.to_string().contains("generation is retired"));
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn retired_context_reclaims_an_external_owner_only_after_tensor_drop() {
+        let (context, buffer) = context_and_buffer();
+        let (descriptor, _, owner, _) = descriptor(&context, buffer);
+        let adopted = context.adopt_f32(descriptor).unwrap();
+
+        context.retire();
+        context.reclaim_unused_external_buffers().unwrap();
+        assert!(
+            owner.upgrade().is_some(),
+            "cleanup reclaimed an external allocation still held by a retired tensor"
+        );
+
+        drop(adopted);
+        context.reclaim_unused_external_buffers().unwrap();
+        assert!(
+            owner.upgrade().is_none(),
+            "cleanup did not reclaim a dropped retired tensor"
+        );
+    }
+
+    #[test]
+    fn retired_context_rejects_external_copies() {
+        let (context, buffer) = context_and_buffer();
+        let destination = context
+            .adopt_f32_write(writable_descriptor(&context, buffer))
+            .unwrap();
+        let source = DynTensor::from_data(
+            crate::TensorData::new(vec![1.0_f32, 2.0, 3.0, 4.0], [4]),
+            1,
+            &context.device(),
+        )
+        .unwrap();
+
+        context.retire();
+        let error = context.copy_f32_into(source, destination).unwrap_err();
+
+        assert!(error.to_string().contains("generation is retired"));
     }
 }
