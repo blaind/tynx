@@ -1,0 +1,196 @@
+From b7bf8d107fb8ddd6aeff4787095118b8d97702c4 Mon Sep 17 00:00:00 2001
+From: PyBevy contributors <hello@pybevy.org>
+Date: Thu, 23 Jul 2026 00:00:00 +0000
+Subject: [PATCH 5/5] Respect enabled features on adopted devices
+
+An engine-owned device may enable only a subset of the physical adapter's
+features. Build compiler capabilities and timing support from Device::features
+so CubeCL never emits subgroup operations or timestamp queries that the adopted
+device cannot execute.
+---
+ crates/cubecl-wgpu/src/backend/base.rs   | 30 +++++++++++++++++++++++-------
+ crates/cubecl-wgpu/src/backend/metal.rs  |  2 +-
+ crates/cubecl-wgpu/src/backend/vulkan.rs |  2 +-
+ crates/cubecl-wgpu/src/backend/wgsl.rs   |  8 +++-----
+ crates/cubecl-wgpu/src/runtime.rs        |  4 +++-
+ 5 files changed, 31 insertions(+), 15 deletions(-)
+
+diff --git a/crates/cubecl-wgpu/src/backend/base.rs b/crates/cubecl-wgpu/src/backend/base.rs
+index 6a1d983..296a897 100644
+--- a/crates/cubecl-wgpu/src/backend/base.rs
++++ b/crates/cubecl-wgpu/src/backend/base.rs
+@@ -297,28 +297,48 @@ async fn request_metal_device(_adapter: &Adapter) -> Option<(Device, Queue)> {
+ 
+ pub fn register_features(
+     adapter: &Adapter,
++    enabled_features: wgpu::Features,
+     props: &mut DeviceProperties,
+     comp_options: &mut WgpuCompilationOptions,
+     memory_config: &MemoryConfiguration,
+ ) {
+-    if register_vulkan_features(adapter, props, comp_options, memory_config) {
++    if register_vulkan_features(
++        adapter,
++        enabled_features,
++        props,
++        comp_options,
++        memory_config,
++    ) {
+         return;
+     }
+-    if register_metal_features(adapter, props, comp_options, memory_config) {
++    if register_metal_features(
++        adapter,
++        enabled_features,
++        props,
++        comp_options,
++        memory_config,
++    ) {
+         return;
+     }
+-    wgsl::register_wgsl_features(adapter, props, comp_options);
++    wgsl::register_wgsl_features(enabled_features, props, comp_options);
+ }
+ 
+ #[cfg(feature = "spirv")]
+ pub fn register_vulkan_features(
+     adapter: &Adapter,
++    enabled_features: wgpu::Features,
+     props: &mut DeviceProperties,
+     comp_options: &mut WgpuCompilationOptions,
+     memory_config: &MemoryConfiguration,
+ ) -> bool {
+     if is_vulkan(adapter) {
+-        vulkan::register_vulkan_features(adapter, props, comp_options, memory_config)
++        vulkan::register_vulkan_features(
++            adapter,
++            enabled_features,
++            props,
++            comp_options,
++            memory_config,
++        )
+     } else {
+         false
+     }
+@@ -327,6 +347,7 @@ pub fn register_vulkan_features(
+ #[cfg(not(feature = "spirv"))]
+ pub fn register_vulkan_features(
+     _adapter: &Adapter,
++    _enabled_features: wgpu::Features,
+     _props: &mut DeviceProperties,
+     _comp_options: &mut WgpuCompilationOptions,
+     _memory_config: &MemoryConfiguration,
+@@ -337,12 +358,13 @@ pub fn register_vulkan_features(
+ #[cfg(all(feature = "msl", target_os = "macos"))]
+ pub fn register_metal_features(
+     adapter: &Adapter,
++    enabled_features: wgpu::Features,
+     props: &mut DeviceProperties,
+     comp_options: &mut WgpuCompilationOptions,
+     _memory_config: &MemoryConfiguration,
+ ) -> bool {
+     if is_metal(adapter) {
+-        metal::register_metal_features(adapter, props, comp_options);
++        metal::register_metal_features(adapter, enabled_features, props, comp_options);
+         true
+     } else {
+         false
+@@ -352,6 +374,7 @@ pub fn register_metal_features(
+ #[cfg(not(all(feature = "msl", target_os = "macos")))]
+ pub fn register_metal_features(
+     _adapter: &Adapter,
++    _enabled_features: wgpu::Features,
+     _props: &mut DeviceProperties,
+     _comp_options: &mut WgpuCompilationOptions,
+     _memory_config: &MemoryConfiguration,
+diff --git a/crates/cubecl-wgpu/src/backend/metal.rs b/crates/cubecl-wgpu/src/backend/metal.rs
+index f3803da..c93dd87 100644
+--- a/crates/cubecl-wgpu/src/backend/metal.rs
++++ b/crates/cubecl-wgpu/src/backend/metal.rs
+@@ -82,10 +82,10 @@ fn request_device(
+ 
+ pub fn register_metal_features(
+     adapter: &wgpu::Adapter,
++    features: Features,
+     props: &mut DeviceProperties,
+     comp_options: &mut WgpuCompilationOptions,
+ ) {
+-    let features = adapter.features();
+     unsafe {
+         if let Some(adapter) = adapter.as_hal::<hal::api::Metal>() {
+             register_features(&adapter, props, features, comp_options);
+diff --git a/crates/cubecl-wgpu/src/backend/vulkan.rs b/crates/cubecl-wgpu/src/backend/vulkan.rs
+index 5d2e162..4208dd7 100644
+--- a/crates/cubecl-wgpu/src/backend/vulkan.rs
++++ b/crates/cubecl-wgpu/src/backend/vulkan.rs
+@@ -60,11 +60,11 @@ pub async fn request_vulkan_device(adapter: &wgpu::Adapter) -> Option<(wgpu::Dev
+ 
+ pub fn register_vulkan_features(
+     adapter: &wgpu::Adapter,
++    features: Features,
+     props: &mut DeviceProperties,
+     comp_options: &mut WgpuCompilationOptions,
+     memory_config: &MemoryConfiguration,
+ ) -> bool {
+-    let features = adapter.features();
+     unsafe {
+         if let Some(adapter) = adapter.as_hal::<hal::api::Vulkan>() {
+             register_features(&adapter, props, features, comp_options, memory_config)
+diff --git a/crates/cubecl-wgpu/src/backend/wgsl.rs b/crates/cubecl-wgpu/src/backend/wgsl.rs
+index 54e50d6..42b6e2a 100644
+--- a/crates/cubecl-wgpu/src/backend/wgsl.rs
++++ b/crates/cubecl-wgpu/src/backend/wgsl.rs
+@@ -60,17 +60,17 @@ pub async fn request_device(adapter: &wgpu::Adapter) -> (wgpu::Device, wgpu::Que
+ }
+ 
+ pub fn register_wgsl_features(
+-    adapter: &wgpu::Adapter,
++    enabled_features: Features,
+     props: &mut cubecl_ir::DeviceProperties,
+     comp_options: &mut WgpuCompilationOptions,
+ ) {
+-    register_types(props, adapter);
++    register_types(props, enabled_features);
+     if props.supports_type(ElemType::UInt(UIntKind::U64)) {
+         comp_options.supports_u64 = true;
+     }
+ }
+ 
+-pub fn register_types(props: &mut DeviceProperties, adapter: &wgpu::Adapter) {
++pub fn register_types(props: &mut DeviceProperties, feats: Features) {
+     use cubecl_core::ir::{AddressType, ElemType, FloatKind, IntKind};
+     use cubecl_ir::features::*;
+ 
+@@ -97,8 +97,6 @@ pub fn register_types(props: &mut DeviceProperties, adapter: &wgpu::Adapter) {
+         );
+     }
+ 
+-    let feats = adapter.features();
+-
+     if feats.contains(wgpu::Features::SHADER_INT64) {
+         props.register_type_usage(ElemType::Int(IntKind::I64), TypeUsage::all());
+         props.register_type_usage(ElemType::UInt(UIntKind::U64), TypeUsage::all());
+diff --git a/crates/cubecl-wgpu/src/runtime.rs b/crates/cubecl-wgpu/src/runtime.rs
+index 9e8dbff..8392020 100644
+--- a/crates/cubecl-wgpu/src/runtime.rs
++++ b/crates/cubecl-wgpu/src/runtime.rs
+@@ -355,7 +355,8 @@ pub(crate) fn create_server<C: WgpuCompiler>(
+ 
+     let mut compilation_options = Default::default();
+ 
+-    let features = setup.adapter.features();
++    // An adopted device may enable only a subset of its adapter's capabilities.
++    let features = setup.device.features();
+ 
+     let time_measurement = if features.contains(wgpu::Features::TIMESTAMP_QUERY) {
+         TimingMethod::Device
+@@ -389,6 +390,7 @@ pub(crate) fn create_server<C: WgpuCompiler>(
+ 
+     backend::register_features(
+         &setup.adapter,
++        features,
+         &mut device_props,
+         &mut compilation_options,
+         &options.memory_config,
+-- 
+2.50.1

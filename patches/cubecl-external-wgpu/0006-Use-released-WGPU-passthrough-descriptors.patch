@@ -1,0 +1,41 @@
+From bdfcab4c071f7408c43af8cd5a347c10df88b5a1 Mon Sep 17 00:00:00 2001
+From: PyBevy contributors <hello@pybevy.org>
+Date: Thu, 23 Jul 2026 00:00:00 +0000
+Subject: [PATCH 6/6] Use released WGPU passthrough descriptors
+
+WGPU 29's released passthrough descriptor carries one workgroup tuple rather
+than the post-release entry-point collection.
+---
+ crates/cubecl-wgpu/src/backend/base.rs | 10 ++--------
+ 1 file changed, 2 insertions(+), 8 deletions(-)
+
+diff --git a/crates/cubecl-wgpu/src/backend/base.rs b/crates/cubecl-wgpu/src/backend/base.rs
+index 296a897..4d923db 100644
+--- a/crates/cubecl-wgpu/src/backend/base.rs
++++ b/crates/cubecl-wgpu/src/backend/base.rs
+@@ -91,10 +91,7 @@ impl<C: WgpuCompiler> WgpuServer<C> {
+                     wgpu::ShaderModuleDescriptorPassthrough {
+                         label: Some(entrypoint_name),
+                         spirv: Some(Cow::Borrowed(&repr.assembled_module)),
+-                        entry_points: Cow::Borrowed(&[wgpu::PassthroughShaderEntryPoint {
+-                            name: entrypoint_name.into(),
+-                            workgroup_size: cube_dim.into(),
+-                        }]),
++                        num_workgroups: cube_dim.into(),
+                         ..Default::default()
+                     },
+                 ))
+@@ -105,10 +102,7 @@ impl<C: WgpuCompiler> WgpuServer<C> {
+                     wgpu::ShaderModuleDescriptorPassthrough {
+                         label: Some(entrypoint_name),
+                         msl: Some(Cow::Borrowed(source)),
+-                        entry_points: Cow::Borrowed(&[wgpu::PassthroughShaderEntryPoint {
+-                            name: entrypoint_name.into(),
+-                            workgroup_size: cube_dim.into(),
+-                        }]),
++                        num_workgroups: cube_dim.into(),
+                         ..Default::default()
+                     },
+                 ))
+-- 
+2.50.1

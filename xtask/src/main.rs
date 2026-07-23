@@ -5,6 +5,8 @@ use std::process::{Command, ExitCode};
 
 use serde::Deserialize;
 
+mod external_wgpu;
+
 const REGISTRY: &str = "crates/tynx/tests/conformance.json";
 
 #[derive(Deserialize)]
@@ -31,10 +33,14 @@ fn main() -> ExitCode {
 
 fn run() -> Result<(), String> {
     let mut args = env::args().skip(1);
-    if args.next().as_deref() != Some("conformance") {
-        return Err(usage());
+    match args.next().as_deref() {
+        Some("conformance") => run_conformance(args),
+        Some("external-wgpu") => external_wgpu::run(args),
+        _ => Err(usage()),
     }
+}
 
+fn run_conformance(mut args: impl Iterator<Item = String>) -> Result<(), String> {
     let command = args.next();
     let mut case = None;
     let mut bless = false;
@@ -184,5 +190,10 @@ fn path_str(path: &Path) -> Result<&str, String> {
 }
 
 fn usage() -> String {
-    "usage: cargo xtask conformance [fetch | bless | --case CASE]".to_string()
+    [
+        "usage:",
+        "  cargo xtask conformance [fetch | bless | --case CASE]",
+        "  cargo xtask external-wgpu <prepare | check | test>",
+    ]
+    .join("\n")
 }
