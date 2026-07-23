@@ -89,6 +89,23 @@ def test_tensor_metadata_and_host_conversion() -> None:
     assert tynx.Tensor(integers).dtype == "int64"
 
 
+def test_lowercase_tensor_factory_infers_python_data_dtypes() -> None:
+    assert tynx.tensor([True, False]).dtype == "bool"
+    assert tynx.tensor([1, 2]).dtype == "int64"
+    assert tynx.tensor([1.0, 2.0]).dtype == "float32"
+    assert tynx.tensor([True, 2]).dtype == "int64"
+    assert tynx.tensor([1, 2.5]).dtype == "float32"
+    assert tynx.tensor(range(3)).dtype == "int64"
+
+
+def test_lowercase_tensor_factory_honors_explicit_dtype_and_tensor_inputs() -> None:
+    source = tynx.Tensor([1, 2], dtype="int64")
+
+    assert tynx.tensor([1, 2], dtype="float32").dtype == "float32"
+    assert tynx.tensor(source).dtype == "int64"
+    assert tynx.tensor(source).tolist() == [1, 2]
+
+
 def test_tensor_python_numeric_protocols() -> None:
     values = tynx.Tensor([-2.0, 3.0])
 
