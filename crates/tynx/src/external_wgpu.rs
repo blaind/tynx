@@ -68,7 +68,8 @@ pub struct ExternalWgpuContext {
 impl ExternalWgpuContext {
     /// Initialize the automatic WGPU compiler on an existing engine device and queue.
     ///
-    /// The setup must not already have been registered with CubeCL.
+    /// Create at most one Tynx context for each engine device generation. Other runtimes may use
+    /// the same underlying device and queue through their own CubeCL runtime identities.
     #[cfg(feature = "wgpu")]
     pub fn from_wgpu_setup(setup: WgpuSetup, options: RuntimeOptions) -> Result<Self> {
         let binding_alignment =
@@ -86,7 +87,8 @@ impl ExternalWgpuContext {
 
     /// Initialize the SPIR-V compiler on an existing engine device and queue.
     ///
-    /// The setup must not already have been registered with CubeCL.
+    /// Create at most one Tynx context for each engine device generation. Other runtimes may use
+    /// the same underlying device and queue through their own CubeCL runtime identities.
     #[cfg(feature = "vulkan")]
     pub fn from_vulkan_setup(setup: WgpuSetup, options: RuntimeOptions) -> Result<Self> {
         let binding_alignment =
