@@ -95,6 +95,14 @@ def test_tensor_python_numeric_protocols() -> None:
     assert abs(values).tolist() == [2.0, 3.0]
     assert (values**2).tolist() == pytest.approx([4.0, 9.0])
     assert (2 ** tynx.Tensor([1.0, 3.0])).tolist() == pytest.approx([2.0, 8.0])
+    assert float(tynx.Tensor([2.5])) == pytest.approx(2.5)
+    assert float(tynx.Tensor([2], dtype="int64")) == pytest.approx(2.0)
+    assert int(tynx.Tensor([-2.9])) == -2
+    assert int(tynx.Tensor([True], dtype="bool")) == 1
+    with pytest.raises(ValueError, match=r"float\(\).*one-element.*shape \[2\]"):
+        float(values)
+    with pytest.raises(ValueError, match=r"int\(\).*one-element.*shape \[2\]"):
+        int(values)
 
 
 def test_tensor_matmul_supports_vector_cases() -> None:
