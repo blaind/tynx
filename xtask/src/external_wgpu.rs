@@ -11,7 +11,7 @@ const PATCH_DIRECTORY: &str = "patches/cubecl-external-wgpu";
 const CACHE_DIRECTORY: &str = ".cache/tynx/cubecl-external-wgpu";
 const SHADOW_DIRECTORY: &str = ".cache/tynx/external-wgpu-workspace";
 const MARKER: &str = "tynx-external-wgpu-series";
-const PATCHED_TREE: &str = "1473e674f0199ac43b401410fa36e48a897a8370";
+const PATCHED_TREE: &str = "a3a71ea5894486f63cd06cbecfa6a8f278751f64";
 
 struct Patch {
     file: &'static str,
@@ -34,6 +34,11 @@ const PATCHES: &[Patch] = &[
         file: "0003-Initialize-external-compiler-runtimes.patch",
         commit: "eba552aa8a5eadef0863b78c04d38e3d8896867e",
         blob: "3ecc7810c45a29418924b81302c144278bb64da9",
+    },
+    Patch {
+        file: "0004-Use-released-WGPU-29-for-Bevy-compatibility.patch",
+        commit: "54c98df715c3f11de4c4853d2a6432e758912b75",
+        blob: "88046cf86ea3e6066cf913f1a7e6f474fe00dcad",
     },
 ];
 

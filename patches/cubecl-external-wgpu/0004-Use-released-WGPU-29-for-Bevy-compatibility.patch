@@ -1,0 +1,101 @@
+From 54c98df715c3f11de4c4853d2a6432e758912b75 Mon Sep 17 00:00:00 2001
+From: PyBevy contributors <hello@pybevy.org>
+Date: Thu, 23 Jul 2026 00:00:00 +0000
+Subject: [PATCH 4/4] Use released WGPU 29 for Bevy compatibility
+
+Use the exact released WGPU version consumed by Bevy 0.19 so external
+buffers, devices, and queues have one Rust type identity. External buffers
+are ordinary handles from that same device, so released WGPU's normal
+bind-group tracking provides their resource transitions.
+---
+ Cargo.toml                                      |  5 ++---
+ .../cubecl-wgpu/src/compute/controller.rs       |  2 +-
+ crates/cubecl-wgpu/src/compute/stream.rs        | 14 +++-----------
+ crates/cubecl-wgpu/src/compute/timings.rs       |  4 ++--
+ 4 files changed, 8 insertions(+), 17 deletions(-)
+
+diff --git a/Cargo.toml b/Cargo.toml
+index 2a2bfd1..ae68a29 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -158,9 +158,8 @@ ash = "0.38"
+ tracel-ash = "0.39.2"
+ # tracel-ash = { path = "../tracel-ash/crates/ash" }
+ 
+-wgpu = { git = "https://github.com/gfx-rs/wgpu.git", rev = "bde709122f8320571ab1733ab055dcb54415a483" }
+-# wgpu = "^29.0.1"
+-wgpu-hal = { git = "https://github.com/gfx-rs/wgpu.git", rev = "bde709122f8320571ab1733ab055dcb54415a483" }
++wgpu = "=29.0.3"
++wgpu-hal = "=29.0.3"
+ 
+ renderdoc = "0.12"
+ 
+diff --git a/crates/cubecl-wgpu/src/compute/controller.rs b/crates/cubecl-wgpu/src/compute/controller.rs
+index 16982be..dc056cd 100644
+--- a/crates/cubecl-wgpu/src/compute/controller.rs
++++ b/crates/cubecl-wgpu/src/compute/controller.rs
+@@ -62,7 +62,7 @@ impl WgpuAllocController {
+         // Needs immutable as of wgpu v29, mutable doesn't allow dereferencing as slice.
+         // This only affects wgpu's internal overlap checks so it should be fine as long as we
+         // map the whole buffer anyways.
+-        let buf_view = buffer.get_mapped_range(..).unwrap();
++        let buf_view = buffer.get_mapped_range(..);
+ 
+         Self {
+             view: Some(buf_view),
+diff --git a/crates/cubecl-wgpu/src/compute/stream.rs b/crates/cubecl-wgpu/src/compute/stream.rs
+index ca2e240..3cf2d96 100644
+--- a/crates/cubecl-wgpu/src/compute/stream.rs
++++ b/crates/cubecl-wgpu/src/compute/stream.rs
+@@ -8,7 +8,6 @@ use crate::{
+     controller::WgpuAllocController,
+     schedule::{Addresses, ScheduleTask},
+ };
+-use core::iter;
+ #[cfg(renderdoc)]
+ use core::{cell::LazyCell, ptr::null};
+ use cubecl_common::{
+@@ -647,16 +646,9 @@ impl WgpuStream {
+             pass.set_immediates(0, bytemuck::cast_slice(&addresses));
+         }
+ 
+-        if !custom_resources.is_empty() {
+-            let buffer_transitions =
+-                custom_resources
+-                    .iter()
+-                    .map(|resource| wgpu::BufferTransition {
+-                        buffer: &resource.buffer,
+-                        state: wgpu::BufferUses::STORAGE_READ_WRITE,
+-                    });
+-            pass.transition_resources(buffer_transitions, iter::empty())
+-        }
++        // External buffers are ordinary handles from this same wgpu device. Released wgpu 29
++        // tracks their state through bind-group usage just like allocator-owned buffers.
++        let _ = custom_resources;
+ 
+         match dispatch.clone() {
+             CubeCount::Static(x, y, z) => {
+diff --git a/crates/cubecl-wgpu/src/compute/timings.rs b/crates/cubecl-wgpu/src/compute/timings.rs
+index 27b7e81..84b1afc 100644
+--- a/crates/cubecl-wgpu/src/compute/timings.rs
++++ b/crates/cubecl-wgpu/src/compute/timings.rs
+@@ -252,7 +252,7 @@ fn get_cur_timestamp(queue: &wgpu::Queue, device: &wgpu::Device) -> u64 {
+         })
+         .unwrap();
+ 
+-    let view = map_buffer.slice(..).get_mapped_range().unwrap();
++    let view = map_buffer.slice(..).get_mapped_range();
+     u64::from_le_bytes((*view).try_into().unwrap())
+ }
+ 
+@@ -394,7 +394,7 @@ impl QueryProfiler {
+                 // Can stop polling now.
+                 core::mem::drop(poll_signal);
+ 
+-                let binding = map_buffer.slice(..).get_mapped_range().unwrap();
++                let binding = map_buffer.slice(..).get_mapped_range();
+                 let data: &[u64] = bytemuck::try_cast_slice(&binding).unwrap();
+ 
+                 // Get nr. of ticks since epoch.
+-- 
+2.50.1
