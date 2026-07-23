@@ -1,7 +1,7 @@
 """Base class for Tynx-authored layers."""
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 from ..._tynx import Buffer, Parameter, Tensor
 
@@ -15,7 +15,17 @@ class Module:
     training: bool
 
     def __init__(self) -> None:
+        object.__setattr__(self, "_registered_buffer_names", {})
         self.training = True
+
+    def __setattr__(self, name: str, value: object) -> None:
+        try:
+            registered = object.__getattribute__(self, "_registered_buffer_names")
+        except AttributeError:
+            registered = {}
+        if name in registered:
+            value = _coerce_buffer(name, value)
+        object.__setattr__(self, name, value)
 
     def forward(self, *args: Any, **kwargs: Any) -> Tensor:
         raise NotImplementedError
@@ -45,6 +55,32 @@ class Module:
         from ..state import named_buffers
 
         return named_buffers(self)
+
+    def register_buffer(
+        self,
+        name: str,
+        tensor: Optional[Union[Tensor, Buffer]],
+        persistent: bool = True,
+    ) -> None:
+        """Register persistent non-parameter state under an attribute name."""
+        if not isinstance(name, str):
+            raise TypeError(f"buffer name must be a string, got {type(name).__qualname__}")
+        if not name or "." in name:
+            raise ValueError("buffer name must be non-empty and cannot contain '.'")
+        if type(persistent) is not bool:
+            raise TypeError(f"persistent must be a bool, got {type(persistent).__qualname__}")
+        if not persistent:
+            raise NotImplementedError("non-persistent buffers are not supported")
+        try:
+            registered = object.__getattribute__(self, "_registered_buffer_names")
+        except AttributeError:
+            registered = {}
+            object.__setattr__(self, "_registered_buffer_names", registered)
+        if name not in registered and (name in self.__dict__ or hasattr(type(self), name)):
+            raise KeyError(f"attribute {name!r} already exists")
+        buffer = _coerce_buffer(name, tensor)
+        registered[name] = None
+        object.__setattr__(self, name, buffer)
 
     def zero_grad(self) -> None:
         """Clear gradients for every recursively discovered parameter."""
@@ -81,5 +117,18 @@ class Module:
 
 
 Layer = Module
+
+
+def _coerce_buffer(name: str, value: object) -> Optional[Buffer]:
+    if value is None:
+        return None
+    if isinstance(value, Buffer):
+        return value
+    if isinstance(value, Tensor):
+        return Buffer(value, name=name)
+    raise TypeError(
+        f"buffer value must be a Tensor, Buffer, or None, got {type(value).__qualname__}"
+    )
+
 
 __all__ = ["Layer", "Module"]
