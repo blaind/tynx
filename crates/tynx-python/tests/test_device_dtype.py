@@ -27,6 +27,19 @@ def test_cast_converts_supported_dtype_pairs() -> None:
     assert booleans.cast("int64").tolist() == [1, 0, 1]
 
 
+def test_float_operations_explain_how_to_convert_discrete_tensors() -> None:
+    floats = tynx.Tensor([1.0, 2.0])
+    integers = tynx.Tensor([1, 2], dtype="int64")
+
+    with pytest.raises(
+        TypeError,
+        match=r'got int64; convert it with \.cast\("float32"\)',
+    ):
+        _ = floats + integers
+
+    assert (floats + integers.cast("float32")).tolist() == [2.0, 4.0]
+
+
 def test_tensor_copy_constructor_can_cast_and_select_device() -> None:
     source = tynx.Tensor([1, 2, 3], dtype="int64")
 

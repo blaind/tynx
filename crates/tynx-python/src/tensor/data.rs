@@ -210,7 +210,7 @@ impl TensorValue {
         match self {
             Self::Float(value) => Ok(value),
             other => Err(PyTypeError::new_err(format!(
-                "{operation} requires a float32 Tensor, got {}",
+                "{operation} requires a float32 Tensor, got {}; convert it with .cast(\"float32\")",
                 other.dtype_name()
             ))),
         }
