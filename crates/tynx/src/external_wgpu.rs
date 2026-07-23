@@ -176,6 +176,25 @@ impl ExternalWgpuContext {
         self.device.clone().autodiff()
     }
 
+    /// Release external allocations whose Tynx handles and queued bindings are no longer live.
+    ///
+    /// CubeCL deliberately keeps external registrations out of its reusable allocation pools.
+    /// Calling this at an engine transaction boundary lets the external owner recycle completed
+    /// slots without waiting for an unrelated later dispatch. Live tensors and autodiff tapes
+    /// remain retained.
+    pub fn reclaim_unused_external_buffers(&self) -> Result<()> {
+        match self.compiler {
+            #[cfg(feature = "wgpu")]
+            Compiler::Automatic => {
+                reclaim_unused_external::<AutoCompiler>(&self.runtime_device, &self.device)
+            }
+            #[cfg(feature = "vulkan")]
+            Compiler::Vulkan => {
+                reclaim_unused_external::<SpirvCompiler>(&self.runtime_device, &self.device)
+            }
+        }
+    }
+
     /// Adopt an acquired descriptor as a read-only inference tensor without copying.
     pub fn adopt_f32(&self, descriptor: AcquiredExternalTensorDescriptor) -> Result<DynTensor> {
         self.ensure_context(&descriptor)?;
@@ -229,6 +248,14 @@ impl ExternalWgpuContext {
             "external tensor was validated for a different WGPU context",
         ))
     }
+}
+
+fn reclaim_unused_external<C: WgpuCompiler>(
+    runtime_device: &WgpuDevice,
+    device: &Device,
+) -> Result<()> {
+    WgpuRuntime::<C>::client(runtime_device).memory_cleanup();
+    crate::synchronize(device)
 }
 
 fn existing_device_kind(device: &WgpuDevice) -> Result<DeviceKind> {
@@ -546,7 +573,7 @@ mod tests {
             return;
         };
         queue.write_buffer(&buffer, 0, &f32_bytes(&[1.0, 2.0, 3.0, 4.0]));
-        let (descriptor, _, _, calls) = descriptor(&context, buffer);
+        let (descriptor, _, owner, calls) = descriptor(&context, buffer);
 
         let mean = context
             .adopt_f32(descriptor)
@@ -560,6 +587,8 @@ mod tests {
 
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert_eq!(mean, [2.5]);
+        context.reclaim_unused_external_buffers().unwrap();
+        assert!(owner.upgrade().is_none());
     }
 
     #[cfg(feature = "training")]
