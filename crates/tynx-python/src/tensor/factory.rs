@@ -3,7 +3,7 @@
 use pyo3::{
     exceptions::{PyTypeError, PyValueError},
     prelude::*,
-    types::{PyAny, PyBool},
+    types::{PyAny, PyBool, PyTuple},
 };
 use tynx_core::{DType, Device, Distribution, DynBool, DynInt, DynTensor, MAX_RANK};
 
@@ -29,6 +29,28 @@ fn validate_shape(shape: Vec<usize>) -> PyResult<Vec<usize>> {
         )));
     }
     Ok(shape)
+}
+
+fn shape_value(value: &Bound<'_, PyAny>) -> PyResult<Vec<usize>> {
+    if let Ok(dimension) = value.extract::<usize>() {
+        return Ok(vec![dimension]);
+    }
+    value.extract::<Vec<usize>>().map_err(|_| {
+        PyTypeError::new_err(
+            "factory shape must be an integer, a sequence of integers, or positional integers",
+        )
+    })
+}
+
+fn shape_args(values: &Bound<'_, PyTuple>) -> PyResult<Vec<usize>> {
+    if values.len() == 1 {
+        return shape_value(&values.get_item(0)?);
+    }
+    values.extract::<Vec<usize>>().map_err(|_| {
+        PyTypeError::new_err(
+            "factory shape must be an integer, a sequence of integers, or positional integers",
+        )
+    })
 }
 
 fn select_device(device: Option<PyRef<'_, PyDevice>>) -> Device {
@@ -109,14 +131,14 @@ fn full_value(
 }
 
 #[pyfunction(name = "empty")]
-#[pyo3(signature = (shape, *, dtype="float32", device=None, requires_grad=false))]
+#[pyo3(signature = (*shape, dtype="float32", device=None, requires_grad=false))]
 pub(crate) fn empty_py(
-    shape: Vec<usize>,
+    shape: &Bound<'_, PyTuple>,
     dtype: &str,
     device: Option<PyRef<'_, PyDevice>>,
     requires_grad: bool,
 ) -> PyResult<PyTensor> {
-    let shape = validate_shape(shape)?;
+    let shape = validate_shape(shape_args(shape)?)?;
     let device = select_device(device);
     finish(empty_value(&shape, dtype, &device)?, requires_grad)
 }
@@ -124,13 +146,13 @@ pub(crate) fn empty_py(
 #[pyfunction(name = "full")]
 #[pyo3(signature = (shape, fill_value, *, dtype="float32", device=None, requires_grad=false))]
 pub(crate) fn full_py(
-    shape: Vec<usize>,
+    shape: &Bound<'_, PyAny>,
     fill_value: &Bound<'_, PyAny>,
     dtype: &str,
     device: Option<PyRef<'_, PyDevice>>,
     requires_grad: bool,
 ) -> PyResult<PyTensor> {
-    let shape = validate_shape(shape)?;
+    let shape = validate_shape(shape_value(shape)?)?;
     let device = select_device(device);
     finish(
         full_value(&shape, fill_value, dtype, &device)?,
@@ -139,29 +161,33 @@ pub(crate) fn full_py(
 }
 
 #[pyfunction(name = "zeros")]
-#[pyo3(signature = (shape, *, dtype="float32", device=None, requires_grad=false))]
+#[pyo3(signature = (*shape, dtype="float32", device=None, requires_grad=false))]
 pub(crate) fn zeros_py(
     py: Python<'_>,
-    shape: Vec<usize>,
+    shape: &Bound<'_, PyTuple>,
     dtype: &str,
     device: Option<PyRef<'_, PyDevice>>,
     requires_grad: bool,
 ) -> PyResult<PyTensor> {
+    let shape = validate_shape(shape_args(shape)?)?;
+    let device = select_device(device);
     let zero = 0_i64.into_pyobject(py)?.into_any();
-    full_py(shape, &zero, dtype, device, requires_grad)
+    finish(full_value(&shape, &zero, dtype, &device)?, requires_grad)
 }
 
 #[pyfunction(name = "ones")]
-#[pyo3(signature = (shape, *, dtype="float32", device=None, requires_grad=false))]
+#[pyo3(signature = (*shape, dtype="float32", device=None, requires_grad=false))]
 pub(crate) fn ones_py(
     py: Python<'_>,
-    shape: Vec<usize>,
+    shape: &Bound<'_, PyTuple>,
     dtype: &str,
     device: Option<PyRef<'_, PyDevice>>,
     requires_grad: bool,
 ) -> PyResult<PyTensor> {
+    let shape = validate_shape(shape_args(shape)?)?;
+    let device = select_device(device);
     let one = 1_i64.into_pyobject(py)?.into_any();
-    full_py(shape, &one, dtype, device, requires_grad)
+    finish(full_value(&shape, &one, dtype, &device)?, requires_grad)
 }
 
 fn random_float(
@@ -179,9 +205,9 @@ fn random_float(
 }
 
 #[pyfunction(name = "rand")]
-#[pyo3(signature = (shape, *, dtype="float32", device=None, requires_grad=false))]
+#[pyo3(signature = (*shape, dtype="float32", device=None, requires_grad=false))]
 pub(crate) fn rand_py(
-    shape: Vec<usize>,
+    shape: &Bound<'_, PyTuple>,
     dtype: &str,
     device: Option<PyRef<'_, PyDevice>>,
     requires_grad: bool,
@@ -189,13 +215,18 @@ pub(crate) fn rand_py(
     if dtype != "float32" {
         return Err(PyTypeError::new_err("rand supports only dtype='float32'"));
     }
-    random_float(shape, Distribution::Default, device, requires_grad)
+    random_float(
+        shape_args(shape)?,
+        Distribution::Default,
+        device,
+        requires_grad,
+    )
 }
 
 #[pyfunction(name = "randn")]
-#[pyo3(signature = (shape, *, dtype="float32", device=None, requires_grad=false))]
+#[pyo3(signature = (*shape, dtype="float32", device=None, requires_grad=false))]
 pub(crate) fn randn_py(
-    shape: Vec<usize>,
+    shape: &Bound<'_, PyTuple>,
     dtype: &str,
     device: Option<PyRef<'_, PyDevice>>,
     requires_grad: bool,
@@ -203,7 +234,12 @@ pub(crate) fn randn_py(
     if dtype != "float32" {
         return Err(PyTypeError::new_err("randn supports only dtype='float32'"));
     }
-    random_float(shape, Distribution::Normal(0.0, 1.0), device, requires_grad)
+    random_float(
+        shape_args(shape)?,
+        Distribution::Normal(0.0, 1.0),
+        device,
+        requires_grad,
+    )
 }
 
 #[pyfunction(name = "randint")]
@@ -211,7 +247,7 @@ pub(crate) fn randn_py(
 pub(crate) fn randint_py(
     low: i64,
     high: i64,
-    shape: Vec<usize>,
+    shape: &Bound<'_, PyAny>,
     dtype: &str,
     device: Option<PyRef<'_, PyDevice>>,
     requires_grad: bool,
@@ -226,7 +262,7 @@ pub(crate) fn randint_py(
             "randint supports only dtype='int64' and requires_grad=False",
         ));
     }
-    let shape = validate_shape(shape)?;
+    let shape = validate_shape(shape_value(shape)?)?;
     let device = select_device(device);
     let bounds = if shape.iter().product::<usize>() == 0 {
         IntBounds::Empty

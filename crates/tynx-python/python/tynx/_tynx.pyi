@@ -92,6 +92,7 @@ def nonzero(input: Tensor, *, as_tuple: Literal[False] = False) -> Tensor: ...
 @overload
 def nonzero(input: Tensor, *, as_tuple: Literal[True]) -> tuple[Tensor, ...]: ...
 def index_select(input: Tensor, dim: int, index: Tensor) -> Tensor: ...
+@overload
 def empty(
     shape: Shape,
     *,
@@ -99,14 +100,22 @@ def empty(
     device: Device | None = None,
     requires_grad: bool = False,
 ) -> Tensor: ...
+@overload
+def empty(
+    *shape: int,
+    dtype: TensorDType = "float32",
+    device: Device | None = None,
+    requires_grad: bool = False,
+) -> Tensor: ...
 def full(
-    shape: Shape,
+    shape: Shape | int,
     fill_value: TensorScalar,
     *,
     dtype: TensorDType = "float32",
     device: Device | None = None,
     requires_grad: bool = False,
 ) -> Tensor: ...
+@overload
 def zeros(
     shape: Shape,
     *,
@@ -114,6 +123,14 @@ def zeros(
     device: Device | None = None,
     requires_grad: bool = False,
 ) -> Tensor: ...
+@overload
+def zeros(
+    *shape: int,
+    dtype: TensorDType = "float32",
+    device: Device | None = None,
+    requires_grad: bool = False,
+) -> Tensor: ...
+@overload
 def ones(
     shape: Shape,
     *,
@@ -121,6 +138,14 @@ def ones(
     device: Device | None = None,
     requires_grad: bool = False,
 ) -> Tensor: ...
+@overload
+def ones(
+    *shape: int,
+    dtype: TensorDType = "float32",
+    device: Device | None = None,
+    requires_grad: bool = False,
+) -> Tensor: ...
+@overload
 def rand(
     shape: Shape,
     *,
@@ -128,6 +153,14 @@ def rand(
     device: Device | None = None,
     requires_grad: bool = False,
 ) -> Tensor: ...
+@overload
+def rand(
+    *shape: int,
+    dtype: Literal["float32"] = "float32",
+    device: Device | None = None,
+    requires_grad: bool = False,
+) -> Tensor: ...
+@overload
 def randn(
     shape: Shape,
     *,
@@ -135,10 +168,17 @@ def randn(
     device: Device | None = None,
     requires_grad: bool = False,
 ) -> Tensor: ...
+@overload
+def randn(
+    *shape: int,
+    dtype: Literal["float32"] = "float32",
+    device: Device | None = None,
+    requires_grad: bool = False,
+) -> Tensor: ...
 def randint(
     low: int,
     high: int,
-    shape: Shape,
+    shape: Shape | int,
     *,
     dtype: Literal["int64"] = "int64",
     device: Device | None = None,
