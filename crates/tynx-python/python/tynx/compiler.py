@@ -47,6 +47,7 @@ class CompiledFunction(_Generic[R]):
         *,
         fullgraph: bool = False,
         static_argnames: _Iterable[str] = (),
+        _bound_module: _Optional[object] = None,
     ) -> None:
         if not callable(function):
             raise TypeError(f"compile expected a callable, got {type(function).__qualname__}")
@@ -69,6 +70,7 @@ class CompiledFunction(_Generic[R]):
         self.fallback_count = 0
         self.replay_count = 0
         self.last_fallback_reason: _Optional[str] = None
+        self._bound_module = None if _bound_module is None else _ref(_bound_module)
         self._bound_instances: _WeakKeyDictionary[object, CompiledFunction[R]] = (
             _WeakKeyDictionary()
         )
@@ -90,10 +92,13 @@ class CompiledFunction(_Generic[R]):
         static_argnames = self._static_argnames.difference(
             {receiver} if receiver in ("self", "cls") else set()
         )
+        from .nn.modules.module import Module
+
         bound = CompiledFunction(
             _cast(_Callable[..., R], _MethodType(self._function, instance)),
             fullgraph=self._fullgraph,
             static_argnames=static_argnames,
+            _bound_module=instance if isinstance(instance, Module) else None,
         )
         self._bound_instances[instance] = bound
         return bound
@@ -152,6 +157,10 @@ class CompiledFunction(_Generic[R]):
 
         session = _CaptureSession(fullgraph=self._fullgraph)
         module_calls: dict[int, object] = {}
+        if self._bound_module is not None:
+            module = self._bound_module()
+            if module is not None:
+                module_calls[id(module)] = module
         module_token = _ACTIVE_MODULE_CALLS.set(module_calls)
         try:
             traced = iter(session.input(argument) for argument in tensor_args)

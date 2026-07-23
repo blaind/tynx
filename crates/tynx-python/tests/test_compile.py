@@ -477,6 +477,32 @@ def test_captured_module_training_mode_specializes_separate_graphs() -> None:
     assert forward.replay_count == 1
 
 
+def test_captured_module_method_guards_its_own_training_mode() -> None:
+    class ModeScale(tynx.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls = 0
+
+        @tynx.compile(fullgraph=True)
+        def forward(self, value: tynx.Tensor) -> tynx.Tensor:
+            self.calls += 1
+            return value * (2.0 if self.training else 3.0)
+
+    layer = ModeScale()
+    input = tynx.ones(2)
+
+    assert layer(input).tolist() == [2.0, 2.0]
+    layer.eval()
+    assert layer(input).tolist() == [3.0, 3.0]
+    layer.train()
+    assert layer(input).tolist() == [2.0, 2.0]
+
+    assert layer.calls == 2
+    assert layer.forward.compile_count == 2
+    assert layer.forward.graph_count == 2
+    assert layer.forward.replay_count == 1
+
+
 def test_captured_categorical_sampling_advances_and_matches_eager_rng() -> None:
     logits = tynx.Tensor([[0.1, 0.2, 0.7]] * 24)
     tynx.manual_seed(271828)
