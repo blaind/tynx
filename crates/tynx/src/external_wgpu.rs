@@ -321,6 +321,17 @@ mod tests {
     #[derive(Debug)]
     struct Owner;
 
+    #[derive(Debug)]
+    struct RecyclingOwner {
+        releases: Arc<AtomicUsize>,
+    }
+
+    impl Drop for RecyclingOwner {
+        fn drop(&mut self) {
+            self.releases.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
     struct Submission {
         calls: Arc<AtomicUsize>,
     }
@@ -530,6 +541,86 @@ mod tests {
             }
             _ => panic!("expected rank-1 external tensor"),
         }
+    }
+
+    #[cfg(feature = "training")]
+    #[test]
+    fn retains_the_engine_slot_through_external_forward_and_backward() {
+        let Some((context, buffer, queue)) = executing_context_and_buffer() else {
+            eprintln!("skipping external WGPU autodiff test: no executing adapter");
+            return;
+        };
+        queue.write_buffer(&buffer, 0, &f32_bytes(&[1.0, 2.0, 3.0, 4.0]));
+
+        let releases = Arc::new(AtomicUsize::new(0));
+        let owner = Arc::new(RecyclingOwner {
+            releases: releases.clone(),
+        });
+        let owner_weak = Arc::downgrade(&owner);
+        let lease = context.lease_buffer(buffer, owner).unwrap();
+        let capability = context.capability();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let descriptor = ExternalTensorDescriptor::new(
+            capability.clone(),
+            lease,
+            0,
+            16,
+            vec![4],
+            DType::F32,
+            vec![1],
+            ExternalAccess::ReadOnly,
+            SubmissionToken::new(
+                capability.clone(),
+                Submission {
+                    calls: calls.clone(),
+                },
+            ),
+        )
+        .validate_read_only_dense(&capability)
+        .unwrap()
+        .acquire()
+        .unwrap();
+
+        let input = context.adopt_f32_training(descriptor).unwrap();
+        let parameter = DynTensor::from_data(
+            crate::TensorData::new(vec![2.0_f32, 2.0, 2.0, 2.0], [4]),
+            1,
+            &context.training_device(),
+        )
+        .unwrap()
+        .require_grad();
+        let loss = input
+            .clone()
+            .mul_broadcast(parameter.clone())
+            .unwrap()
+            .mean_dims(&[0])
+            .reshape(vec![1])
+            .unwrap();
+        drop(input);
+
+        assert!(owner_weak.upgrade().is_some());
+        assert_eq!(releases.load(Ordering::SeqCst), 0);
+        let gradients = loss.backward();
+        crate::synchronize(&context.training_device()).unwrap();
+        assert_eq!(
+            parameter
+                .grad(&gradients)
+                .unwrap()
+                .into_data()
+                .iter::<f32>()
+                .collect::<Vec<_>>(),
+            [0.25, 0.5, 0.75, 1.0]
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(owner_weak.upgrade().is_some());
+        assert_eq!(releases.load(Ordering::SeqCst), 0);
+
+        drop(gradients);
+        drop(loss);
+        drop(parameter);
+        crate::synchronize(&context.training_device()).unwrap();
+        assert!(owner_weak.upgrade().is_none());
+        assert_eq!(releases.load(Ordering::SeqCst), 1);
     }
 
     #[test]
