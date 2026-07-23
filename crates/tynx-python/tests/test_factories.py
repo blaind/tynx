@@ -37,6 +37,19 @@ def test_full_and_like_factories_preserve_or_override_dtype() -> None:
     assert tynx.empty_like(integers).shape == integers.shape
 
 
+def test_shape_factories_accept_torch_style_positional_dimensions() -> None:
+    assert tynx.empty(2, 3).shape == (2, 3)
+    assert tynx.zeros(2, 3).tolist() == [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]
+    assert tynx.ones(3).tolist() == [1.0, 1.0, 1.0]
+    assert tynx.rand(2, 3).shape == (2, 3)
+    assert tynx.randn(2, 3).shape == (2, 3)
+
+
+def test_fixed_position_shape_factories_accept_bare_integer_shapes() -> None:
+    assert tynx.full(3, 7, dtype="int64").tolist() == [7, 7, 7]
+    assert tynx.randint(0, 4, 3).shape == (3,)
+
+
 def test_random_factories_share_advancing_seeded_native_rng() -> None:
     tynx.manual_seed(19)
     first = cast(list[list[float]], tynx.rand((2, 4)).tolist())
