@@ -365,7 +365,7 @@ pub struct AcquiredExternalTensorDescriptor {
 }
 
 impl AcquiredExternalTensorDescriptor {
-    #[cfg(any(feature = "wgpu", feature = "vulkan"))]
+    #[cfg(all(feature = "external-wgpu", any(feature = "wgpu", feature = "vulkan")))]
     pub(crate) fn belongs_to(&self, expected_context: &DeviceContextCapability) -> bool {
         self.descriptor.context.same_context(expected_context)
     }

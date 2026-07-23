@@ -19,6 +19,10 @@ cargo xtask external-wgpu check
 cargo xtask external-wgpu test
 ```
 
+The adapter is additionally gated by Tynx's `external-wgpu` feature. The xtask
+enables it automatically; ordinary `wgpu` and `vulkan` builds do not compile
+against the temporary CubeCL-only API.
+
 The checkout lives under `../.cache/tynx/cubecl-external-wgpu/`, outside the
 Cargo workspace. The xtask verifies the base revision, patch commit headers,
 patch hashes, and the applied checkout before use. Checks run from a temporary

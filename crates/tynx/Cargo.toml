@@ -22,10 +22,11 @@ wgpu = { git = "https://github.com/gfx-rs/wgpu.git", rev = "bde709122f8320571ab1
 
 [features]
 default = ["flex"]
+external-wgpu = ["dep:cubecl"]
 flex = ["burn/flex"]
 training = ["burn/autodiff"]
-vulkan = ["burn/vulkan", "burn/autotune", "flex", "dep:cubecl", "cubecl/wgpu-spirv", "dep:wgpu", "dep:pollster"]
-wgpu = ["burn/wgpu", "burn/autotune", "flex", "dep:cubecl", "cubecl/wgpu", "dep:wgpu", "dep:pollster"]
+vulkan = ["burn/vulkan", "burn/autotune", "flex", "cubecl?/wgpu-spirv", "dep:wgpu", "dep:pollster"]
+wgpu = ["burn/wgpu", "burn/autotune", "flex", "cubecl?/wgpu", "dep:wgpu", "dep:pollster"]
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 getrandom = { version = "0.4", features = ["wasm_js"] }

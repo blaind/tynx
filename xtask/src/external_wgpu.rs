@@ -79,7 +79,7 @@ pub(crate) fn run(mut args: impl Iterator<Item = String>) -> Result<(), String> 
                     "tynx",
                     "--no-default-features",
                     "--features",
-                    "flex,training,wgpu",
+                    "external-wgpu,flex,training,wgpu",
                 ],
             )?;
             cargo(
@@ -91,7 +91,7 @@ pub(crate) fn run(mut args: impl Iterator<Item = String>) -> Result<(), String> 
                     "tynx",
                     "--no-default-features",
                     "--features",
-                    "flex,training,vulkan",
+                    "external-wgpu,flex,training,vulkan",
                 ],
             )
         }
@@ -106,7 +106,7 @@ pub(crate) fn run(mut args: impl Iterator<Item = String>) -> Result<(), String> 
                     "tynx",
                     "--no-default-features",
                     "--features",
-                    "flex,training,wgpu",
+                    "external-wgpu,flex,training,wgpu",
                     "external_wgpu",
                 ],
             )?;
@@ -119,7 +119,7 @@ pub(crate) fn run(mut args: impl Iterator<Item = String>) -> Result<(), String> 
                     "tynx",
                     "--no-default-features",
                     "--features",
-                    "flex,training,wgpu",
+                    "external-wgpu,flex,training,wgpu",
                     "--test",
                     "external_lifecycle",
                 ],
