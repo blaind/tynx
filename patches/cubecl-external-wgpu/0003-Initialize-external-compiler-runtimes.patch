@@ -1,0 +1,40 @@
+From eba552aa8a5eadef0863b78c04d38e3d8896867e Mon Sep 17 00:00:00 2001
+Date: Thu, 23 Jul 2026 10:17:23 +0000
+Subject: [PATCH 3/3] Initialize external compiler runtimes
+
+---
+ crates/cubecl-wgpu/src/runtime.rs | 15 +++++++++++++--
+ 1 file changed, 13 insertions(+), 2 deletions(-)
+
+diff --git a/crates/cubecl-wgpu/src/runtime.rs b/crates/cubecl-wgpu/src/runtime.rs
+index 651ce854..33c2fd6f 100644
+--- a/crates/cubecl-wgpu/src/runtime.rs
++++ b/crates/cubecl-wgpu/src/runtime.rs
+@@ -241,6 +241,17 @@ pub struct WgpuSetup {
+ /// This function generates a new, globally unique ID for the device every time it is called,
+ /// even if called on the same device multiple times.
+ pub fn init_device(setup: WgpuSetup, options: RuntimeOptions) -> WgpuDevice {
++    init_device_with_compiler::<AutoCompiler>(setup, options)
++}
++
++/// Create a [`WgpuDevice`] on an existing [`WgpuSetup`] for a specific compiler.
++///
++/// This is the external-device counterpart to compiler-specific Burn backends such as Vulkan.
++/// Call it at most once for a given setup and compiler combination.
++pub fn init_device_with_compiler<C: WgpuCompiler>(
++    setup: WgpuSetup,
++    options: RuntimeOptions,
++) -> WgpuDevice {
+     use core::sync::atomic::{AtomicU32, Ordering};
+
+     static COUNTER: AtomicU32 = AtomicU32::new(0);
+@@ -251,7 +262,7 @@ pub fn init_device(setup: WgpuSetup, options: RuntimeOptions) -> WgpuDevice {
+     }
+
+     let device_id = WgpuDevice::Existing(device_id);
+-    let server = create_server(setup, options);
+-    let _ = ComputeClient::<WgpuRuntime>::init(&device_id, server);
++    let server = create_server::<C>(setup, options);
++    let _ = ComputeClient::<WgpuRuntime<C>>::init(&device_id, server);
+     device_id
+ }
