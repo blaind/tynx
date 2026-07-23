@@ -3,7 +3,8 @@
 from typing import Optional as _Optional
 
 from ..._tynx import Tensor
-from ..functional import _IntOrPair, adaptive_avg_pool2d, avg_pool2d, max_pool2d
+from .._utils import _bool, _IntOrPair, _pair
+from ..functional import adaptive_avg_pool2d, avg_pool2d, max_pool2d
 from .module import Module
 
 
@@ -20,14 +21,19 @@ class MaxPool2d(Module):
         ceil_mode: bool = False,
     ) -> None:
         super().__init__()
-        if return_indices:
-            raise NotImplementedError("MaxPool2d return_indices=True is not supported")
+        _pair(kernel_size, "kernel_size", positive=True)
+        if stride is not None:
+            _pair(stride, "stride", positive=True)
+        _pair(padding, "padding", positive=False)
+        _pair(dilation, "dilation", positive=True)
         self.kernel_size = kernel_size
         self.stride = stride
         self.padding = padding
         self.dilation = dilation
-        self.return_indices = return_indices
-        self.ceil_mode = ceil_mode
+        self.return_indices = _bool(return_indices, "return_indices")
+        self.ceil_mode = _bool(ceil_mode, "ceil_mode")
+        if self.return_indices:
+            raise NotImplementedError("MaxPool2d return_indices=True is not supported")
 
     def forward(self, input: Tensor) -> Tensor:
         return max_pool2d(
@@ -59,12 +65,18 @@ class AvgPool2d(Module):
         divisor_override: _Optional[int] = None,
     ) -> None:
         super().__init__()
+        _pair(kernel_size, "kernel_size", positive=True)
+        if stride is not None:
+            _pair(stride, "stride", positive=True)
+        _pair(padding, "padding", positive=False)
         self.kernel_size = kernel_size
         self.stride = stride
         self.padding = padding
-        self.ceil_mode = ceil_mode
-        self.count_include_pad = count_include_pad
+        self.ceil_mode = _bool(ceil_mode, "ceil_mode")
+        self.count_include_pad = _bool(count_include_pad, "count_include_pad")
         self.divisor_override = divisor_override
+        if self.divisor_override is not None:
+            raise NotImplementedError("AvgPool2d divisor_override is not supported")
 
     def forward(self, input: Tensor) -> Tensor:
         return avg_pool2d(
@@ -89,6 +101,7 @@ class AdaptiveAvgPool2d(Module):
 
     def __init__(self, output_size: _IntOrPair) -> None:
         super().__init__()
+        _pair(output_size, "output_size", positive=True)
         self.output_size = output_size
 
     def forward(self, input: Tensor) -> Tensor:

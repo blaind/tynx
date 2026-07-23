@@ -2,7 +2,6 @@
 
 from typing import Literal as _Literal
 from typing import Optional as _Optional
-from typing import Union as _Union
 
 from .._tynx import (
     Tensor,
@@ -13,9 +12,9 @@ from .._tynx import (
     _max_pool2d,
     maximum,
 )
+from ._utils import _bool, _IntOrPair, _pair
 
 _Reduction = _Literal["none", "mean", "sum"]
-_IntOrPair = _Union[int, tuple[int, int]]
 
 
 def conv2d(
@@ -175,25 +174,6 @@ def _reduce(input: Tensor, reduction: _Reduction) -> Tensor:
     if reduction == "sum":
         return input.sum()
     raise ValueError(f"reduction must be 'none', 'mean', or 'sum', got {reduction!r}")
-
-
-def _pair(value: _IntOrPair, name: str, *, positive: bool) -> tuple[int, int]:
-    pair = (value, value) if type(value) is int else value
-    minimum = 1 if positive else 0
-    if (
-        type(pair) is not tuple
-        or len(pair) != 2
-        or any(type(item) is not int or item < minimum for item in pair)
-    ):
-        qualifier = "positive" if positive else "non-negative"
-        raise ValueError(f"{name} must be an int or pair of {qualifier} integers, got {value!r}")
-    return pair
-
-
-def _bool(value: bool, name: str) -> bool:
-    if type(value) is not bool:
-        raise TypeError(f"{name} must be a bool, got {type(value).__qualname__}")
-    return value
 
 
 def _padding_index(value: _Optional[int], rows: int) -> _Optional[int]:
