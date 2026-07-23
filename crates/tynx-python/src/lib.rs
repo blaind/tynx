@@ -232,9 +232,12 @@ pub(crate) fn to_python_error(error: tynx_core::TynxError) -> PyErr {
     }
 }
 
-/// Native Python module for Tynx.
-#[pymodule]
-fn _tynx(module: &Bound<'_, PyModule>) -> PyResult<()> {
+/// Populate a native module with Tynx's canonical Python classes and functions.
+///
+/// Embedding runtimes use this entry point to register the same Rust-backed Python types inside
+/// their host extension before the public `tynx` package imports `tynx._tynx`. This avoids loading
+/// a second extension image with distinct `Tensor` class identity.
+pub fn init_module(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
     module.add_class::<PySession>()?;
     module.add_class::<PyImportedModel>()?;
@@ -292,4 +295,10 @@ fn _tynx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(nonzero_py, module)?)?;
     module.add_function(wrap_pyfunction!(index_select_py, module)?)?;
     Ok(())
+}
+
+/// Native Python module for Tynx.
+#[pymodule]
+fn _tynx(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    init_module(module)
 }
