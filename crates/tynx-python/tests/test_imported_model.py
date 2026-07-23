@@ -33,6 +33,13 @@ _MATMUL_MODEL = bytes.fromhex(
     "420e656e636f6465722e7765696768745a130a0178120e0a0c080112080a0208020a020801"
     "62130a0179120e0a0c080112080a0208020a02080142040a00100d"
 )
+_CONV_MODEL = bytes.fromhex(
+    "08083aa1010a210a01780a067765696768740a04626961731201791a056c617965722204436f6e"
+    "761216696d706f727465645f747261696e696e675f746573742a18080108010801080110014206"
+    "7765696768744a040000803f2a10080110014204626961734a04000000005a1b0a017812160a14"
+    "080112100a0208010a0208010a0208020a020802621b0a017912160a14080112100a0208010a02"
+    "08010a0208020a02080242040a00100d"
+)
 
 
 def _model_path(tmp_path: Path) -> Path:
@@ -77,6 +84,26 @@ def test_imported_optimizer_update_is_visible_to_the_next_call(tmp_path: Path) -
     optimizer.step()
 
     assert model(input).flatten().tolist() == pytest.approx([4.6, -1.1])
+
+
+def test_public_imported_conv2d_weights_and_bias_train_in_place(tmp_path: Path) -> None:
+    path = tmp_path / "conv.onnx"
+    path.write_bytes(_CONV_MODEL)
+    model = tynx.load(path, trainable="auto", simplify=False)
+    optimizer = tynx.optim.SGD(model.named_parameters(), lr=0.05)
+    input = tynx.Tensor([[[[1.0, 2.0], [3.0, 4.0]]]])
+    target = tynx.Tensor([[[[3.0, 5.0], [7.0, 9.0]]]])
+
+    for _ in range(800):
+        optimizer.zero_grad()
+        loss = tynx.nn.functional.mse_loss(model(input), target)
+        loss.backward()
+        optimizer.step()
+
+    assert model(input).flatten().tolist() == pytest.approx(target.flatten().tolist(), abs=1e-3)
+    parameters = dict(model.named_parameters())
+    assert parameters["weight"].grad is not None
+    assert parameters["bias"].grad is not None
 
 
 def test_imported_model_checkpoint_restores_weights_and_optimizer_state(tmp_path: Path) -> None:
