@@ -9,7 +9,7 @@ mod session;
 mod tensor;
 mod value;
 
-pub use device::{default_device, synchronize, take_device_error};
+pub use device::{allocation_size_limit, default_device, synchronize, take_device_error};
 pub use error::{Result, TynxError};
 pub use external::{
     AcquiredExternalTensorDescriptor, DeviceContextCapability, ExternalAccess, ExternalBufferLease,
@@ -37,7 +37,7 @@ pub use session::{PreparedSession, Session};
 pub use tensor::{DynBool, DynInt, DynTensor, MAX_RANK};
 pub use value::{Scalar, Value};
 
-pub use burn::tensor::{DType, Device, Distribution, Slice, TensorData};
+pub use burn::tensor::{BoolStore, DType, Device, Distribution, Slice, TensorData};
 
 #[cfg(feature = "training")]
 pub use burn::tensor::Gradients;

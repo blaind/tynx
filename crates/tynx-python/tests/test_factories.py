@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import struct
 from collections.abc import Callable
 from typing import cast
 
@@ -104,3 +105,9 @@ def test_factory_validation_is_explicit() -> None:
         tynx.randint(3, 3, (2,))
     with pytest.raises(ValueError, match="nonzero"):
         tynx.arange(0, 3, 0)
+
+
+def test_factory_shape_products_are_checked_before_dispatch() -> None:
+    platform_overflow = (1 << (8 * struct.calcsize("P"))) - 1
+    with pytest.raises(OverflowError, match="element count"):
+        tynx.zeros(platform_overflow, 2)
