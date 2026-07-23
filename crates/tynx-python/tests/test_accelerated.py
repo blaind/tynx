@@ -56,6 +56,23 @@ def _accelerated_device() -> tynx.Device:
     pytest.skip(f"accelerated backend not enabled: {device}")
 
 
+def test_accelerated_fused_broadcast_where_backward() -> None:
+    device = _accelerated_device()
+    condition = tynx.Tensor([[True], [False]], dtype="bool")
+    selected = tynx.Tensor([[1.0, 2.0]], requires_grad=True)
+    otherwise = tynx.Tensor([[10.0], [20.0]], requires_grad=True)
+
+    output = tynx.where(condition, selected, otherwise)
+    output.sum().backward()
+    tynx.synchronize(device)
+
+    assert output.tolist() == [[1.0, 2.0], [20.0, 20.0]]
+    assert selected.grad is not None
+    assert selected.grad.tolist() == [[1.0, 1.0]]
+    assert otherwise.grad is not None
+    assert otherwise.grad.tolist() == [[0.0], [2.0]]
+
+
 def test_accelerated_multidimensional_extrema_avoid_i64_mask_reductions() -> None:
     device = _accelerated_device()
     value = tynx.Tensor([[3.0, -2.0, 7.0], [1.0, 7.0, 0.0]])

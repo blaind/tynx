@@ -182,6 +182,27 @@ mod tests {
     use super::{default_device, record_device_error, synchronize, take_device_error};
     use crate::TynxError;
 
+    #[cfg(any(feature = "wgpu", feature = "vulkan"))]
+    trait FusionBackendMarker {}
+
+    #[cfg(any(feature = "wgpu", feature = "vulkan"))]
+    impl<B: burn_fusion::FusionBackend> FusionBackendMarker for burn_fusion::Fusion<B> {}
+
+    #[cfg(any(feature = "wgpu", feature = "vulkan"))]
+    fn assert_fusion_backend<B: FusionBackendMarker>() {}
+
+    #[cfg(feature = "wgpu")]
+    #[test]
+    fn wgpu_backend_is_fusion_wrapped() {
+        assert_fusion_backend::<burn::backend::wgpu::Wgpu>();
+    }
+
+    #[cfg(feature = "vulkan")]
+    #[test]
+    fn vulkan_backend_is_fusion_wrapped() {
+        assert_fusion_backend::<burn::backend::wgpu::Vulkan>();
+    }
+
     #[test]
     fn default_device_never_panics() {
         let device = default_device();

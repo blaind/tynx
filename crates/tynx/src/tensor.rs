@@ -2201,13 +2201,13 @@ impl DynTensor {
     /// Select elements from two tensors using a broadcastable boolean condition.
     pub fn where_select(condition: DynBool, then: Self, otherwise: Self) -> Result<Self> {
         let output_shape = broadcast_shape(&condition.dims(), &then.dims())?;
-        broadcast_shape(&output_shape, &otherwise.dims())?;
-        let rank = condition.rank().max(then.rank()).max(otherwise.rank());
+        let output_shape = broadcast_shape(&output_shape, &otherwise.dims())?;
+        let rank = output_shape.len();
         let dtype = then.dtype();
         Ok(where_float!(
-            condition.to_rank(rank)?,
-            then.to_rank(rank)?,
-            otherwise.cast(dtype).to_rank(rank)?
+            condition.to_rank(rank)?.expand(&output_shape)?,
+            then.to_rank(rank)?.expand(&output_shape)?,
+            otherwise.cast(dtype).to_rank(rank)?.expand(&output_shape)?
         ))
     }
 }
@@ -3002,13 +3002,13 @@ impl DynInt {
     /// Select elements from two integer tensors using a broadcastable boolean condition.
     pub fn where_select(condition: DynBool, then: Self, otherwise: Self) -> Result<Self> {
         let output_shape = broadcast_shape(&condition.dims(), &then.dims())?;
-        broadcast_shape(&output_shape, &otherwise.dims())?;
-        let rank = condition.rank().max(then.rank()).max(otherwise.rank());
+        let output_shape = broadcast_shape(&output_shape, &otherwise.dims())?;
+        let rank = output_shape.len();
         let dtype = then.dtype();
         Ok(where_int!(
-            condition.to_rank(rank)?,
-            then.to_rank(rank)?,
-            otherwise.cast(dtype).to_rank(rank)?
+            condition.to_rank(rank)?.expand(&output_shape)?,
+            then.to_rank(rank)?.expand(&output_shape)?,
+            otherwise.cast(dtype).to_rank(rank)?.expand(&output_shape)?
         ))
     }
 }
@@ -3338,12 +3338,12 @@ impl DynBool {
     /// Select elements from two boolean tensors using a broadcastable condition.
     pub fn where_select(condition: Self, then: Self, otherwise: Self) -> Result<Self> {
         let output_shape = broadcast_shape(&condition.dims(), &then.dims())?;
-        broadcast_shape(&output_shape, &otherwise.dims())?;
-        let rank = condition.rank().max(then.rank()).max(otherwise.rank());
+        let output_shape = broadcast_shape(&output_shape, &otherwise.dims())?;
+        let rank = output_shape.len();
         Ok(where_bool!(
-            condition.to_rank(rank)?,
-            then.to_rank(rank)?,
-            otherwise.to_rank(rank)?
+            condition.to_rank(rank)?.expand(&output_shape)?,
+            then.to_rank(rank)?.expand(&output_shape)?,
+            otherwise.to_rank(rank)?.expand(&output_shape)?
         ))
     }
 
