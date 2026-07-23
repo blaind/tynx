@@ -193,7 +193,7 @@ fn usage() -> String {
     [
         "usage:",
         "  cargo xtask conformance [fetch | bless | --case CASE]",
-        "  cargo xtask external-wgpu <prepare | check | test>",
+        "  cargo xtask external-wgpu <topology | check | test>",
     ]
     .join("\n")
 }
