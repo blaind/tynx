@@ -524,6 +524,7 @@ fn analyze(
         })
         .flatten()
         .filter(|output| !output.name.is_empty())
+        .filter(|output| !stable_names.contains_key(&InitializerId::Named(output.name.clone())))
         .map(|output| output.name.as_str())
         .collect::<HashSet<_>>();
 
@@ -1292,6 +1293,37 @@ mod tests {
         assert_eq!(report.initializers().len(), 1);
         assert_eq!(report.constants().next().unwrap().name(), "literal");
         assert!(report.warnings().is_empty());
+    }
+
+    #[test]
+    fn parser_constant_with_initializer_provenance_keeps_consumer_role() {
+        let weight = named_constant("constant1_out1", DType::F32, &[2, 2]);
+        let graph = graph(vec![
+            Node::Constant(ConstantNode {
+                name: "constant1".to_string(),
+                inputs: vec![static_tensor(7, DType::F32, &[2, 2])],
+                outputs: vec![weight.clone()],
+            }),
+            linear(weight, named_constant("bias", DType::F32, &[2])),
+        ]);
+        let stable_names = HashMap::from([(
+            InitializerId::Named("constant1_out1".to_string()),
+            "encoder.weight".to_string(),
+        )]);
+
+        let report = TrainabilityReport::analyze_initializers_with_names(
+            &graph,
+            &TrainabilityOverrides::new(),
+            &stable_names,
+        );
+
+        assert_eq!(
+            report
+                .trainable_parameters()
+                .map(InitializerReport::name)
+                .collect::<Vec<_>>(),
+            ["encoder.weight", "bias"]
+        );
     }
 
     #[test]
