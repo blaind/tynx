@@ -14,6 +14,24 @@ def test_public_dtype_constants_work_across_dtype_entry_points() -> None:
     assert tynx.Tensor([1, 2], dtype="int64").to(dtype=tynx.float32).dtype == "float32"
 
 
+def test_tensor_to_accepts_a_positional_dtype() -> None:
+    value = tynx.Tensor([1, 2], dtype=tynx.int64)
+
+    converted = value.to(tynx.float32)
+
+    assert converted.dtype == "float32"
+    assert converted.tolist() == [1.0, 2.0]
+
+
+def test_tensor_to_rejects_ambiguous_or_invalid_positional_arguments() -> None:
+    value = tynx.Tensor([1.0])
+
+    with pytest.raises(TypeError, match="dtype both positionally and by keyword"):
+        value.to(tynx.float32, dtype=tynx.int64)  # type: ignore[call-overload]
+    with pytest.raises(TypeError, match="must be a Device or dtype string"):
+        value.to(3)  # type: ignore[call-overload]
+
+
 def test_device_can_be_selected_during_construction_and_factories() -> None:
     cpu = tynx.Device("cpu")
 
