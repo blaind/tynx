@@ -5283,10 +5283,12 @@ name = "tynx-python"
 version = "0.1.1"
 dependencies = [
  "numpy",
+ "pollster",
  "pyo3",
  "tynx",
  "tynx-capture",
  "tynx-train",
+ "wgpu",
 ]
 
 [[package]]

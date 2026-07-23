@@ -20,12 +20,22 @@ tynx-core = { package = "tynx", path = "../tynx", features = ["training"] }
 tynx-capture = { path = "../tynx-capture" }
 tynx-train = { path = "../tynx-train" }
 
+[dev-dependencies]
+pollster = "0.4"
+wgpu = { version = "=29.0.3", default-features = false, features = ["noop"] }
+
 [features]
 default = ["extension-module"]
+embedding-tests = ["external-wgpu", "pyo3/auto-initialize", "wgpu"]
 extension-module = ["pyo3/extension-module"]
 external-wgpu = ["tynx-core/external-wgpu"]
 vulkan = ["tynx-core/vulkan"]
 wgpu = ["tynx-core/wgpu"]
+
+[[test]]
+name = "external_embedding"
+path = "tests/external_embedding.rs"
+required-features = ["embedding-tests"]
 
 [lints]
 workspace = true
