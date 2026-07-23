@@ -681,6 +681,15 @@ impl PyTensor {
         self.trace.as_ref()
     }
 
+    pub(crate) fn zero_missing_gradients(&self) -> bool {
+        self.zero_missing_gradients
+    }
+
+    pub(crate) fn with_zero_missing_gradients(mut self, enabled: bool) -> Self {
+        self.zero_missing_gradients |= enabled;
+        self
+    }
+
     pub(crate) fn with_trace(&self, trace: TraceValue) -> Self {
         Self {
             source: TensorSource::Owned(Box::new(self.source.value())),
@@ -1729,61 +1738,7 @@ impl PyTensor {
         let left_shape = self.source.value().dims();
         let right_shape = other.source.value().dims();
         let has_zero_elements = left_shape.contains(&0) || right_shape.contains(&0);
-        let mut result = match (left_shape.as_slice(), right_shape.as_slice()) {
-            ([0], [0]) => self.binary(&other, BinaryOp::Matmul, |left, right| {
-                left.mul_broadcast(right)?.sum_dims(&[0]).reshape(vec![1])
-            }),
-            ([rows, 0], [0]) => {
-                let rows = *rows;
-                self.binary(&other, BinaryOp::Matmul, move |left, right| {
-                    left.mul_broadcast(right)?
-                        .sum_dims(&[1])
-                        .reshape(vec![rows])
-                })
-            }
-            ([0], [0, columns]) => {
-                let columns = *columns;
-                self.binary(&other, BinaryOp::Matmul, move |left, right| {
-                    right
-                        .permute(vec![1, 0])?
-                        .mul_broadcast(left)?
-                        .sum_dims(&[1])
-                        .reshape(vec![columns])
-                })
-            }
-            ([left], [right]) => {
-                let left = *left;
-                let right = *right;
-                self.binary(&other, BinaryOp::Matmul, move |left_value, right_value| {
-                    left_value
-                        .reshape(vec![1, left])?
-                        .matmul(right_value.reshape(vec![right, 1])?)?
-                        .reshape(vec![1])
-                })
-            }
-            ([rows, inner], [right]) => {
-                let rows = *rows;
-                let _inner = *inner;
-                let right = *right;
-                self.binary(&other, BinaryOp::Matmul, move |left_value, right_value| {
-                    left_value
-                        .matmul(right_value.reshape(vec![right, 1])?)?
-                        .reshape(vec![rows])
-                })
-            }
-            ([left], [inner, columns]) => {
-                let left = *left;
-                let _inner = *inner;
-                let columns = *columns;
-                self.binary(&other, BinaryOp::Matmul, move |left_value, right_value| {
-                    left_value
-                        .reshape(vec![1, left])?
-                        .matmul(right_value)?
-                        .reshape(vec![columns])
-                })
-            }
-            _ => self.binary(&other, BinaryOp::Matmul, DynTensor::matmul),
-        }?;
+        let mut result = self.binary(&other, BinaryOp::Matmul, DynTensor::matmul)?;
         result.zero_missing_gradients |= has_zero_elements;
         Ok(result)
     }

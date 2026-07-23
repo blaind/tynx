@@ -1716,6 +1716,40 @@ impl DynTensor {
         ensure_same_device("matmul", &self.device(), &other.device())?;
         let left_dims = self.dims();
         let right_dims = other.dims();
+        match (left_dims.as_slice(), right_dims.as_slice()) {
+            ([left], [right]) => {
+                if left != right {
+                    return Err(TynxError::Shape(format!(
+                        "matmul inner dimensions must match for shapes {left_dims:?} and {right_dims:?}, got {left} and {right}"
+                    )));
+                }
+                return self.mul_broadcast(other)?.sum_dims(&[0]).reshape(vec![1]);
+            }
+            ([rows, inner], [right]) => {
+                if inner != right {
+                    return Err(TynxError::Shape(format!(
+                        "matmul inner dimensions must match for shapes {left_dims:?} and {right_dims:?}, got {inner} and {right}"
+                    )));
+                }
+                return self
+                    .mul_broadcast(other)?
+                    .sum_dims(&[1])
+                    .reshape(vec![*rows]);
+            }
+            ([left], [inner, columns]) => {
+                if left != inner {
+                    return Err(TynxError::Shape(format!(
+                        "matmul inner dimensions must match for shapes {left_dims:?} and {right_dims:?}, got {left} and {inner}"
+                    )));
+                }
+                return other
+                    .permute(vec![1, 0])?
+                    .mul_broadcast(self)?
+                    .sum_dims(&[1])
+                    .reshape(vec![*columns]);
+            }
+            _ => {}
+        }
         validate_matmul_shapes(&left_dims, &right_dims)?;
         if left_dims.contains(&0) || right_dims.contains(&0) {
             let mut output_dims = broadcast_shape(

@@ -815,10 +815,42 @@ def test_compile_replays_empty_matmul_sum_identity() -> None:
     def reduce_product(left: tynx.Tensor, right: tynx.Tensor) -> tynx.Tensor:
         return (left @ right).sum()
 
-    left = tynx.zeros(0, 3)
-    right = tynx.ones(3, 4)
+    left = tynx.zeros(0, 3, requires_grad=True)
+    right = tynx.ones(3, 4, requires_grad=True)
 
-    assert reduce_product(left, right).item() == 0.0
-    assert reduce_product(left, right).item() == 0.0
+    for _ in range(2):
+        left.zero_grad()
+        right.zero_grad()
+        loss = reduce_product(left, right)
+        assert loss.item() == 0.0
+        loss.backward()
+        assert left.grad is not None
+        assert left.grad.shape == (0, 3)
+        assert right.grad is not None
+        assert right.grad.tolist() == [[0.0, 0.0, 0.0, 0.0]] * 3
+
     assert reduce_product.graph_count == 1
     assert reduce_product.replay_count == 1
+
+
+def test_compile_replays_empty_vector_matmul() -> None:
+    @tynx.compile(fullgraph=True)
+    def dot(left: tynx.Tensor, right: tynx.Tensor) -> tynx.Tensor:
+        return left @ right
+
+    left = tynx.zeros(0, requires_grad=True)
+    right = tynx.zeros(0, requires_grad=True)
+
+    for _ in range(2):
+        left.zero_grad()
+        right.zero_grad()
+        result = dot(left, right)
+        assert result.item() == 0.0
+        result.backward()
+        assert left.grad is not None
+        assert left.grad.tolist() == []
+        assert right.grad is not None
+        assert right.grad.tolist() == []
+
+    assert dot.graph_count == 1
+    assert dot.replay_count == 1
