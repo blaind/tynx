@@ -1129,10 +1129,36 @@ impl PyTensor {
 
     /// Move or cast a tensor without a host staging path.
     #[pyo3(signature = (device=None, *, dtype=None))]
-    fn to(&self, device: Option<PyRef<'_, PyDevice>>, dtype: Option<&str>) -> PyResult<Self> {
+    fn to(&self, device: Option<&Bound<'_, PyAny>>, dtype: Option<&str>) -> PyResult<Self> {
         self.capture_unsupported("Tensor.to()/cast()")?;
         let current = self.source.value();
-        let dtype = dtype.unwrap_or(current.dtype_name());
+        let mut positional_dtype = None;
+        let device = match device {
+            None => None,
+            Some(value) => match value.extract::<PyRef<'_, PyDevice>>() {
+                Ok(device) => Some(device),
+                Err(_) => match value.extract::<String>() {
+                    Ok(value) => {
+                        positional_dtype = Some(value);
+                        None
+                    }
+                    Err(_) => {
+                        return Err(PyTypeError::new_err(
+                            "Tensor.to() positional argument must be a Device or dtype string",
+                        ));
+                    }
+                },
+            },
+        };
+        if positional_dtype.is_some() && dtype.is_some() {
+            return Err(PyTypeError::new_err(
+                "Tensor.to() received dtype both positionally and by keyword",
+            ));
+        }
+        let dtype = positional_dtype
+            .as_deref()
+            .or(dtype)
+            .unwrap_or(current.dtype_name());
         let target_device = ensure_autodiff(
             device.map_or_else(|| current.device(), |device| device.inner.as_ref().clone()),
         );
