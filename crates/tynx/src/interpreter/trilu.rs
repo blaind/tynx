@@ -98,4 +98,19 @@ mod tests {
             [false, false, false, true, false, false, true, true, false]
         );
     }
+
+    #[test]
+    fn preserves_zero_sized_integer_triangles() {
+        let device = Device::default();
+        for (dims, upper) in [(vec![3, 0, 5], false), (vec![0, 5], true)] {
+            let mask = triangular_mask(&dims, upper, 0, &device).unwrap();
+            let input = DynInt::full(&dims, 1, &device, burn::tensor::DType::I64).unwrap();
+            let zeros = DynInt::full(&dims, 0, &device, burn::tensor::DType::I64).unwrap();
+
+            let output = DynInt::where_select(mask, input, zeros).unwrap();
+
+            assert_eq!(output.dims(), dims);
+            assert!(output.into_data().iter::<i64>().next().is_none());
+        }
+    }
 }

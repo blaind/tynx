@@ -393,7 +393,7 @@ dependencies = [
  "oneshot",
  "portable-atomic-util",
  "rand 0.10.2",
- "rand_distr",
+ "rand_distr 0.6.0",
  "serde",
  "spin",
 ]
@@ -470,7 +470,6 @@ dependencies = [
 [[package]]
 name = "burn-cubecl-fusion"
 version = "0.22.0-pre.1"
-source = "git+https://github.com/tracel-ai/burn?rev=78f10aec1ca6c6ffb1edd17a0fa131ae59ad5403#78f10aec1ca6c6ffb1edd17a0fa131ae59ad5403"
 dependencies = [
  "burn-backend",
  "burn-fusion",
@@ -544,7 +543,6 @@ dependencies = [
 [[package]]
 name = "burn-fusion"
 version = "0.22.0-pre.1"
-source = "git+https://github.com/tracel-ai/burn?rev=78f10aec1ca6c6ffb1edd17a0fa131ae59ad5403#78f10aec1ca6c6ffb1edd17a0fa131ae59ad5403"
 dependencies = [
  "burn-backend",
  "burn-ir",
@@ -641,7 +639,7 @@ dependencies = [
  "num-traits",
  "portable-atomic-util",
  "rand 0.10.2",
- "rand_distr",
+ "rand_distr 0.6.0",
  "serde",
  "smallvec",
  "spin",
@@ -1385,7 +1383,6 @@ dependencies = [
 [[package]]
 name = "cubecl-wgpu"
 version = "0.11.0-pre.1"
-source = "git+https://github.com/tracel-ai/cubecl?rev=ba103c7f118524652647338dec09abf69a24a53e#ba103c7f118524652647338dec09abf69a24a53e"
 dependencies = [
  "ash",
  "async-channel",
@@ -1539,7 +1536,6 @@ dependencies = [
 [[package]]
 name = "cubek-reduce"
 version = "0.3.0-pre.1"
-source = "git+https://github.com/tracel-ai/cubek?rev=e6a634f1bd0c3a72325228d308462ec0c5c96456#e6a634f1bd0c3a72325228d308462ec0c5c96456"
 dependencies = [
  "cubecl",
  "cubek-std",
@@ -2488,6 +2484,8 @@ dependencies = [
  "cfg-if",
  "crunchy",
  "num-traits",
+ "rand 0.9.5",
+ "rand_distr 0.5.1",
  "serde",
  "zerocopy",
 ]
@@ -4111,6 +4109,16 @@ name = "rand_core"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
+
+[[package]]
+name = "rand_distr"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a8615d50dcf34fa31f7ab52692afec947c4dd0ab803cc87cb3b0b4570ff7463"
+dependencies = [
+ "num-traits",
+ "rand 0.9.5",
+]
 
 [[package]]
 name = "rand_distr"

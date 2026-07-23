@@ -32,6 +32,8 @@ jobs:
           path: .cache/onnx-corpus/${{ steps.corpus.outputs.revision }}
           sparse-checkout: crates/onnx-official-tests/vendor/node
       - uses: dtolnay/rust-toolchain@stable
+      - name: Prepare patched dependencies
+        run: cargo vendor-patches
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: conformance
@@ -57,6 +59,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+      - name: Prepare patched dependencies
+        run: cargo vendor-patches
       - uses: taiki-e/install-action@cargo-llvm-cov
       - uses: Swatinem/rust-cache@v2
       - name: Run coverage tests
@@ -88,6 +92,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Prepare patched dependencies
+        run: cargo vendor-patches
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           rust-version: stable
@@ -100,6 +107,8 @@ jobs:
         with:
           python-version: "3.13"
       - uses: dtolnay/rust-toolchain@stable
+      - name: Prepare patched dependencies
+        run: cargo vendor-patches
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: python
@@ -132,6 +141,8 @@ jobs:
         with:
           python-version: "3.13"
       - uses: dtolnay/rust-toolchain@stable
+      - name: Prepare patched dependencies
+        run: cargo vendor-patches
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: python-vulkan
@@ -192,6 +203,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+      - name: Prepare patched dependencies
+        run: cargo vendor-patches
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
@@ -211,6 +224,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
+      - name: Prepare patched dependencies
+        run: cargo vendor-patches
       - uses: taiki-e/install-action@wasm-pack
       - uses: nanasess/setup-chromedriver@v2
       - uses: Swatinem/rust-cache@v2
@@ -240,6 +255,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+      - name: Prepare patched dependencies
+        run: cargo vendor-patches
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: size

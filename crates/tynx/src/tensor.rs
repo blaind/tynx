@@ -41,6 +41,50 @@ fn ensure_same_device(operation: &str, left: &Device, right: &Device) -> Result<
     })
 }
 
+fn reduces_all_dims(rank: usize, dims: &[usize]) -> bool {
+    dims.len() == rank && (0..rank).all(|axis| dims.contains(&axis))
+}
+
+fn reduction_chunk_size(elements: usize) -> Option<usize> {
+    const MIN_HIERARCHICAL_ELEMENTS: usize = 1 << 20;
+    // 2,000 is a stable fast candidate on CubeCL's WGSL reducer for the 64M acceptance case.
+    // The nominal 4,096 candidate periodically selects a plan with ~0.20 ms extra overhead.
+    const TARGET_CHUNK_ELEMENTS: usize = 2000;
+    const MIN_CHUNK_ELEMENTS: usize = 256;
+
+    if elements < MIN_HIERARCHICAL_ELEMENTS {
+        return None;
+    }
+    (MIN_CHUNK_ELEMENTS..=TARGET_CHUNK_ELEMENTS.min(elements))
+        .rev()
+        .find(|chunk| elements.is_multiple_of(*chunk))
+}
+
+fn reduction_stage_chunk_size(elements: usize) -> Option<usize> {
+    const TARGET_CHUNK_ELEMENTS: usize = 2000;
+    const SINGLE_ROW_TAIL_ELEMENTS: usize = 65_536;
+
+    let target = if elements <= SINGLE_ROW_TAIL_ELEMENTS {
+        elements
+    } else {
+        TARGET_CHUNK_ELEMENTS.min(elements)
+    };
+    (2..=target)
+        .rev()
+        .find(|chunk| elements.is_multiple_of(*chunk))
+}
+
+fn arg_reduction_chunk_size(elements: usize) -> Option<usize> {
+    const MIN_HIERARCHICAL_ELEMENTS: usize = 1 << 20;
+
+    if elements < MIN_HIERARCHICAL_ELEMENTS {
+        return None;
+    }
+    [4096, 2048, 1024, 512, 256]
+        .into_iter()
+        .find(|chunk| elements.is_multiple_of(*chunk))
+}
+
 fn broadcast_shape(left: &[usize], right: &[usize]) -> Result<Vec<usize>> {
     let rank = left.len().max(right.len());
     let mut output = Vec::with_capacity(rank);
@@ -1789,6 +1833,45 @@ impl DynTensor {
     pub fn sum_dims(mut self, dims: &[usize]) -> Self {
         let input_dims = self.dims();
         if !input_dims.contains(&0) {
+            if reduces_all_dims(input_dims.len(), dims) {
+                let output_dims = vec![1; input_dims.len()];
+                let elements = input_dims.into_iter().product::<usize>();
+                if reduction_chunk_size(elements).is_some() {
+                    // Keep every stage in the fast row-reduction path. Stopping after the first
+                    // stage and calling scalar `sum` costs more than the 64M-element first pass.
+                    let mut remaining = elements;
+                    let mut reduced = self
+                        .reshape(vec![elements])
+                        .expect("hierarchical sum flatten preserves the element count");
+                    while let Some(chunk) = reduction_stage_chunk_size(remaining) {
+                        reduced = reduced
+                            .reshape(vec![remaining / chunk, chunk])
+                            .expect("hierarchical sum reshape preserves the element count")
+                            .sum_dims(&[1])
+                            .reshape(vec![remaining / chunk])
+                            .expect("hierarchical sum rows preserve the element count");
+                        remaining /= chunk;
+                        if remaining == 1 {
+                            return reduced
+                                .reshape(output_dims)
+                                .expect("all-dimension sum output has one element");
+                        }
+                    }
+                    self = reduced;
+                }
+                // Small or indivisible tails use Burn's optimized scalar fallback.
+                let reduced = match self {
+                    Self::R1(tensor) => Self::R1(tensor.sum()),
+                    Self::R2(tensor) => Self::R1(tensor.sum()),
+                    Self::R3(tensor) => Self::R1(tensor.sum()),
+                    Self::R4(tensor) => Self::R1(tensor.sum()),
+                    Self::R5(tensor) => Self::R1(tensor.sum()),
+                    Self::R6(tensor) => Self::R1(tensor.sum()),
+                };
+                return reduced
+                    .reshape(output_dims)
+                    .expect("all-dimension sum output has one element");
+            }
             return map_float!(self, |tensor| tensor.sum_dims(dims));
         }
 
@@ -1820,6 +1903,10 @@ impl DynTensor {
 
     /// Average elements along dimensions while retaining singleton dimensions.
     pub fn mean_dims(self, dims: &[usize]) -> Self {
+        if reduces_all_dims(self.rank(), dims) && !self.dims().contains(&0) {
+            let element_count = self.dims().into_iter().product::<usize>();
+            return self.sum_dims(dims).div_scalar(element_count as f64);
+        }
         map_float!(self, |tensor| tensor.mean_dims(dims))
     }
 
@@ -1829,12 +1916,84 @@ impl DynTensor {
     }
 
     /// Take the maximum along dimensions while retaining singleton dimensions.
-    pub fn reduce_max_dims(self, dims: &[usize]) -> Self {
+    pub fn reduce_max_dims(mut self, dims: &[usize]) -> Self {
+        if reduces_all_dims(self.rank(), dims) && !self.dims().contains(&0) {
+            let output_dims = vec![1; self.rank()];
+            let elements = self.dims().into_iter().product::<usize>();
+            if reduction_chunk_size(elements).is_some() {
+                let mut remaining = elements;
+                let mut reduced = self
+                    .reshape(vec![elements])
+                    .expect("hierarchical maximum flatten preserves the element count");
+                while let Some(chunk) = reduction_stage_chunk_size(remaining) {
+                    reduced = reduced
+                        .reshape(vec![remaining / chunk, chunk])
+                        .expect("hierarchical maximum reshape preserves the element count")
+                        .reduce_max_dims(&[1])
+                        .reshape(vec![remaining / chunk])
+                        .expect("hierarchical maximum rows preserve the element count");
+                    remaining /= chunk;
+                    if remaining == 1 {
+                        return reduced
+                            .reshape(output_dims)
+                            .expect("all-dimension maximum output has one element");
+                    }
+                }
+                self = reduced;
+            }
+            let reduced = match self {
+                Self::R1(tensor) => Self::R1(tensor.max()),
+                Self::R2(tensor) => Self::R1(tensor.max()),
+                Self::R3(tensor) => Self::R1(tensor.max()),
+                Self::R4(tensor) => Self::R1(tensor.max()),
+                Self::R5(tensor) => Self::R1(tensor.max()),
+                Self::R6(tensor) => Self::R1(tensor.max()),
+            };
+            return reduced
+                .reshape(output_dims)
+                .expect("all-dimension maximum output has one element");
+        }
         map_float!(self, |tensor| tensor.max_dims(dims))
     }
 
     /// Take the minimum along dimensions while retaining singleton dimensions.
-    pub fn reduce_min_dims(self, dims: &[usize]) -> Self {
+    pub fn reduce_min_dims(mut self, dims: &[usize]) -> Self {
+        if reduces_all_dims(self.rank(), dims) && !self.dims().contains(&0) {
+            let output_dims = vec![1; self.rank()];
+            let elements = self.dims().into_iter().product::<usize>();
+            if reduction_chunk_size(elements).is_some() {
+                let mut remaining = elements;
+                let mut reduced = self
+                    .reshape(vec![elements])
+                    .expect("hierarchical minimum flatten preserves the element count");
+                while let Some(chunk) = reduction_stage_chunk_size(remaining) {
+                    reduced = reduced
+                        .reshape(vec![remaining / chunk, chunk])
+                        .expect("hierarchical minimum reshape preserves the element count")
+                        .reduce_min_dims(&[1])
+                        .reshape(vec![remaining / chunk])
+                        .expect("hierarchical minimum rows preserve the element count");
+                    remaining /= chunk;
+                    if remaining == 1 {
+                        return reduced
+                            .reshape(output_dims)
+                            .expect("all-dimension minimum output has one element");
+                    }
+                }
+                self = reduced;
+            }
+            let reduced = match self {
+                Self::R1(tensor) => Self::R1(tensor.min()),
+                Self::R2(tensor) => Self::R1(tensor.min()),
+                Self::R3(tensor) => Self::R1(tensor.min()),
+                Self::R4(tensor) => Self::R1(tensor.min()),
+                Self::R5(tensor) => Self::R1(tensor.min()),
+                Self::R6(tensor) => Self::R1(tensor.min()),
+            };
+            return reduced
+                .reshape(output_dims)
+                .expect("all-dimension minimum output has one element");
+        }
         map_float!(self, |tensor| tensor.min_dims(dims))
     }
 
@@ -2242,6 +2401,15 @@ impl DynTensor {
 
     /// Return indices of extrema along one dimension using ONNX tie semantics.
     pub fn arg_extreme(self, dim: usize, maximum: bool, select_last: bool) -> DynInt {
+        let axis_size = self.dims()[dim];
+        if self.rank() == 1
+            && self.dtype() == DType::F32
+            && self.device().inner() != Device::flex()
+            && let Some(chunk) = arg_reduction_chunk_size(axis_size)
+        {
+            return self.arg_extreme_flat_hierarchical(chunk, maximum, select_last);
+        }
+
         macro_rules! apply {
             ($tensor:expr) => {{
                 let tensor = $tensor;
@@ -2251,9 +2419,7 @@ impl DynTensor {
                 } else {
                     f64::NEG_INFINITY
                 };
-                let tensor = tensor
-                    .clone()
-                    .mask_where(nan_mask, tensor.full_like(nan_value));
+                let tensor = tensor.mask_fill(nan_mask, nan_value);
                 let axis_size = tensor.dims()[dim] as i64;
                 let indices = if maximum {
                     if select_last {
@@ -2288,6 +2454,90 @@ impl DynTensor {
         }
     }
 
+    fn arg_extreme_flat_hierarchical(
+        self,
+        chunk: usize,
+        maximum: bool,
+        select_last: bool,
+    ) -> DynInt {
+        let elements = self.dims()[0];
+        let rows = elements / chunk;
+        let device = self.device();
+        let values = self
+            .reshape(vec![rows, chunk])
+            .expect("hierarchical arg-extreme reshape preserves the element count")
+            .permute(vec![1, 0])
+            .expect("hierarchical arg-extreme transpose has rank two");
+        let dtype = values.dtype();
+        let nan_value = if maximum {
+            f64::INFINITY
+        } else {
+            f64::NEG_INFINITY
+        };
+        let indexed_values = if select_last {
+            values.clone().flip_dim(0)
+        } else {
+            values.clone()
+        };
+        let local_winners = match indexed_values {
+            Self::R2(tensor) if maximum => DynInt::R2(tensor.argmax(0)),
+            Self::R2(tensor) => DynInt::R2(tensor.argmin(0)),
+            _ => unreachable!("hierarchical arg-extreme first stage has rank two"),
+        };
+        let local_winners = if select_last {
+            local_winners.mul_scalar(-1).add_scalar(chunk as i64 - 1)
+        } else {
+            local_winners
+        };
+        let row_values = values
+            .gather(0, local_winners.clone())
+            .expect("row winner indices gather from the original values")
+            .reshape(vec![1, rows])
+            .expect("one extremum is retained per row");
+        // Local positions never exceed the chunk size, so f32 carries them exactly. Packing all
+        // compact stage-one outputs into one readback avoids a synchronization per result.
+        let compact = Self::concat(
+            vec![
+                row_values,
+                local_winners
+                    .to_float(dtype)
+                    .reshape(vec![1, rows])
+                    .expect("one local winner is retained per row"),
+            ],
+            0,
+        )
+        .expect("compact arg-extreme outputs have matching shapes");
+        let compact = compact.into_data().iter::<f32>().collect::<Vec<_>>();
+        let row_values = &compact[..rows];
+        let local_winners = &compact[rows..];
+        let mut winning_row = 0;
+        for row in 1..rows {
+            let row_value = if row_values[row].is_nan() {
+                nan_value as f32
+            } else {
+                row_values[row]
+            };
+            let winner_value = if row_values[winning_row].is_nan() {
+                nan_value as f32
+            } else {
+                row_values[winning_row]
+            };
+            let ordered_better = if maximum {
+                row_value > winner_value
+            } else {
+                row_value < winner_value
+            };
+            let tied_last = select_last && row_value == winner_value;
+            if ordered_better || tied_last {
+                winning_row = row;
+            }
+        }
+        let local = local_winners[winning_row] as usize;
+        let index = winning_row * chunk + local;
+        DynInt::from_data(TensorData::new(vec![index as i64], [1]), 1, &device)
+            .expect("hierarchical arg-extreme result has a supported rank and dtype")
+    }
+
     /// Clamp every element to the optional lower and upper bounds.
     pub fn clip(self, min: Option<f64>, max: Option<f64>) -> Self {
         match (min, max) {
@@ -2306,6 +2556,12 @@ impl DynTensor {
         let output_shape = broadcast_shape(&output_shape, &otherwise.dims())?;
         let rank = output_shape.len();
         let dtype = then.dtype();
+        let device = then.device();
+        ensure_same_device("where", &condition.device(), &device)?;
+        ensure_same_device("where", &otherwise.device(), &device)?;
+        if output_shape.contains(&0) {
+            return Self::empty(&output_shape, &device, dtype);
+        }
         Ok(where_float!(
             condition.to_rank(rank)?.expand(&output_shape)?,
             then.to_rank(rank)?.expand(&output_shape)?,
@@ -2777,6 +3033,17 @@ impl DynInt {
 
     /// Return indices of extrema along one dimension using ONNX tie semantics.
     pub fn arg_extreme(self, dim: usize, maximum: bool, select_last: bool) -> Self {
+        let device = self.device();
+        if self.dtype() == DType::I64 && device.clone().inner() != Device::flex() {
+            // CubeCL's i64 arg-reduction candidates have historically emitted invalid WGSL and
+            // returned invalid indices. Keep the unsafe backend entirely out of pre-dispatch:
+            // execute the slow, correct Flex operation and copy the small index result back.
+            return self
+                .to_device(&Device::flex())
+                .arg_extreme(dim, maximum, select_last)
+                .to_device(&device);
+        }
+
         macro_rules! apply {
             ($tensor:expr) => {{
                 let tensor = $tensor;
@@ -3107,6 +3374,12 @@ impl DynInt {
         let output_shape = broadcast_shape(&output_shape, &otherwise.dims())?;
         let rank = output_shape.len();
         let dtype = then.dtype();
+        let device = then.device();
+        ensure_same_device("where", &condition.device(), &device)?;
+        ensure_same_device("where", &otherwise.device(), &device)?;
+        if output_shape.contains(&0) {
+            return Self::empty(&output_shape, &device, dtype);
+        }
         Ok(where_int!(
             condition.to_rank(rank)?.expand(&output_shape)?,
             then.to_rank(rank)?.expand(&output_shape)?,
@@ -3420,6 +3693,21 @@ impl DynBool {
     /// Take the maximum along dimensions while retaining singleton dimensions.
     pub fn reduce_max_dims(self, dims: &[usize]) -> Self {
         // Boolean values are exact in f32, avoiding WGPU's non-portable i64 reduction shader.
+        if reduces_all_dims(self.rank(), dims) {
+            let output_dims = vec![1; self.rank()];
+            let elements = self.dims().into_iter().product::<usize>();
+            if let Some(chunk) = reduction_chunk_size(elements) {
+                return self
+                    .reshape(vec![elements / chunk, chunk])
+                    .expect("hierarchical boolean maximum reshape preserves the element count")
+                    .reduce_max_dims(&[1])
+                    .reshape(vec![elements / chunk])
+                    .expect("hierarchical boolean maximum rows preserve the element count")
+                    .reduce_max_dims(&[0])
+                    .reshape(output_dims)
+                    .expect("all-dimension boolean maximum output has one element");
+            }
+        }
         map_bool!(self, |tensor| tensor
             .float()
             .cast(DType::F32)
@@ -3430,6 +3718,21 @@ impl DynBool {
     /// Take the minimum along dimensions while retaining singleton dimensions.
     pub fn reduce_min_dims(self, dims: &[usize]) -> Self {
         // Boolean values are exact in f32, avoiding WGPU's non-portable i64 reduction shader.
+        if reduces_all_dims(self.rank(), dims) {
+            let output_dims = vec![1; self.rank()];
+            let elements = self.dims().into_iter().product::<usize>();
+            if let Some(chunk) = reduction_chunk_size(elements) {
+                return self
+                    .reshape(vec![elements / chunk, chunk])
+                    .expect("hierarchical boolean minimum reshape preserves the element count")
+                    .reduce_min_dims(&[1])
+                    .reshape(vec![elements / chunk])
+                    .expect("hierarchical boolean minimum rows preserve the element count")
+                    .reduce_min_dims(&[0])
+                    .reshape(output_dims)
+                    .expect("all-dimension boolean minimum output has one element");
+            }
+        }
         map_bool!(self, |tensor| tensor
             .float()
             .cast(DType::F32)
@@ -3442,6 +3745,12 @@ impl DynBool {
         let output_shape = broadcast_shape(&condition.dims(), &then.dims())?;
         let output_shape = broadcast_shape(&output_shape, &otherwise.dims())?;
         let rank = output_shape.len();
+        let device = then.device();
+        ensure_same_device("where", &condition.device(), &device)?;
+        ensure_same_device("where", &otherwise.device(), &device)?;
+        if output_shape.contains(&0) {
+            return Self::empty(&output_shape, &device);
+        }
         Ok(where_bool!(
             condition.to_rank(rank)?.expand(&output_shape)?,
             then.to_rank(rank)?.expand(&output_shape)?,
@@ -3608,5 +3917,29 @@ mod tests {
 
         assert!(minimum.is_nan());
         assert!(maximum.is_nan());
+    }
+
+    #[test]
+    fn all_dimension_reductions_retain_rank_and_values() {
+        let device = Device::default();
+        let tensor = DynTensor::from_data(
+            TensorData::new(vec![1.0_f32, 2.0, 3.0, 4.0, 5.0, 6.0], [2, 3]),
+            2,
+            &device,
+        )
+        .unwrap();
+
+        for (reduced, expected) in [
+            (tensor.clone().sum_dims(&[1, 0]), 21.0),
+            (tensor.clone().mean_dims(&[1, 0]), 3.5),
+            (tensor.clone().reduce_max_dims(&[1, 0]), 6.0),
+            (tensor.reduce_min_dims(&[1, 0]), 1.0),
+        ] {
+            assert_eq!(reduced.dims(), [1, 1]);
+            assert_eq!(
+                reduced.into_data().iter::<f32>().collect::<Vec<_>>(),
+                [expected]
+            );
+        }
     }
 }
