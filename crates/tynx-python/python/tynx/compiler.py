@@ -5,6 +5,7 @@ from collections import OrderedDict as _OrderedDict
 from collections.abc import Callable as _Callable
 from collections.abc import Iterable as _Iterable
 from collections.abc import Iterator as _Iterator
+from contextvars import ContextVar as _ContextVar
 from inspect import BoundArguments as _BoundArguments
 from inspect import Parameter as _Parameter
 from inspect import Signature as _Signature
@@ -17,11 +18,24 @@ from typing import TypeVar as _TypeVar
 from typing import Union as _Union
 from typing import cast as _cast
 from typing import overload as _overload
+from weakref import ReferenceType as _ReferenceType
 from weakref import WeakKeyDictionary as _WeakKeyDictionary
+from weakref import ref as _ref
 
 from ._tynx import Tensor, _CapturedGraph, _CaptureSession
 
 R = _TypeVar("R")
+_ModuleGuard = tuple[tuple[_ReferenceType[object], bool], ...]
+_ACTIVE_MODULE_CALLS: _ContextVar[_Optional[dict[int, object]]] = _ContextVar(
+    "tynx_compile_module_calls", default=None
+)
+
+
+def _record_module_call(module: object) -> None:
+    """Record a module whose mode can affect the graph currently being captured."""
+    active = _ACTIVE_MODULE_CALLS.get()
+    if active is not None:
+        active.setdefault(id(module), module)
 
 
 class CompiledFunction(_Generic[R]):
@@ -33,6 +47,7 @@ class CompiledFunction(_Generic[R]):
         *,
         fullgraph: bool = False,
         static_argnames: _Iterable[str] = (),
+        _bound_module: _Optional[object] = None,
     ) -> None:
         if not callable(function):
             raise TypeError(f"compile expected a callable, got {type(function).__qualname__}")
@@ -41,7 +56,12 @@ class CompiledFunction(_Generic[R]):
         self._fullgraph = fullgraph
         self._static_argnames = _validate_static_argnames(self._signature, static_argnames)
         self._graphs: list[
-            tuple[tuple[tuple[str, type[object], object], ...], _CapturedGraph, object]
+            tuple[
+                tuple[tuple[str, type[object], object], ...],
+                _CapturedGraph,
+                object,
+                _ModuleGuard,
+            ]
         ] = []
         self._fallback = False
         self._warned = False
@@ -50,6 +70,7 @@ class CompiledFunction(_Generic[R]):
         self.fallback_count = 0
         self.replay_count = 0
         self.last_fallback_reason: _Optional[str] = None
+        self._bound_module = None if _bound_module is None else _ref(_bound_module)
         self._bound_instances: _WeakKeyDictionary[object, CompiledFunction[R]] = (
             _WeakKeyDictionary()
         )
@@ -71,10 +92,13 @@ class CompiledFunction(_Generic[R]):
         static_argnames = self._static_argnames.difference(
             {receiver} if receiver in ("self", "cls") else set()
         )
+        from .nn.modules.module import Module
+
         bound = CompiledFunction(
             _cast(_Callable[..., R], _MethodType(self._function, instance)),
             fullgraph=self._fullgraph,
             static_argnames=static_argnames,
+            _bound_module=instance if isinstance(instance, Module) else None,
         )
         self._bound_instances[instance] = bound
         return bound
@@ -87,7 +111,7 @@ class CompiledFunction(_Generic[R]):
     @property
     def node_counts(self) -> tuple[int, ...]:
         """Recorded IR node count for each cached graph."""
-        return tuple(graph.node_count for _, graph, _ in self._graphs)
+        return tuple(graph.node_count for _, graph, _, _ in self._graphs)
 
     def clear_cache(self) -> None:
         """Discard captured graphs and retry capture on the next compatible call."""
@@ -115,15 +139,29 @@ class CompiledFunction(_Generic[R]):
             return self._function(*args, **kwargs)
 
         tensor_args, static_key = prepared
-        valid_graphs = [entry for entry in self._graphs if entry[1].structure_valid]
+        valid_graphs = [
+            entry
+            for entry in self._graphs
+            if entry[1].structure_valid and _module_guard_alive(entry[3])
+        ]
         self.invalidation_count += len(self._graphs) - len(valid_graphs)
         self._graphs = valid_graphs
-        for cached_static_key, graph, output_spec in self._graphs:
-            if cached_static_key == static_key and graph.matches(*tensor_args):
+        for cached_static_key, graph, output_spec, module_guard in self._graphs:
+            if (
+                cached_static_key == static_key
+                and _module_guard_matches(module_guard)
+                and graph.matches(*tensor_args)
+            ):
                 self.replay_count += 1
                 return _cast(R, _restore_output(iter(graph(*tensor_args)), output_spec))
 
         session = _CaptureSession(fullgraph=self._fullgraph)
+        module_calls: dict[int, object] = {}
+        if self._bound_module is not None:
+            module = self._bound_module()
+            if module is not None:
+                module_calls[id(module)] = module
+        module_token = _ACTIVE_MODULE_CALLS.set(module_calls)
         try:
             traced = iter(session.input(argument) for argument in tensor_args)
             traced_bound = _replace_tensor_arguments(bound, traced)
@@ -131,6 +169,8 @@ class CompiledFunction(_Generic[R]):
         except BaseException:
             session.abort()
             raise
+        finally:
+            _ACTIVE_MODULE_CALLS.reset(module_token)
         flattened = _flatten_output(output)
         if isinstance(flattened, str):
             reason = flattened
@@ -150,7 +190,10 @@ class CompiledFunction(_Generic[R]):
             self._disable("an unsupported tensor operation or trace-disconnected output")
             self.fallback_count += 1
             return _cast(R, released_output)
-        self._graphs.append((static_key, captured_graph, output_spec))
+        module_guard = tuple(
+            (_ref(module), bool(_cast(_Any, module).training)) for module in module_calls.values()
+        )
+        self._graphs.append((static_key, captured_graph, output_spec, module_guard))
         self.compile_count += 1
         return _cast(R, released_output)
 
@@ -238,6 +281,18 @@ def _restore_output(tensors: _Iterator[Tensor], spec: object) -> object:
             for key, item in _cast(tuple[tuple[str, object], ...], contents)
         }
     raise RuntimeError(f"unknown captured output kind {kind!r}")
+
+
+def _module_guard_alive(guard: _ModuleGuard) -> bool:
+    return all(reference() is not None for reference, _ in guard)
+
+
+def _module_guard_matches(guard: _ModuleGuard) -> bool:
+    for reference, training in guard:
+        module = reference()
+        if module is None or getattr(module, "training", None) is not training:
+            return False
+    return True
 
 
 def _validate_static_argnames(signature: _Signature, names: _Iterable[str]) -> frozenset[str]:
