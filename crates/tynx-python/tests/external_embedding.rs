@@ -1,7 +1,7 @@
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, Mutex, Weak};
 
 use _tynx::wrap_external_tensor;
-use pyo3::prelude::*;
+use pyo3::{prelude::*, types::PyDict};
 use tynx_core::{
     DType, ExternalAccess, ExternalSubmission, ExternalTensorDescriptor, ExternalWgpuContext,
     Result, SubmissionToken,
@@ -11,6 +11,8 @@ use tynx_core::{
 struct AllocationOwner;
 
 struct Submitted;
+
+static PYTHON_TEST: Mutex<()> = Mutex::new(());
 
 impl ExternalSubmission for Submitted {
     fn ensure_visible(&self) -> Result<()> {
@@ -22,10 +24,7 @@ fn noop_context() -> (ExternalWgpuContext, wgpu::Device, wgpu::Queue) {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: wgpu::Backends::NOOP,
         backend_options: wgpu::BackendOptions {
-            noop: wgpu::NoopBackendOptions {
-                enable: true,
-                ..Default::default()
-            },
+            noop: wgpu::NoopBackendOptions { enable: true },
             ..Default::default()
         },
         ..wgpu::InstanceDescriptor::new_without_display_handle()
@@ -50,7 +49,6 @@ fn executing_context() -> Option<(ExternalWgpuContext, wgpu::Device, wgpu::Queue
         power_preference: wgpu::PowerPreference::LowPower,
         force_fallback_adapter: false,
         compatible_surface: None,
-        ..Default::default()
     }))
     .ok()?;
     let (device, queue) = pollster::block_on(
@@ -118,6 +116,7 @@ fn descriptor(
 
 #[test]
 fn wraps_an_adopted_inference_tensor_without_changing_its_storage() {
+    let _serial = PYTHON_TEST.lock().unwrap();
     Python::initialize();
     let (context, device, queue) = noop_context();
     let (descriptor, owner) = descriptor(&context, &device, &queue);
@@ -134,12 +133,13 @@ fn wraps_an_adopted_inference_tensor_without_changing_its_storage() {
     .unwrap();
 
     assert!(owner.upgrade().is_some());
-    drop(tensor);
+    Python::attach(|_| drop(tensor));
     context.reclaim_unused_external_buffers().unwrap();
 }
 
 #[test]
 fn executes_python_inference_over_an_adopted_tensor() {
+    let _serial = PYTHON_TEST.lock().unwrap();
     Python::initialize();
     let Some((context, device, queue)) = executing_context() else {
         eprintln!("skipping Python external inference test: no executing WGPU adapter");
@@ -163,7 +163,88 @@ fn executes_python_inference_over_an_adopted_tensor() {
     .unwrap();
 
     assert!(owner.upgrade().is_some());
-    drop(tensor);
+    Python::attach(|_| drop(tensor));
+    context.reclaim_unused_external_buffers().unwrap();
+    assert!(owner.upgrade().is_none());
+}
+
+#[test]
+fn wraps_an_adopted_autodiff_tensor_as_a_python_constant() {
+    let _serial = PYTHON_TEST.lock().unwrap();
+    Python::initialize();
+    let (context, device, queue) = noop_context();
+    let (descriptor, owner) = descriptor(&context, &device, &queue);
+    let external = context.adopt_f32_training(descriptor).unwrap();
+
+    let tensor = Python::attach(|py| -> PyResult<_> {
+        let tensor = wrap_external_tensor(py, external)?;
+        let value = tensor.bind(py);
+        assert_eq!(value.get_type().name()?.extract::<String>()?, "Tensor");
+        assert_eq!(value.getattr("shape")?.extract::<Vec<usize>>()?, [4]);
+        assert!(!value.getattr("requires_grad")?.extract::<bool>()?);
+        Ok(tensor)
+    })
+    .unwrap();
+
+    assert!(owner.upgrade().is_some());
+    Python::attach(|_| drop(tensor));
+    context.reclaim_unused_external_buffers().unwrap();
+}
+
+#[test]
+fn backward_retains_an_external_input_after_its_python_wrapper_drops() {
+    let _serial = PYTHON_TEST.lock().unwrap();
+    Python::initialize();
+    let Some((context, device, queue)) = executing_context() else {
+        eprintln!("skipping Python external autodiff test: no executing WGPU adapter");
+        return;
+    };
+    let (descriptor, owner) = descriptor(&context, &device, &queue);
+    let external = context.adopt_f32_training(descriptor).unwrap();
+
+    let (input, parameter, loss) = Python::attach(|py| -> PyResult<_> {
+        let input = wrap_external_tensor(py, external)?;
+        let value = input.bind(py);
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("device", value.getattr("device")?)?;
+        kwargs.set_item("requires_grad", true)?;
+        let parameter = value
+            .get_type()
+            .call((vec![2.0_f32; 4],), Some(&kwargs))?
+            .unbind();
+        let loss = value
+            .call_method1("__mul__", (parameter.bind(py),))?
+            .call_method0("mean")?
+            .unbind();
+        Ok((input, parameter, loss))
+    })
+    .unwrap();
+
+    Python::attach(|_| drop(input));
+    context.reclaim_unused_external_buffers().unwrap();
+    assert!(
+        owner.upgrade().is_some(),
+        "the autodiff tape released the external allocation before backward"
+    );
+
+    Python::attach(|py| -> PyResult<()> {
+        loss.bind(py).call_method0("backward")?;
+        assert_eq!(
+            parameter
+                .bind(py)
+                .getattr("grad")?
+                .call_method0("tolist")?
+                .extract::<Vec<f64>>()?,
+            [0.25, 0.5, 0.75, 1.0]
+        );
+        Ok(())
+    })
+    .unwrap();
+
+    Python::attach(|_| {
+        drop(loss);
+        drop(parameter);
+    });
     context.reclaim_unused_external_buffers().unwrap();
     assert!(owner.upgrade().is_none());
 }
