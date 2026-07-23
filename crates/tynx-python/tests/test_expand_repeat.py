@@ -61,7 +61,13 @@ def test_leading_expand_replays_under_capture_and_repeat_rejects_strict_capture(
     value = tynx.Tensor([1.0, 2.0, 3.0])
 
     assert expanded(value).tolist() == [[1.0, 2.0, 3.0], [1.0, 2.0, 3.0]]
-    assert expanded(value).tolist() == [[1.0, 2.0, 3.0], [1.0, 2.0, 3.0]]
+    replay_input = tynx.Tensor([4.0, 5.0, 6.0], requires_grad=True)
+    replay = expanded(replay_input)
+    replay.sum().backward()
+    assert replay.tolist() == [[4.0, 5.0, 6.0], [4.0, 5.0, 6.0]]
+    assert replay_input.grad is not None
+    assert replay_input.grad.tolist() == [2.0, 2.0, 2.0]
+    assert expanded.replay_count == 1
 
     repeated = tynx.compile(lambda input: input.repeat(2), fullgraph=True)
     with pytest.raises(RuntimeError, match="cannot capture"):

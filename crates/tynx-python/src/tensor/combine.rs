@@ -8,7 +8,11 @@ use pyo3::{
 use tynx_core::{DynBool, DynInt, DynTensor};
 
 use super::{PyTensor, data::TensorValue, shape};
-use crate::{capture::record_combine, grad_mode::is_grad_enabled, to_python_error};
+use crate::{
+    capture::{record_combine, record_split},
+    grad_mode::is_grad_enabled,
+    to_python_error,
+};
 
 fn tensor_refs<'py>(
     values: &Bound<'py, PyAny>,
@@ -176,12 +180,11 @@ pub(super) fn split_outputs(
     split_size_or_sections: &Bound<'_, PyAny>,
     dim: isize,
 ) -> PyResult<Vec<PyTensor>> {
-    input.capture_unsupported("split")?;
     let value = input.source.value();
     let axis = shape::axis_value(dim, value.rank(), false, "split")?;
     let sizes = split_sizes(split_size_or_sections, value.dims()[axis])?;
     let tracking = is_grad_enabled();
-    match value {
+    let outputs: Vec<PyTensor> = match value {
         TensorValue::Float(_) => input
             .operation_float_value(tracking, "split")?
             .split(&sizes, axis)
@@ -197,11 +200,11 @@ pub(super) fn split_outputs(
                         }
                     })
                     .collect()
-            }),
+            })?,
         TensorValue::Int(value) => value
             .split(&sizes, axis)
             .map_err(to_python_error)
-            .map(|outputs| outputs.into_iter().map(PyTensor::from_int_inner).collect()),
+            .map(|outputs| outputs.into_iter().map(PyTensor::from_int_inner).collect())?,
         TensorValue::Bool(value) => {
             value
                 .split(&sizes, axis)
@@ -211,9 +214,10 @@ pub(super) fn split_outputs(
                         .into_iter()
                         .map(|value| PyTensor::from_value(TensorValue::Bool(value)))
                         .collect()
-                })
+                })?
         }
-    }
+    };
+    attach_split_traces(input, outputs, sizes, axis)
 }
 
 pub(super) fn chunk_outputs(
@@ -221,11 +225,10 @@ pub(super) fn chunk_outputs(
     chunks: usize,
     dim: isize,
 ) -> PyResult<Vec<PyTensor>> {
-    input.capture_unsupported("chunk")?;
     let value = input.source.value();
     let axis = shape::axis_value(dim, value.rank(), false, "chunk")?;
     let tracking = is_grad_enabled();
-    match value {
+    let outputs: Vec<PyTensor> = match value {
         TensorValue::Float(_) => input
             .operation_float_value(tracking, "chunk")?
             .chunk(chunks, axis)
@@ -241,11 +244,11 @@ pub(super) fn chunk_outputs(
                         }
                     })
                     .collect()
-            }),
+            })?,
         TensorValue::Int(value) => value
             .chunk(chunks, axis)
             .map_err(to_python_error)
-            .map(|outputs| outputs.into_iter().map(PyTensor::from_int_inner).collect()),
+            .map(|outputs| outputs.into_iter().map(PyTensor::from_int_inner).collect())?,
         TensorValue::Bool(value) => {
             value
                 .chunk(chunks, axis)
@@ -255,9 +258,30 @@ pub(super) fn chunk_outputs(
                         .into_iter()
                         .map(|value| PyTensor::from_value(TensorValue::Bool(value)))
                         .collect()
-                })
+                })?
         }
+    };
+    let sizes = outputs
+        .iter()
+        .map(|output| output.source.value().dims()[axis])
+        .collect();
+    attach_split_traces(input, outputs, sizes, axis)
+}
+
+fn attach_split_traces(
+    input: &PyTensor,
+    mut outputs: Vec<PyTensor>,
+    sizes: Vec<usize>,
+    axis: usize,
+) -> PyResult<Vec<PyTensor>> {
+    let Some(traces) = record_split(input, sizes, axis)? else {
+        return Ok(outputs);
+    };
+    debug_assert_eq!(outputs.len(), traces.len());
+    for (output, trace) in outputs.iter_mut().zip(traces) {
+        *output = output.with_trace(trace);
     }
+    Ok(outputs)
 }
 
 fn output_tuple(py: Python<'_>, outputs: Vec<PyTensor>) -> PyResult<Py<PyTuple>> {

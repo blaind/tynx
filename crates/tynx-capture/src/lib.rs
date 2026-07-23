@@ -298,13 +298,18 @@ enum Node {
         dim: usize,
         stack: bool,
     },
+    Split {
+        input: ValueId,
+        sizes: Vec<usize>,
+        dim: usize,
+    },
     Operation {
         operation: Rc<dyn CapturedOperation>,
         inputs: Vec<ValueId>,
         guards: Vec<ParameterGuard>,
     },
-    OperationOutput {
-        operation: ValueId,
+    Output {
+        producer: ValueId,
         output: usize,
     },
 }
@@ -498,6 +503,21 @@ impl GraphBuilder {
         Ok(self.push(Node::Combine { inputs, dim, stack }))
     }
 
+    /// Record an explicitly sized split and return one value identifier per section.
+    pub fn split(&mut self, input: ValueId, sizes: Vec<usize>, dim: usize) -> Result<Vec<ValueId>> {
+        self.require_value(input)?;
+        if sizes.is_empty() {
+            return Err(TynxError::TypeMismatch(
+                "captured split requires at least one section".to_string(),
+            ));
+        }
+        let output_count = sizes.len();
+        let producer = self.push(Node::Split { input, sizes, dim });
+        Ok((0..output_count)
+            .map(|output| self.push(Node::Output { producer, output }))
+            .collect())
+    }
+
     /// Record one native multi-input/multi-output operation.
     pub fn operation(
         &mut self,
@@ -522,13 +542,13 @@ impl GraphBuilder {
                 slot,
             })
             .collect();
-        let operation = self.push(Node::Operation {
+        let producer = self.push(Node::Operation {
             operation,
             inputs,
             guards,
         });
         Ok((0..output_count)
-            .map(|output| self.push(Node::OperationOutput { operation, output }))
+            .map(|output| self.push(Node::Output { producer, output }))
             .collect())
     }
 
@@ -626,11 +646,12 @@ fn node_differentiability(nodes: &[Node]) -> Vec<bool> {
             Node::Combine { inputs, .. } => {
                 inputs.iter().any(|input| differentiable[input.index()])
             }
+            Node::Split { input, .. } => differentiable[input.index()],
             Node::Operation { inputs, guards, .. } => {
                 inputs.iter().any(|input| differentiable[input.index()])
                     || guards.iter().any(|guard| guard.contract.trainable())
             }
-            Node::OperationOutput { operation, .. } => differentiable[operation.index()],
+            Node::Output { producer, .. } => differentiable[producer.index()],
         };
         differentiable.push(value);
     }
@@ -771,6 +792,9 @@ impl Graph {
                             .collect::<Result<Vec<_>>>()?;
                         NodeValue::Tensor(Box::new(execute_combine(inputs, *dim, *stack)?))
                     }
+                    Node::Split { input, sizes, dim } => {
+                        NodeValue::Outputs(execute_split(value(&values, *input)?, sizes, *dim)?)
+                    }
                     Node::Operation {
                         operation,
                         inputs,
@@ -793,12 +817,12 @@ impl Graph {
                         }
                         NodeValue::Outputs(outputs)
                     }
-                    Node::OperationOutput { operation, output } => {
-                        let outputs = operation_outputs(&values, *operation)?;
+                    Node::Output { producer, output } => {
+                        let outputs = operation_outputs(&values, *producer)?;
                         let output = outputs.get(*output).cloned().ok_or_else(|| {
                             TynxError::MissingValue(format!(
-                                "captured operation output {output} from node {}",
-                                operation.index()
+                                "captured output {output} from node {}",
+                                producer.index()
                             ))
                         })?;
                         NodeValue::Tensor(Box::new(output))
@@ -1226,6 +1250,23 @@ fn execute_combine(inputs: Vec<Value>, dim: usize, stack: bool) -> Result<Value>
         )),
         None => Err(TynxError::TypeMismatch(
             "captured tensor combination requires at least one input".to_string(),
+        )),
+    }
+}
+
+fn execute_split(input: Value, sizes: &[usize], dim: usize) -> Result<Vec<Value>> {
+    match input {
+        Value::Tensor(input) => input
+            .split(sizes, dim)
+            .map(|outputs| outputs.into_iter().map(Value::Tensor).collect()),
+        Value::Int(input) => input
+            .split(sizes, dim)
+            .map(|outputs| outputs.into_iter().map(Value::Int).collect()),
+        Value::Bool(input) => input
+            .split(sizes, dim)
+            .map(|outputs| outputs.into_iter().map(Value::Bool).collect()),
+        Value::Scalar(_) | Value::Shape(_) => Err(TynxError::TypeMismatch(
+            "captured split requires a device tensor".to_string(),
         )),
     }
 }

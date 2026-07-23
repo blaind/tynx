@@ -181,6 +181,10 @@ impl CaptureState {
         })
     }
 
+    fn split(&self, input: ValueId, sizes: Vec<usize>, dim: usize) -> PyResult<Vec<ValueId>> {
+        self.with_builder(|builder| builder.split(input, sizes, dim).map_err(to_python_error))
+    }
+
     fn zero_grad(&self, parameters: Vec<ParameterSlot>) -> PyResult<()> {
         self.with_builder(|builder| {
             builder.zero_grad(parameters);
@@ -494,6 +498,27 @@ pub(crate) fn record_combine(
     state
         .combine(inputs, dim, stack)
         .map(|value| Some(TraceValue { state, value }))
+}
+
+pub(crate) fn record_split(
+    input: &PyTensor,
+    sizes: Vec<usize>,
+    dim: usize,
+) -> PyResult<Option<Vec<TraceValue>>> {
+    let Some(trace) = trace_for(input)? else {
+        return Ok(None);
+    };
+    let state = trace.state;
+    let outputs = state.split(trace.value, sizes, dim)?;
+    Ok(Some(
+        outputs
+            .into_iter()
+            .map(|value| TraceValue {
+                state: state.clone(),
+                value,
+            })
+            .collect(),
+    ))
 }
 
 pub(crate) fn record_operation(
