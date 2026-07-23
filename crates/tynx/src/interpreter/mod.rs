@@ -24,7 +24,7 @@ mod hardmax;
 mod imputer;
 mod integer;
 mod logical;
-mod matrix;
+pub(crate) mod matrix;
 mod mel_weight_matrix;
 pub(crate) mod normalization;
 mod pad;

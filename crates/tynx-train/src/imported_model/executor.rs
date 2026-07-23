@@ -16,7 +16,7 @@ use tynx_core::onnx_ir::{
 };
 use tynx_core::{
     DynTensor, Env, Result, Session, TynxError, Value, execute, execute_onnx_gather,
-    execute_onnx_layer_normalization, resolve_onnx_padding2d,
+    execute_onnx_layer_normalization, execute_onnx_matmul, resolve_onnx_padding2d,
 };
 
 use crate::{ImportedState, InitializerId, InitializerRole, TrainabilityReport};
@@ -320,7 +320,8 @@ fn execute_linear(
     if node.config.transpose_weight {
         weight = weight.permute(vec![1, 0])?;
     }
-    let mut output = rank2_matmul(&node.name, input, weight)?;
+    let mut output =
+        execute_onnx_matmul(Value::Tensor(input), Value::Tensor(weight), device)?.into_tensor()?;
     if node.inputs.get(2).is_some_and(|input| !input.is_optional()) {
         output = add_bias(
             output,
@@ -368,7 +369,11 @@ fn execute_matmul(
 ) -> Result<Vec<Value>> {
     let left = resolve_tensor(node, node_index, 0, env, state, device, tracking)?;
     let right = resolve_tensor(node, node_index, 1, env, state, device, tracking)?;
-    Ok(vec![Value::Tensor(rank2_matmul(&node.name, left, right)?)])
+    Ok(vec![execute_onnx_matmul(
+        Value::Tensor(left),
+        Value::Tensor(right),
+        device,
+    )?])
 }
 
 fn resolve_tensor<N: NodeInputs>(

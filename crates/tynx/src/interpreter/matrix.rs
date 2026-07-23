@@ -235,7 +235,7 @@ fn subtract_zero_point(
     input.sub_broadcast(zero_point)
 }
 
-pub(super) fn matmul_values(left: Value, right: Value, device: &Device) -> Result<Value> {
+pub fn matmul_values(left: Value, right: Value, device: &Device) -> Result<Value> {
     match (left, right) {
         (Value::Tensor(left), Value::Tensor(right)) => {
             let dtype = left.dtype();

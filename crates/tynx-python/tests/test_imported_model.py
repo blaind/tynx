@@ -68,6 +68,13 @@ _LAYER_NORM_MODEL = bytes.fromhex(
     "130a0178120e0a0c080112080a0208020a02080262130a0179120e0a0c080112080a0208020a"
     "02080242040a001011"
 )
+_BATCHED_MATMUL_MODEL = bytes.fromhex(
+    "08083aaa010a2d0a01780a1170726f6a656374696f6e2e7765696768741201791a0a70726f"
+    "6a656374696f6e22064d61744d756c1212626174636865645f70726f6a656374696f6e2a33"
+    "08030802100122180000803f00000000000000000000803f0000803f0000803f421170726f"
+    "6a656374696f6e2e7765696768745a170a017812120a100801120c0a0208020a0208020a02"
+    "080362170a017912120a100801120c0a0208020a0208020a02080242040a00100d"
+)
 
 
 def _model_path(tmp_path: Path) -> Path:
@@ -199,6 +206,29 @@ def test_imported_layer_norm_trains_live_scale_and_bias(tmp_path: Path) -> None:
         [-1.399994, 0.599996, -1.399998, 0.599999],
         abs=1e-5,
     )
+
+
+def test_imported_batched_matmul_trains_rank_two_weight(tmp_path: Path) -> None:
+    path = tmp_path / "batched_matmul.onnx"
+    path.write_bytes(_BATCHED_MATMUL_MODEL)
+    model = tynx.load(path, trainable="auto", simplify=False)
+    input = tynx.Tensor(
+        [
+            [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
+            [[7.0, 8.0, 9.0], [10.0, 11.0, 12.0]],
+        ]
+    )
+
+    output = model(input)
+    assert output.shape == (2, 2, 2)
+    assert output.flatten().tolist() == pytest.approx(
+        [4.0, 5.0, 10.0, 11.0, 16.0, 17.0, 22.0, 23.0]
+    )
+    output.sum().backward()
+
+    weight = dict(model.named_parameters())["projection.weight"]
+    assert weight.grad is not None
+    assert weight.grad.flatten().tolist() == pytest.approx([22.0, 22.0, 26.0, 26.0, 30.0, 30.0])
 
 
 def test_imported_model_checkpoint_restores_weights_and_optimizer_state(tmp_path: Path) -> None:
