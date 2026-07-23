@@ -2,6 +2,7 @@
 
 mod capture;
 mod device;
+mod embedding;
 mod grad_mode;
 mod gradient;
 mod imported_model;
@@ -10,6 +11,8 @@ mod optimizer;
 mod parameter;
 mod random;
 mod tensor;
+
+pub use embedding::wrap_external_tensor;
 
 use std::path::PathBuf;
 
