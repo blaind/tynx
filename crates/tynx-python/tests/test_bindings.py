@@ -146,6 +146,25 @@ def test_tensor_matmul_supports_vector_cases() -> None:
     assert (vector @ vector).tolist() == pytest.approx([5.0])
 
 
+def test_empty_tensor_operations_raise_before_backend_dispatch() -> None:
+    empty_matrix = tynx.zeros(0, 3)
+    right = tynx.ones(3, 4)
+    empty_vector = tynx.zeros(0)
+
+    with pytest.raises(ValueError, match=r"matmul.*zero elements"):
+        empty_matrix @ right
+    for operation in (
+        empty_vector.sum,
+        empty_vector.mean,
+        empty_vector.max,
+        empty_vector.min,
+        empty_vector.argmax,
+        empty_vector.argmin,
+    ):
+        with pytest.raises(ValueError, match="zero elements"):
+            operation()
+
+
 def test_tensor_shape_mismatches_raise_value_error_before_dispatch() -> None:
     with pytest.raises(
         ValueError,
