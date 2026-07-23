@@ -21,6 +21,9 @@ class Module:
         raise NotImplementedError
 
     def __call__(self, *args: Any, **kwargs: Any) -> Tensor:
+        from ...compiler import _record_module_call
+
+        _record_module_call(self)
         return self.forward(*args, **kwargs)
 
     def parameters(self) -> list[Parameter]:

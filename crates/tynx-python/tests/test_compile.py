@@ -454,6 +454,29 @@ def test_captured_dropout_advances_and_replays_the_eager_rng_stream() -> None:
     assert forward.replay_count == 5
 
 
+def test_captured_module_training_mode_specializes_separate_graphs() -> None:
+    layer = tynx.nn.Dropout(1.0)
+    input = tynx.ones((1, 8))
+    calls = 0
+
+    @tynx.compile(fullgraph=True)
+    def forward(value: tynx.Tensor) -> tynx.Tensor:
+        nonlocal calls
+        calls += 1
+        return layer(value)
+
+    assert forward(input).tolist() == [[0.0] * 8]
+    layer.eval()
+    assert forward(input).tolist() == [[1.0] * 8]
+    layer.train()
+    assert forward(input).tolist() == [[0.0] * 8]
+
+    assert calls == 2
+    assert forward.compile_count == 2
+    assert forward.graph_count == 2
+    assert forward.replay_count == 1
+
+
 def test_captured_categorical_sampling_advances_and_matches_eager_rng() -> None:
     logits = tynx.Tensor([[0.1, 0.2, 0.7]] * 24)
     tynx.manual_seed(271828)
