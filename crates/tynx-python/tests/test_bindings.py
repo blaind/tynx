@@ -179,9 +179,29 @@ def test_tensor_numpy_round_trip(
     np.testing.assert_array_equal(output, array)
 
 
-def test_tensor_numpy_rejects_unsupported_or_mismatched_dtype() -> None:
-    with pytest.raises(TypeError, match="unsupported NumPy dtype"):
-        tynx.Tensor(np.asarray([1.0], dtype=np.float64))
+def test_tensor_numpy_normalizes_common_default_dtypes() -> None:
+    floats = np.asarray([[1.25, -2.5], [3.0, 4.5]], dtype=np.float64).T
+    integers = np.asarray([np.iinfo(np.int32).min, 7, np.iinfo(np.int32).max], dtype=np.int32)
+
+    float_tensor = tynx.Tensor(floats)
+    integer_tensor = tynx.Tensor(integers)
+
+    assert float_tensor.dtype == "float32"
+    assert integer_tensor.dtype == "int64"
+    np.testing.assert_array_equal(float_tensor.numpy(), floats.astype(np.float32))
+    np.testing.assert_array_equal(integer_tensor.numpy(), integers.astype(np.int64))
+    assert tynx.Tensor(np.asarray(2.5), dtype="float32").shape == (1,)
+    assert tynx.Tensor(integers, dtype="int64").tolist() == integers.tolist()
+
+
+def test_tensor_numpy_rejects_unsupported_or_mismatched_explicit_dtype() -> None:
+    with pytest.raises(TypeError, match="requested Tensor dtype float64"):
+        tynx.Tensor(
+            np.asarray([1.0], dtype=np.float64),
+            dtype="float64",  # type: ignore[arg-type]
+        )
+    with pytest.raises(TypeError, match="cannot match requested Tensor dtype int64"):
+        tynx.Tensor(np.asarray([1.0], dtype=np.float64), dtype="int64")
     with pytest.raises(TypeError, match="must match requested Tensor dtype float32"):
         tynx.Tensor(np.asarray([1], dtype=np.int64), dtype="float32")
 

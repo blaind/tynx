@@ -135,6 +135,35 @@ impl TensorValue {
         }
 
         extract!(f32, "float32", Float, DynTensor);
+        if let Ok(array) = data.extract::<PyReadonlyArrayDyn<'_, f64>>() {
+            if let Some(requested) = dtype
+                && requested != "float32"
+            {
+                return Err(PyTypeError::new_err(format!(
+                    "NumPy float64 data normalizes to float32 and cannot match requested Tensor dtype {requested}"
+                )));
+            }
+            let array = array.as_array();
+            let mut shape = array.shape().to_vec();
+            if shape.is_empty() {
+                shape.push(1);
+            }
+            if array.is_empty() {
+                return Err(PyValueError::new_err(
+                    "Tensor data cannot contain an empty NumPy array",
+                ));
+            }
+            let values = array.iter().map(|value| *value as f32).collect::<Vec<_>>();
+            return DynTensor::from_data(
+                TensorData::new(values, shape.clone()),
+                shape.len(),
+                device,
+            )
+            .map(Self::Float)
+            .map(|value| (value, None))
+            .map(Some)
+            .map_err(to_python_error);
+        }
         if let Ok(array) = data.extract::<PyReadonlyArrayDyn<'_, i64>>() {
             if let Some(requested) = dtype
                 && requested != "int64"
@@ -154,6 +183,35 @@ impl TensorValue {
                 ));
             }
             let values = array.iter().copied().collect::<Vec<_>>();
+            let bounds = IntBounds::from_values(&values);
+            return DynInt::from_data(TensorData::new(values, shape.clone()), shape.len(), device)
+                .map(Self::Int)
+                .map(|value| (value, Some(bounds)))
+                .map(Some)
+                .map_err(to_python_error);
+        }
+        if let Ok(array) = data.extract::<PyReadonlyArrayDyn<'_, i32>>() {
+            if let Some(requested) = dtype
+                && requested != "int64"
+            {
+                return Err(PyTypeError::new_err(format!(
+                    "NumPy int32 data normalizes to int64 and cannot match requested Tensor dtype {requested}"
+                )));
+            }
+            let array = array.as_array();
+            let mut shape = array.shape().to_vec();
+            if shape.is_empty() {
+                shape.push(1);
+            }
+            if array.is_empty() {
+                return Err(PyValueError::new_err(
+                    "Tensor data cannot contain an empty NumPy array",
+                ));
+            }
+            let values = array
+                .iter()
+                .map(|value| i64::from(*value))
+                .collect::<Vec<_>>();
             let bounds = IntBounds::from_values(&values);
             return DynInt::from_data(TensorData::new(values, shape.clone()), shape.len(), device)
                 .map(Self::Int)
@@ -191,7 +249,7 @@ impl TensorValue {
                 "NumPy array dtype must match requested Tensor dtype {dtype}"
             ))),
             None => Err(PyTypeError::new_err(
-                "unsupported NumPy dtype; expected float32, int64, or bool",
+                "unsupported NumPy dtype; expected float32, float64, int32, int64, or bool",
             )),
         }
     }
