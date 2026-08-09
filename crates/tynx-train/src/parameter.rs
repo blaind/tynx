@@ -156,6 +156,23 @@ impl ParameterSlot {
         self.state.borrow_mut().grad = None;
     }
 
+    /// Materialize an all-zero gradient when this slot has not accumulated one yet.
+    ///
+    /// Empty tensor identities can be differentiable even when the backend omits an empty
+    /// gradient from its backward result.
+    pub fn ensure_zero_grad(&self) -> Result<()> {
+        let mut state = self.state.borrow_mut();
+        if state.grad.is_none() {
+            state.grad = Some(DynTensor::full(
+                &state.contract.shape,
+                0.0,
+                &state.contract.device,
+                state.contract.dtype,
+            )?);
+        }
+        Ok(())
+    }
+
     pub(crate) fn replace_grad(&self, gradient: DynTensor) -> Result<()> {
         let mut state = self.state.borrow_mut();
         let gradient_device = tensor_device(&gradient);

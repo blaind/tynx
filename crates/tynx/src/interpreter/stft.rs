@@ -1,6 +1,9 @@
 //! Short-time Fourier transform execution.
 
-use burn::tensor::{DType, Device, Tensor, TensorData, signal::StftOptions, signal::stft};
+use burn::tensor::{
+    DType, Device, Tensor, TensorData,
+    signal::{StftOptions, stft},
+};
 use onnx_ir::node::stft::StftNode;
 
 use super::{Env, resolve};

@@ -1,7 +1,39 @@
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 import tynx
+
+
+def test_compile_cross_thread_use_raises_catchable_runtime_error() -> None:
+    compiled = tynx.compile(lambda input: input.relu())
+    input = tynx.Tensor([-1.0, 2.0])
+    assert compiled(input).tolist() == pytest.approx([0.0, 2.0])
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(compiled, input)
+        with pytest.raises(RuntimeError, match=r"thread-confined.*separate compiled function"):
+            future.result()
+
+    assert compiled(input).tolist() == pytest.approx([0.0, 2.0])
+    assert compiled.replay_count == 1
+
+
+def test_compile_descriptor_rejects_cross_thread_binding() -> None:
+    class Relu:
+        @tynx.compile
+        def forward(self, input: tynx.Tensor) -> tynx.Tensor:
+            return input.relu()
+
+    model = Relu()
+    descriptor = Relu.__dict__["forward"]
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(lambda: model.forward)
+        with pytest.raises(RuntimeError, match=r"thread-confined.*bind as a method"):
+            future.result()
+
+    assert len(descriptor._bound_instances) == 0
+    assert model.forward(tynx.Tensor([-1.0, 2.0])).tolist() == pytest.approx([0.0, 2.0])
 
 
 def test_compile_replays_linear_relu_without_python_dispatch() -> None:
@@ -808,3 +840,49 @@ def test_compile_descriptor_fallback_is_isolated_per_instance() -> None:
     assert eager.forward.fallback_count == 1
     assert captured.forward.compile_count == 1
     assert captured.forward.replay_count == 1
+
+
+def test_compile_replays_empty_matmul_sum_identity() -> None:
+    @tynx.compile(fullgraph=True)
+    def reduce_product(left: tynx.Tensor, right: tynx.Tensor) -> tynx.Tensor:
+        return (left @ right).sum()
+
+    left = tynx.zeros(0, 3, requires_grad=True)
+    right = tynx.ones(3, 4, requires_grad=True)
+
+    for _ in range(2):
+        left.zero_grad()
+        right.zero_grad()
+        loss = reduce_product(left, right)
+        assert loss.item() == 0.0
+        loss.backward()
+        assert left.grad is not None
+        assert left.grad.shape == (0, 3)
+        assert right.grad is not None
+        assert right.grad.tolist() == [[0.0, 0.0, 0.0, 0.0]] * 3
+
+    assert reduce_product.graph_count == 1
+    assert reduce_product.replay_count == 1
+
+
+def test_compile_replays_empty_vector_matmul() -> None:
+    @tynx.compile(fullgraph=True)
+    def dot(left: tynx.Tensor, right: tynx.Tensor) -> tynx.Tensor:
+        return left @ right
+
+    left = tynx.zeros(0, requires_grad=True)
+    right = tynx.zeros(0, requires_grad=True)
+
+    for _ in range(2):
+        left.zero_grad()
+        right.zero_grad()
+        result = dot(left, right)
+        assert result.item() == 0.0
+        result.backward()
+        assert left.grad is not None
+        assert left.grad.tolist() == []
+        assert right.grad is not None
+        assert right.grad.tolist() == []
+
+    assert dot.graph_count == 1
+    assert dot.replay_count == 1

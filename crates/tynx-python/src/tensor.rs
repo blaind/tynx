@@ -12,15 +12,29 @@ mod shape;
 
 use std::{
     cell::{Cell, RefCell},
+    mem,
+    ops::{Deref, DerefMut},
     panic::{AssertUnwindSafe, catch_unwind},
     rc::{Rc, Weak},
+    thread::{self, ThreadId},
 };
 
+pub(crate) use combine::{cat_py, chunk_py, split_py, stack_py};
+use comparison::{Comparison, MaskOperation};
+pub(crate) use data::IntBounds;
+use data::TensorValue;
+use extrema::Extremum;
+pub(crate) use factory::{
+    arange_py, empty_like_py, empty_py, full_like_py, full_py, ones_like_py, ones_py, rand_like_py,
+    rand_py, randint_py, randn_like_py, randn_py, zeros_like_py, zeros_py,
+};
+use fragile::Fragile;
 use pyo3::{
     exceptions::{PyIndexError, PyNotImplementedError, PyRuntimeError, PyTypeError, PyValueError},
     prelude::*,
     types::{PyAny, PyBool, PyList, PyTuple},
 };
+use reduction::ReductionSpec;
 use tynx_capture::{BinaryOp, UnaryOp};
 use tynx_core::{Device, DynInt, DynTensor, Gradients, Slice, TensorData, Value};
 use tynx_train::ParameterSlot;
@@ -34,29 +48,83 @@ use crate::{
     grad_mode::is_grad_enabled,
     to_python_error,
 };
-pub(crate) use combine::{cat_py, chunk_py, split_py, stack_py};
-use comparison::{Comparison, MaskOperation};
-pub(crate) use data::IntBounds;
-use data::TensorValue;
-use extrema::Extremum;
-pub(crate) use factory::{
-    arange_py, empty_like_py, empty_py, full_like_py, full_py, ones_like_py, ones_py, rand_like_py,
-    rand_py, randint_py, randn_like_py, randn_py, zeros_like_py, zeros_py,
-};
-use reduction::ReductionSpec;
 
 /// Eager device tensor with optional floating-point autodiff state.
 ///
-/// Burn-owned tensor state stays in a Rust heap allocation and the initial binding is explicitly
-/// unsendable. Operations return new tensors and delegate numerical semantics to `DynTensor`.
-#[pyclass(name = "Tensor", frozen, unsendable, subclass)]
+/// Burn-owned tensor state is confined to its construction thread.
+///
+/// The small sendable outer shell lets the binding reject cross-thread access with an ordinary
+/// Python exception before touching thread-confined state. Operations return new tensors and
+/// delegate numerical semantics to `DynTensor`.
+#[pyclass(name = "Tensor", frozen, subclass)]
 pub(crate) struct PyTensor {
+    // Unlike Python's numeric `threading.get_ident()`, Rust guarantees that a `ThreadId` is never
+    // reused during the lifetime of the process.
+    owner_thread: ThreadId,
+    inner: Option<Fragile<PyTensorInner>>,
+}
+
+pub(crate) struct PyTensorInner {
     source: TensorSource,
     int_bounds: Option<Rc<RefCell<Option<IntBounds>>>>,
     targets: Vec<GradTarget>,
     leaf: Option<Rc<LeafState>>,
     backward_graphs: Vec<Rc<BackwardGraph>>,
+    zero_missing_gradients: bool,
     trace: Option<TraceValue>,
+}
+
+impl PyTensor {
+    fn wrap(inner: PyTensorInner) -> Self {
+        Self {
+            owner_thread: thread::current().id(),
+            inner: Some(Fragile::new(inner)),
+        }
+    }
+
+    pub(crate) fn require_owner_thread(&self) -> PyResult<()> {
+        if thread::current().id() == self.owner_thread {
+            return Ok(());
+        }
+        Err(PyRuntimeError::new_err(
+            "tynx Tensor objects are thread-confined and cannot be used from a different thread; pass NumPy arrays between threads or create the Tensor in the worker thread",
+        ))
+    }
+}
+
+impl Deref for PyTensor {
+    type Target = PyTensorInner;
+
+    fn deref(&self) -> &Self::Target {
+        self.inner
+            .as_ref()
+            .expect("Tensor inner state exists until drop")
+            .get()
+    }
+}
+
+impl DerefMut for PyTensor {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.inner
+            .as_mut()
+            .expect("Tensor inner state exists until drop")
+            .get_mut()
+    }
+}
+
+impl Drop for PyTensor {
+    fn drop(&mut self) {
+        let Some(inner) = self.inner.take() else {
+            return;
+        };
+        if inner.is_valid() {
+            drop(inner);
+        } else {
+            // `Fragile` would panic while dropping thread-confined Rust state on another thread.
+            // Leaking in this exceptional misuse path is preferable to aborting the interpreter.
+            mem::forget(inner);
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -162,11 +230,11 @@ impl GradTarget {
         true
     }
 
-    fn accumulate(&self, gradients: &Gradients) -> tynx_core::Result<()> {
+    fn accumulate(&self, gradients: &Gradients, zero_if_missing: bool) -> tynx_core::Result<()> {
         match self {
             Self::Tensor(leaf) => {
                 if let Some(leaf) = leaf.upgrade() {
-                    leaf.accumulate(gradients)?;
+                    leaf.accumulate(gradients, zero_if_missing)?;
                 }
             }
             Self::Parameter {
@@ -188,7 +256,10 @@ impl GradTarget {
                             .unwrap_or_else(|| format!("#{}", slot.id().get()))
                     )));
                 }
-                slot.accumulate_grad(gradients)?;
+                let accumulated = slot.accumulate_grad(gradients)?;
+                if !accumulated && zero_if_missing {
+                    slot.ensure_zero_grad()?;
+                }
             }
         }
         Ok(())
@@ -234,9 +305,17 @@ impl LeafState {
         self.tensor.borrow().clone()
     }
 
-    fn accumulate(&self, gradients: &Gradients) -> tynx_core::Result<()> {
-        let Some(gradient) = self.tensor.borrow().grad(gradients) else {
-            return Ok(());
+    fn accumulate(&self, gradients: &Gradients, zero_if_missing: bool) -> tynx_core::Result<()> {
+        let gradient = match self.tensor.borrow().grad(gradients) {
+            Some(gradient) => gradient,
+            None if zero_if_missing => {
+                if self.grad.borrow().is_some() {
+                    return Ok(());
+                }
+                let tensor = self.tensor.borrow();
+                DynTensor::full(&tensor.dims(), 0.0, &tensor.device(), tensor.dtype())?
+            }
+            None => return Ok(()),
         };
         let gradient = gradient.detach();
         let mut current = self.grad.borrow_mut();
@@ -256,14 +335,15 @@ impl PyTensor {
     }
 
     pub(crate) fn from_inner(inner: DynTensor) -> Self {
-        Self {
+        Self::wrap(PyTensorInner {
             source: TensorSource::Owned(Box::new(TensorValue::Float(inner))),
             int_bounds: None,
             targets: Vec::new(),
             leaf: None,
             backward_graphs: Vec::new(),
+            zero_missing_gradients: false,
             trace: None,
-        }
+        })
     }
 
     pub(crate) fn from_int_inner(inner: DynInt) -> Self {
@@ -281,14 +361,15 @@ impl PyTensor {
     fn from_value_with_int_bounds(value: TensorValue, bounds: Option<IntBounds>) -> Self {
         let int_bounds =
             matches!(value, TensorValue::Int(_)).then(|| Rc::new(RefCell::new(bounds)));
-        Self {
+        Self::wrap(PyTensorInner {
             source: TensorSource::Owned(Box::new(value)),
             int_bounds,
             targets: Vec::new(),
             leaf: None,
             backward_graphs: Vec::new(),
+            zero_missing_gradients: false,
             trace: None,
-        }
+        })
     }
 
     fn from_leaf(inner: DynTensor) -> Self {
@@ -298,14 +379,15 @@ impl PyTensor {
             tape_consumed: Cell::new(false),
             grad: RefCell::new(None),
         });
-        Self {
+        Self::wrap(PyTensorInner {
             source: TensorSource::Owned(Box::new(TensorValue::Float(inner))),
             int_bounds: None,
             targets: vec![GradTarget::Tensor(Rc::downgrade(&leaf))],
             leaf: Some(leaf),
             backward_graphs: Vec::new(),
+            zero_missing_gradients: false,
             trace: None,
-        }
+        })
     }
 
     pub(crate) fn from_parameter(slot: ParameterSlot) -> Self {
@@ -318,14 +400,15 @@ impl PyTensor {
         } else {
             Vec::new()
         };
-        Self {
+        Self::wrap(PyTensorInner {
             source: TensorSource::Parameter(slot.clone()),
             int_bounds: None,
             targets,
             leaf: None,
             backward_graphs: Vec::new(),
+            zero_missing_gradients: false,
             trace: None,
-        }
+        })
     }
 
     pub(crate) fn from_operation(inner: DynTensor, sources: &[&Self]) -> Self {
@@ -356,14 +439,15 @@ impl PyTensor {
         if !targets.is_empty() {
             backward_graphs.push(Rc::new(BackwardGraph::default()));
         }
-        Self {
+        Self::wrap(PyTensorInner {
             source: TensorSource::Owned(Box::new(TensorValue::Float(inner))),
             int_bounds: None,
             targets,
             leaf: None,
             backward_graphs,
+            zero_missing_gradients: sources.iter().any(|source| source.zero_missing_gradients),
             trace: None,
-        }
+        })
     }
 
     pub(crate) fn from_imported_operation(
@@ -399,6 +483,7 @@ impl PyTensor {
     }
 
     fn operation_input(&self, tracking: bool, operation: &str) -> PyResult<DynTensor> {
+        self.require_owner_thread()?;
         let tracking = tracking && !self.targets.is_empty();
         if tracking && let Some(leaf) = &self.leaf {
             return Ok(leaf.operation_input());
@@ -412,6 +497,8 @@ impl PyTensor {
         capture_op: BinaryOp,
         operation: impl FnOnce(DynTensor, DynTensor) -> tynx_core::Result<DynTensor>,
     ) -> PyResult<Self> {
+        self.require_owner_thread()?;
+        other.require_owner_thread()?;
         let tracking = is_grad_enabled();
         let left = self.operation_input(tracking, "arithmetic")?;
         let right = other.operation_input(tracking, "arithmetic")?;
@@ -487,9 +574,11 @@ impl PyTensor {
     }
 
     fn compare(&self, other: &Bound<'_, PyAny>, comparison: Comparison) -> PyResult<Self> {
+        self.require_owner_thread()?;
         self.capture_unsupported("tensor comparisons")?;
         let left = self.source.value().detach();
         let value = if let Ok(other) = other.extract::<PyRef<'_, Self>>() {
+            other.require_owner_thread()?;
             left.compare_tensor(other.source.value().detach(), comparison)?
         } else {
             left.compare_scalar(other, comparison)?
@@ -498,6 +587,8 @@ impl PyTensor {
     }
 
     fn mask_binary(&self, other: &Self, operation: MaskOperation) -> PyResult<Self> {
+        self.require_owner_thread()?;
+        other.require_owner_thread()?;
         self.source
             .value()
             .detach()
@@ -512,6 +603,13 @@ impl PyTensor {
         otherwise_tensor: Option<&Self>,
         otherwise_scalar: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
+        condition.require_owner_thread()?;
+        if let Some(tensor) = then_tensor {
+            tensor.require_owner_thread()?;
+        }
+        if let Some(tensor) = otherwise_tensor {
+            tensor.require_owner_thread()?;
+        }
         let template = then_tensor.or(otherwise_tensor).ok_or_else(|| {
             PyTypeError::new_err("where requires at least one Tensor branch to infer dtype/device")
         })?;
@@ -571,6 +669,8 @@ impl PyTensor {
     }
 
     fn gather_impl(&self, dim: usize, index: &Self) -> PyResult<Self> {
+        self.require_owner_thread()?;
+        index.require_owner_thread()?;
         let input_shape = self.source.value().dims();
         let indices = indexing::gather_indices(index.source.value().detach(), &input_shape, dim)?;
         index.validate_index_bounds(input_shape[dim], dim, "gather")?;
@@ -592,8 +692,12 @@ impl PyTensor {
     }
 
     fn elementwise_extreme(&self, other: &Bound<'_, PyAny>, extremum: Extremum) -> PyResult<Self> {
+        self.require_owner_thread()?;
         let tracking = is_grad_enabled();
         let other_tensor = other.extract::<PyRef<'_, Self>>().ok();
+        if let Some(other) = other_tensor.as_deref() {
+            other.require_owner_thread()?;
+        }
         if matches!(self.source.value(), TensorValue::Float(_))
             && let Some(other) = other_tensor.as_deref()
             && matches!(other.source.value(), TensorValue::Float(_))
@@ -640,6 +744,7 @@ impl PyTensor {
 
     pub(crate) fn tensor_from_python(data: &Bound<'_, PyAny>) -> PyResult<DynTensor> {
         if let Ok(tensor) = data.extract::<PyRef<'_, Self>>() {
+            tensor.require_owner_thread()?;
             return tensor.detached_float_value("Parameter/Buffer construction");
         }
         let device = Device::autodiff(tynx_core::default_device());
@@ -653,37 +758,52 @@ impl PyTensor {
         }
     }
 
-    pub(crate) fn parameter_slot(&self) -> Option<ParameterSlot> {
-        match &self.source {
+    pub(crate) fn parameter_slot(&self) -> PyResult<Option<ParameterSlot>> {
+        self.require_owner_thread()?;
+        Ok(match &self.source {
             TensorSource::Parameter(slot) => Some(slot.clone()),
             TensorSource::Owned(_) => None,
-        }
+        })
     }
 
-    pub(crate) fn trace(&self) -> Option<&TraceValue> {
-        self.trace.as_ref()
+    pub(crate) fn trace(&self) -> PyResult<Option<&TraceValue>> {
+        self.require_owner_thread()?;
+        Ok(self.trace.as_ref())
     }
 
-    pub(crate) fn with_trace(&self, trace: TraceValue) -> Self {
-        Self {
+    pub(crate) fn zero_missing_gradients(&self) -> bool {
+        self.zero_missing_gradients
+    }
+
+    pub(crate) fn with_zero_missing_gradients(mut self, enabled: bool) -> Self {
+        self.zero_missing_gradients |= enabled;
+        self
+    }
+
+    pub(crate) fn with_trace(&self, trace: TraceValue) -> PyResult<Self> {
+        self.require_owner_thread()?;
+        Ok(Self::wrap(PyTensorInner {
             source: TensorSource::Owned(Box::new(self.source.value())),
             int_bounds: self.int_bounds.clone(),
             targets: self.targets.clone(),
             leaf: self.leaf.clone(),
             backward_graphs: self.backward_graphs.clone(),
+            zero_missing_gradients: self.zero_missing_gradients,
             trace: Some(trace),
-        }
+        }))
     }
 
-    pub(crate) fn without_trace(&self) -> Self {
-        Self {
+    pub(crate) fn without_trace(&self) -> PyResult<Self> {
+        self.require_owner_thread()?;
+        Ok(Self::wrap(PyTensorInner {
             source: TensorSource::Owned(Box::new(self.source.value())),
             int_bounds: self.int_bounds.clone(),
             targets: self.targets.clone(),
             leaf: self.leaf.clone(),
             backward_graphs: self.backward_graphs.clone(),
+            zero_missing_gradients: self.zero_missing_gradients,
             trace: None,
-        }
+        }))
     }
 
     pub(crate) fn with_recorded_unary(
@@ -718,6 +838,7 @@ impl PyTensor {
         dim: usize,
         operation: &str,
     ) -> PyResult<()> {
+        self.require_owner_thread()?;
         let size = i64::try_from(size).map_err(|_| {
             PyValueError::new_err(format!(
                 "{operation} dimension {dim} exceeds the supported index range"
@@ -758,11 +879,13 @@ impl PyTensor {
     }
 
     pub(crate) fn detached_float_value(&self, operation: &str) -> PyResult<DynTensor> {
+        self.require_owner_thread()?;
         self.source.value().detach().float(operation)
     }
 
-    pub(crate) fn detached_runtime_value(&self) -> Value {
-        self.source.value().detach().into_runtime()
+    pub(crate) fn detached_runtime_value(&self) -> PyResult<Value> {
+        self.require_owner_thread()?;
+        Ok(self.source.value().detach().into_runtime())
     }
 
     pub(crate) fn operation_runtime_value(
@@ -770,6 +893,7 @@ impl PyTensor {
         tracking: bool,
         operation: &str,
     ) -> PyResult<Value> {
+        self.require_owner_thread()?;
         match self.source.value() {
             TensorValue::Float(_) => self.operation_input(tracking, operation).map(Value::Tensor),
             value => Ok(value.detach().into_runtime()),
@@ -796,13 +920,27 @@ impl PyTensor {
     }
 
     pub(crate) fn capture_unsupported(&self, reason: &str) -> PyResult<()> {
+        self.require_owner_thread()?;
         record_unsupported(self, reason)
     }
 }
 
 #[pymethods]
 impl PyTensor {
-    /// Construct a typed tensor from a scalar or rectangular nested list/tuple.
+    fn __getattribute__(slf: &Bound<'_, Self>, name: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+        slf.borrow().require_owner_thread()?;
+        Ok(slf
+            .py()
+            .import("builtins")?
+            .getattr("object")?
+            .call_method1("__getattribute__", (slf, name))?
+            .unbind())
+    }
+
+    /// Construct a typed tensor from Python or NumPy data.
+    ///
+    /// NumPy float64 input narrows to float32 and NumPy int32 input widens to int64.
+    /// Explicit incompatible dtype requests raise instead of being normalized.
     #[new]
     #[pyo3(signature = (data, *, dtype=None, device=None, requires_grad=false))]
     fn new(
@@ -813,6 +951,7 @@ impl PyTensor {
     ) -> PyResult<Self> {
         let (value, bounds, inherited_bounds) =
             if let Ok(tensor) = data.extract::<PyRef<'_, Self>>() {
+                tensor.require_owner_thread()?;
                 let value = tensor.source.value().detach();
                 let target =
                     device.map_or_else(|| value.device(), |device| device.inner.as_ref().clone());
@@ -871,13 +1010,16 @@ impl PyTensor {
         Ok(())
     }
 
-    fn __len__(&self) -> usize {
-        self.source.value().dims()[0]
+    fn __len__(&self) -> PyResult<usize> {
+        self.require_owner_thread()?;
+        Ok(self.source.value().dims()[0])
     }
 
     /// Select values using basic indices or a one-dimensional first-axis advanced index.
     fn __getitem__(&self, key: &Bound<'_, PyAny>) -> PyResult<Self> {
+        self.require_owner_thread()?;
         if let Ok(index) = key.extract::<PyRef<'_, Self>>() {
+            index.require_owner_thread()?;
             return self.advanced_getitem(&index);
         }
         if let Ok(indices) = key.cast::<PyList>() {
@@ -980,6 +1122,7 @@ impl PyTensor {
     }
 
     fn __bool__(&self, py: Python<'_>) -> PyResult<bool> {
+        self.require_owner_thread()?;
         self.capture_unsupported("tensor-dependent Python control flow")?;
         if self.numel() != 1 {
             return Err(PyValueError::new_err(format!(
@@ -993,6 +1136,7 @@ impl PyTensor {
     }
 
     fn __float__(&self, py: Python<'_>) -> PyResult<f64> {
+        self.require_owner_thread()?;
         if self.numel() != 1 {
             return Err(PyValueError::new_err(format!(
                 "float() requires a one-element Tensor, got shape {:?}",
@@ -1007,6 +1151,7 @@ impl PyTensor {
     }
 
     fn __int__(&self, py: Python<'_>) -> PyResult<i64> {
+        self.require_owner_thread()?;
         if self.numel() != 1 {
             return Err(PyValueError::new_err(format!(
                 "int() requires a one-element Tensor, got shape {:?}",
@@ -1101,10 +1246,36 @@ impl PyTensor {
 
     /// Move or cast a tensor without a host staging path.
     #[pyo3(signature = (device=None, *, dtype=None))]
-    fn to(&self, device: Option<PyRef<'_, PyDevice>>, dtype: Option<&str>) -> PyResult<Self> {
+    fn to(&self, device: Option<&Bound<'_, PyAny>>, dtype: Option<&str>) -> PyResult<Self> {
         self.capture_unsupported("Tensor.to()/cast()")?;
         let current = self.source.value();
-        let dtype = dtype.unwrap_or(current.dtype_name());
+        let mut positional_dtype = None;
+        let device = match device {
+            None => None,
+            Some(value) => match value.extract::<PyRef<'_, PyDevice>>() {
+                Ok(device) => Some(device),
+                Err(_) => match value.extract::<String>() {
+                    Ok(value) => {
+                        positional_dtype = Some(value);
+                        None
+                    }
+                    Err(_) => {
+                        return Err(PyTypeError::new_err(
+                            "Tensor.to() positional argument must be a Device or dtype string",
+                        ));
+                    }
+                },
+            },
+        };
+        if positional_dtype.is_some() && dtype.is_some() {
+            return Err(PyTypeError::new_err(
+                "Tensor.to() received dtype both positionally and by keyword",
+            ));
+        }
+        let dtype = positional_dtype
+            .as_deref()
+            .or(dtype)
+            .unwrap_or(current.dtype_name());
         let target_device = ensure_autodiff(
             device.map_or_else(|| current.device(), |device| device.inner.as_ref().clone()),
         );
@@ -1138,8 +1309,9 @@ impl PyTensor {
 
     /// Replace stable Parameter/Buffer state from a compatible tensor without changing identity.
     fn copy_(&self, source: PyRef<'_, Self>) -> PyResult<()> {
+        self.require_owner_thread()?;
         source.capture_unsupported("state mutation through Tensor.copy_()")?;
-        let slot = self.parameter_slot().ok_or_else(|| {
+        let slot = self.parameter_slot()?.ok_or_else(|| {
             PyTypeError::new_err("copy_ target must be a stable Parameter or Buffer")
         })?;
         let value = source.source.value().detach().float("copy_")?;
@@ -1147,7 +1319,8 @@ impl PyTensor {
     }
 
     /// Clear this leaf tensor's accumulated gradient.
-    fn zero_grad(&self) {
+    fn zero_grad(&self) -> PyResult<()> {
+        self.require_owner_thread()?;
         match &self.source {
             TensorSource::Parameter(slot) => slot.zero_grad(),
             TensorSource::Owned(_) => {
@@ -1156,11 +1329,16 @@ impl PyTensor {
                 }
             }
         }
+        Ok(())
     }
 
     /// Run reverse-mode autodiff, optionally seeded by a matching tensor.
     #[pyo3(signature = (gradient=None))]
     fn backward(&self, gradient: Option<PyRef<'_, Self>>) -> PyResult<()> {
+        self.require_owner_thread()?;
+        if let Some(gradient) = gradient.as_deref() {
+            gradient.require_owner_thread()?;
+        }
         if gradient.is_some() {
             self.capture_unsupported("backward with an explicit gradient")?;
         } else {
@@ -1227,7 +1405,9 @@ impl PyTensor {
             )
         })?;
         for target in &self.targets {
-            target.accumulate(&gradients).map_err(to_python_error)?;
+            target
+                .accumulate(&gradients, self.zero_missing_gradients)
+                .map_err(to_python_error)?;
             target.mark_tape_consumed();
         }
         raise_pending_device_error()?;
@@ -1273,6 +1453,7 @@ impl PyTensor {
     /// Sort values along one dimension and return values plus source indices.
     #[pyo3(signature = (dim=-1, descending=false, stable=false))]
     fn sort(&self, dim: isize, descending: bool, stable: bool) -> PyResult<(Self, Self)> {
+        self.require_owner_thread()?;
         if stable {
             return Err(PyNotImplementedError::new_err(
                 "sort(stable=True) is not supported by the current backends",
@@ -1285,6 +1466,7 @@ impl PyTensor {
     /// Return indices that sort values along one dimension.
     #[pyo3(signature = (dim=-1, descending=false, stable=false))]
     fn argsort(&self, dim: isize, descending: bool, stable: bool) -> PyResult<Self> {
+        self.require_owner_thread()?;
         if stable {
             return Err(PyNotImplementedError::new_err(
                 "argsort(stable=True) is not supported by the current backends",
@@ -1304,6 +1486,7 @@ impl PyTensor {
         largest: bool,
         sorted: bool,
     ) -> PyResult<(Self, Self)> {
+        self.require_owner_thread()?;
         let dim = shape::axis_value(dim.unwrap_or(-1), self.ndim(), false, "topk")?;
         let size = self.source.value().dims()[dim];
         if k > size {
@@ -1590,6 +1773,8 @@ impl PyTensor {
 
     /// Select whole slices along one dimension using a one-dimensional int64 tensor.
     fn index_select(&self, dim: isize, index: PyRef<'_, Self>) -> PyResult<Self> {
+        self.require_owner_thread()?;
+        index.require_owner_thread()?;
         let dim = shape::axis_value(dim, self.ndim(), false, "index_select")?;
         let input = self.source.value();
         let input_device = input.device();
@@ -1705,44 +1890,14 @@ impl PyTensor {
     }
 
     fn __matmul__(&self, other: PyRef<'_, Self>) -> PyResult<Self> {
-        self.reject_empty_operation("matmul")?;
-        other.reject_empty_operation("matmul")?;
+        self.require_owner_thread()?;
+        other.require_owner_thread()?;
         let left_shape = self.source.value().dims();
         let right_shape = other.source.value().dims();
-        match (left_shape.as_slice(), right_shape.as_slice()) {
-            ([left], [right]) => {
-                let left = *left;
-                let right = *right;
-                self.binary(&other, BinaryOp::Matmul, move |left_value, right_value| {
-                    left_value
-                        .reshape(vec![1, left])?
-                        .matmul(right_value.reshape(vec![right, 1])?)?
-                        .reshape(vec![1])
-                })
-            }
-            ([rows, inner], [right]) => {
-                let rows = *rows;
-                let _inner = *inner;
-                let right = *right;
-                self.binary(&other, BinaryOp::Matmul, move |left_value, right_value| {
-                    left_value
-                        .matmul(right_value.reshape(vec![right, 1])?)?
-                        .reshape(vec![rows])
-                })
-            }
-            ([left], [inner, columns]) => {
-                let left = *left;
-                let _inner = *inner;
-                let columns = *columns;
-                self.binary(&other, BinaryOp::Matmul, move |left_value, right_value| {
-                    left_value
-                        .reshape(vec![1, left])?
-                        .matmul(right_value)?
-                        .reshape(vec![columns])
-                })
-            }
-            _ => self.binary(&other, BinaryOp::Matmul, DynTensor::matmul),
-        }
+        let has_zero_elements = left_shape.contains(&0) || right_shape.contains(&0);
+        let mut result = self.binary(&other, BinaryOp::Matmul, DynTensor::matmul)?;
+        result.zero_missing_gradients |= has_zero_elements;
+        Ok(result)
     }
 
     fn __imatmul__(&self, _other: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -1754,6 +1909,7 @@ impl PyTensor {
     }
 
     fn abs(&self) -> PyResult<Self> {
+        self.require_owner_thread()?;
         match self.source.value() {
             TensorValue::Float(_) => self.unary(|input| Ok(input.abs())),
             TensorValue::Int(value) => Ok(Self::from_value(TensorValue::Int(value.abs()))),
@@ -1846,6 +2002,7 @@ impl PyTensor {
     }
 
     fn __invert__(&self) -> PyResult<Self> {
+        self.require_owner_thread()?;
         self.source
             .value()
             .detach()
@@ -1853,13 +2010,14 @@ impl PyTensor {
             .map(Self::from_value)
     }
 
-    fn __repr__(&self) -> String {
-        format!(
+    fn __repr__(&self) -> PyResult<String> {
+        self.require_owner_thread()?;
+        Ok(format!(
             "Tensor(shape={:?}, dtype={}, requires_grad={})",
             self.source.value().dims().as_slice(),
             self.dtype(),
             self.requires_grad()
-        )
+        ))
     }
 }
 
@@ -2022,7 +2180,9 @@ impl PyTensor {
     }
 
     fn reduce(&self, dim: Option<&Bound<'_, PyAny>>, keepdim: bool, sum: bool) -> PyResult<Self> {
-        self.reject_empty_operation(if sum { "sum" } else { "mean" })?;
+        if !sum {
+            self.reject_empty_operation("mean")?;
+        }
         let input_shape = self.source.value().dims();
         let spec = ReductionSpec::from_python(dim, &input_shape, keepdim)?;
         let capture_op = if sum {
@@ -2036,14 +2196,17 @@ impl PyTensor {
                 output_shape: spec.output_shape.clone(),
             }
         };
-        self.unary_captured(capture_op, move |input| {
+        let has_zero_elements = self.numel() == 0;
+        let mut result = self.unary_captured(capture_op, move |input| {
             let reduced = if sum {
                 input.sum_dims(&spec.dims)
             } else {
                 input.mean_dims(&spec.dims)
             };
             reduced.reshape(spec.output_shape)
-        })
+        })?;
+        result.zero_missing_gradients |= sum && has_zero_elements;
+        Ok(result)
     }
 
     fn reduce_extreme(

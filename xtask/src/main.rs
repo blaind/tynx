@@ -1,7 +1,8 @@
-use std::env;
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+    process::{Command, ExitCode},
+};
 
 use serde::Deserialize;
 

@@ -59,7 +59,7 @@ impl CaptureState {
     }
 
     fn input(&self, tensor: &PyTensor) -> PyResult<ValueId> {
-        let value = tensor.detached_runtime_value();
+        let value = tensor.detached_runtime_value()?;
         let value =
             self.with_builder(|builder| builder.input_value(&value).map_err(to_python_error))?;
         let mut inner = self.inner.borrow_mut();
@@ -349,10 +349,11 @@ fn active() -> Option<Rc<CaptureState>> {
 }
 
 fn trace_for(tensor: &PyTensor) -> PyResult<Option<TraceValue>> {
-    if let Some(trace) = tensor.trace() {
+    tensor.require_owner_thread()?;
+    if let Some(trace) = tensor.trace()? {
         return Ok(Some(trace.clone()));
     }
-    let (Some(state), Some(slot)) = (active(), tensor.parameter_slot()) else {
+    let (Some(state), Some(slot)) = (active(), tensor.parameter_slot()?) else {
         return Ok(None);
     };
     let value = state.parameter(slot)?;
@@ -643,25 +644,28 @@ impl PyCaptureSession {
     }
 
     fn input(&self, tensor: PyRef<'_, PyTensor>) -> PyResult<PyTensor> {
-        if tensor.parameter_slot().is_some() {
+        tensor.require_owner_thread()?;
+        if tensor.parameter_slot()?.is_some() {
             return Err(PyRuntimeError::new_err(
                 "Parameter objects cannot be compile inputs; close over stable model parameters",
             ));
         }
         activate(&self.state)?;
         let value = self.state.input(&tensor)?;
-        Ok(tensor.with_trace(TraceValue {
+        tensor.with_trace(TraceValue {
             state: self.state.clone(),
             value,
-        }))
+        })
     }
 
     fn finish(&self, outputs: &Bound<'_, PyTuple>) -> PyResult<Option<PyCapturedGraph>> {
         deactivate(&self.state);
         let mut values = Vec::with_capacity(outputs.len());
+        let mut zero_missing_gradients = Vec::with_capacity(outputs.len());
         for output in outputs.iter() {
             let output = output.extract::<PyRef<'_, PyTensor>>()?;
-            let Some(trace) = output.trace() else {
+            output.require_owner_thread()?;
+            let Some(trace) = output.trace()? else {
                 self.state
                     .unsupported("a function output disconnected from its Tensor inputs")?;
                 return Ok(None);
@@ -672,13 +676,17 @@ impl PyCaptureSession {
                 return Ok(None);
             }
             values.push(trace.value);
+            zero_missing_gradients.push(output.zero_missing_gradients());
         }
-        self.state
-            .finish(values)
-            .map(|graph| graph.map(|(graph, constraints)| PyCapturedGraph::new(graph, constraints)))
+        self.state.finish(values).map(|graph| {
+            graph.map(|(graph, constraints)| {
+                PyCapturedGraph::new(graph, constraints, zero_missing_gradients)
+            })
+        })
     }
 
-    fn release(&self, output: PyRef<'_, PyTensor>) -> PyTensor {
+    fn release(&self, output: PyRef<'_, PyTensor>) -> PyResult<PyTensor> {
+        output.require_owner_thread()?;
         output.without_trace()
     }
 
@@ -700,15 +708,25 @@ pub(crate) struct PyCapturedGraph {
     graph: Graph,
     parameters: Vec<ParameterSlot>,
     index_constraints: Vec<IndexConstraint>,
+    zero_missing_gradients: Vec<bool>,
 }
 
 impl PyCapturedGraph {
-    fn new(graph: Graph, index_constraints: Vec<IndexConstraint>) -> Self {
+    fn new(
+        graph: Graph,
+        index_constraints: Vec<IndexConstraint>,
+        zero_missing_gradients: Vec<bool>,
+    ) -> Self {
         let parameters = graph.parameters();
+        debug_assert_eq!(
+            graph.output_differentiability().len(),
+            zero_missing_gradients.len()
+        );
         Self {
             graph,
             parameters,
             index_constraints,
+            zero_missing_gradients,
         }
     }
 
@@ -747,7 +765,7 @@ impl PyCapturedGraph {
         let values = inputs
             .iter()
             .map(|input| input.detached_runtime_value())
-            .collect::<Vec<_>>();
+            .collect::<PyResult<Vec<_>>>()?;
         Ok(self.graph.validate_value_inputs(&values).is_ok())
     }
 
@@ -774,7 +792,8 @@ impl PyCapturedGraph {
         let outputs = outputs
             .into_iter()
             .zip(self.graph.output_differentiability())
-            .map(|(output, differentiable)| {
+            .zip(&self.zero_missing_gradients)
+            .map(|((output, differentiable), zero_missing_gradients)| {
                 let tensor = match output {
                     tynx_core::Value::Tensor(output) if tracking && *differentiable => {
                         PyTensor::from_imported_operation(
@@ -782,6 +801,7 @@ impl PyCapturedGraph {
                             &sources,
                             self.parameters.iter().cloned(),
                         )
+                        .with_zero_missing_gradients(*zero_missing_gradients)
                     }
                     output => PyTensor::from_runtime_value(output)?,
                 };

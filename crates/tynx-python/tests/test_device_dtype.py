@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+
 import pytest
 import tynx
 
@@ -12,6 +16,24 @@ def test_public_dtype_constants_work_across_dtype_entry_points() -> None:
     assert tynx.Tensor([1, 2], dtype=tynx.int64).dtype == "int64"
     assert tynx.Tensor([0.0, 1.0]).cast(tynx.bool).tolist() == [False, True]
     assert tynx.Tensor([1, 2], dtype="int64").to(dtype=tynx.float32).dtype == "float32"
+
+
+def test_tensor_to_accepts_a_positional_dtype() -> None:
+    value = tynx.Tensor([1, 2], dtype=tynx.int64)
+
+    converted = value.to(tynx.float32)
+
+    assert converted.dtype == "float32"
+    assert converted.tolist() == [1.0, 2.0]
+
+
+def test_tensor_to_rejects_ambiguous_or_invalid_positional_arguments() -> None:
+    value = tynx.Tensor([1.0])
+
+    with pytest.raises(TypeError, match="dtype both positionally and by keyword"):
+        value.to(tynx.float32, dtype=tynx.int64)  # type: ignore[call-overload]
+    with pytest.raises(TypeError, match="must be a Device or dtype string"):
+        value.to(3)  # type: ignore[call-overload]
 
 
 def test_device_can_be_selected_during_construction_and_factories() -> None:
@@ -76,3 +98,43 @@ def test_dtype_and_device_validation_is_explicit() -> None:
         tynx.Device("cuda")  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="unsupported Tensor dtype"):
         tynx.Tensor([1.0]).cast("float64")  # type: ignore[arg-type]
+
+
+def test_invalid_burn_device_fails_cleanly_during_import() -> None:
+    environment = os.environ.copy()
+    environment["BURN_DEVICE"] = "bogus"
+
+    result = subprocess.run(
+        [sys.executable, "-c", "import tynx"],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "unsupported BURN_DEVICE value" in result.stderr
+    assert "bogus" in result.stderr
+    assert "ValueError" in result.stderr
+    assert "PanicException" not in result.stderr
+    assert "panicked at" not in result.stderr
+
+
+def test_flex_burn_device_remains_supported() -> None:
+    environment = os.environ.copy()
+    environment["BURN_DEVICE"] = "flex"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import tynx; print(tynx.get_default_device()); print(tynx.ones(1).item())",
+        ],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert "Flex(Cpu)" in result.stdout
+    assert result.stdout.rstrip().endswith("1.0")

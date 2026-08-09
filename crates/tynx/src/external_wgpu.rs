@@ -14,16 +14,15 @@ use burn_fusion::{
     stream::StreamId,
 };
 use burn_ir::{BackendIr, InitOperationIr, OperationIr};
+#[cfg(feature = "wgpu")]
+use cubecl::wgpu::AutoCompiler;
+#[cfg(feature = "vulkan")]
+use cubecl::wgpu::SpirvCompiler;
 use cubecl::{
     Runtime,
     ir::{ElemType, FloatKind, StorageType},
     wgpu::{RuntimeOptions, WgpuCompiler, WgpuDevice, WgpuResource, WgpuRuntime, WgpuSetup},
 };
-
-#[cfg(feature = "wgpu")]
-use cubecl::wgpu::AutoCompiler;
-#[cfg(feature = "vulkan")]
-use cubecl::wgpu::SpirvCompiler;
 
 use crate::{
     AcquiredExternalTensorDescriptor, Device, DeviceContextCapability, DynTensor,

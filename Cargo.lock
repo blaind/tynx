@@ -2099,6 +2099,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fragile"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8878864ba14bb86e818a412bfd6f18f9eabd4ec0f008a28e8f7eb61db532fcf9"
+dependencies = [
+ "futures-core",
+]
+
+[[package]]
 name = "futures-channel"
 version = "0.3.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5290,6 +5299,7 @@ dependencies = [
 name = "tynx-python"
 version = "0.1.1"
 dependencies = [
+ "fragile",
  "numpy",
  "pollster",
  "pyo3",

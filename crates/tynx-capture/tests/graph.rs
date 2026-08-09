@@ -1,6 +1,6 @@
-use burn::tensor::{DType, Device, TensorData};
 use std::{cell::RefCell, rc::Rc};
 
+use burn::tensor::{DType, Device, TensorData};
 use tynx_capture::{BinaryOp, CapturedOptimizer, GraphBuilder, UnaryOp};
 use tynx_core::{DynInt, DynTensor, Result, Value};
 use tynx_train::{ParameterSlot, ParameterStore, Sgd, backward};

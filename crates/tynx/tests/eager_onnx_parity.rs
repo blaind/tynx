@@ -1,15 +1,17 @@
 //! Parity between eager tensor operations and equivalent imported ONNX nodes.
 
-use tynx::onnx_ir::{
-    DType, Node,
-    node::{
-        arithmetic::{AddNodeBuilder, MulNodeBuilder, SubNodeBuilder},
-        matmul::MatMulNodeBuilder,
-        reduce::{ReduceConfig, ReduceMeanNodeBuilder},
-        relu::ReluNodeBuilder,
+use tynx::{
+    Device, DynTensor, Env, TensorData, Value, execute,
+    onnx_ir::{
+        DType, Node,
+        node::{
+            arithmetic::{AddNodeBuilder, MulNodeBuilder, SubNodeBuilder},
+            matmul::MatMulNodeBuilder,
+            reduce::{ReduceConfig, ReduceMeanNodeBuilder},
+            relu::ReluNodeBuilder,
+        },
     },
 };
-use tynx::{Device, DynTensor, Env, TensorData, Value, execute};
 
 fn tensor(values: Vec<f32>, dims: &[usize], device: &Device) -> DynTensor {
     DynTensor::from_data(TensorData::new(values, dims.to_vec()), dims.len(), device).unwrap()

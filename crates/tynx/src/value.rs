@@ -2,8 +2,10 @@
 
 use burn::tensor::{DType, Device, TensorData};
 
-use crate::error::{Result, TynxError};
-use crate::tensor::{DynBool, DynInt, DynTensor};
+use crate::{
+    error::{Result, TynxError},
+    tensor::{DynBool, DynInt, DynTensor},
+};
 
 /// A host-side scalar value.
 #[derive(Debug, Clone, Copy, PartialEq)]

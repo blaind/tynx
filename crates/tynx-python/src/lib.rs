@@ -12,23 +12,22 @@ mod parameter;
 mod random;
 mod tensor;
 
-pub use embedding::{external_copy_source, wrap_external_tensor};
-
 use std::path::PathBuf;
 
 use capture::{PyCaptureSession, PyCapturedGraph};
-use pyo3::exceptions::{PyIndexError, PyOSError, PyTypeError, PyValueError};
-use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyTuple};
-use tynx_core::{Device, Env, PreparedSession, Scalar, Session, Value};
-
 use device::PyDevice;
+pub use embedding::{external_copy_source, wrap_external_tensor};
 use grad_mode::{PyNoGrad, PyNoGradFunction, is_grad_enabled_py, no_grad};
 use gradient::{clip_grad_norm_py, clip_grad_value_py};
 use imported_model::{PyImportedModel, PyTrainabilityReport};
 use nn::{adaptive_avg_pool2d_py, avg_pool2d_py, conv2d_py, embedding_py, max_pool2d_py};
 use optimizer::{PyAdam, PyAdamW, PySgd};
 use parameter::{PyBuffer, PyParameter};
+use pyo3::{
+    exceptions::{PyIndexError, PyOSError, PyRuntimeError, PyTypeError, PyValueError},
+    prelude::*,
+    types::{PyDict, PyTuple},
+};
 use random::{categorical_sample_py, dropout_py, manual_seed_py, normal_sample_py};
 use tensor::{
     PyTensor, arange_py, argsort_py, cat_py, chunk_py, empty_like_py, empty_py, full_like_py,
@@ -36,6 +35,38 @@ use tensor::{
     rand_like_py, rand_py, randint_py, randn_like_py, randn_py, sort_py, split_py, stack_py,
     topk_py, where_py, zeros_like_py, zeros_py,
 };
+use tynx_core::{Device, Env, PreparedSession, Scalar, Session, Value};
+
+/// Validate Burn's process-default device override before its infallible parser sees it.
+#[pyfunction]
+fn _validate_device_environment() -> PyResult<()> {
+    let Ok(raw) = std::env::var("BURN_DEVICE") else {
+        return Ok(());
+    };
+    let value = raw.to_lowercase();
+    let supported = value == "flex"
+        || (cfg!(feature = "wgpu") && value == "wgpu")
+        || (cfg!(feature = "vulkan") && value == "vulkan");
+    if supported {
+        return Ok(());
+    }
+
+    let mut expected = vec!["flex"];
+    if cfg!(feature = "wgpu") {
+        expected.push("wgpu");
+    }
+    if cfg!(feature = "vulkan") {
+        expected.push("vulkan");
+    }
+    Err(PyValueError::new_err(format!(
+        "unsupported BURN_DEVICE value {raw:?} for this Tynx build; expected {}",
+        expected
+            .into_iter()
+            .map(|item| format!("{item:?}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )))
+}
 
 /// Return the process-default execution device.
 #[pyfunction]
@@ -50,6 +81,13 @@ fn synchronize(device: Option<PyRef<'_, PyDevice>>) -> PyResult<()> {
         Some(device) => device.sync(),
         None => PyDevice::new(tynx_core::default_device()).sync(),
     }
+}
+
+/// Best-effort process-default device quiesce used by the Python shutdown hook.
+#[pyfunction]
+fn _synchronize_at_exit() -> PyResult<()> {
+    tynx_core::synchronize_initialized_default_device()
+        .map_err(|error| PyRuntimeError::new_err(error.to_string()))
 }
 
 /// A parsed ONNX model.
@@ -188,7 +226,7 @@ impl PySession {
                 value
                     .as_ref()
                     .expect("missing Session inputs were rejected above")
-                    .detached_runtime_value(),
+                    .detached_runtime_value()?,
             );
         }
         let mut result = self.inner.run(env).map_err(to_python_error)?;
@@ -256,7 +294,9 @@ pub fn init_module(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(no_grad, module)?)?;
     module.add_function(wrap_pyfunction!(is_grad_enabled_py, module)?)?;
     module.add_function(wrap_pyfunction!(get_default_device, module)?)?;
+    module.add_function(wrap_pyfunction!(_validate_device_environment, module)?)?;
     module.add_function(wrap_pyfunction!(synchronize, module)?)?;
+    module.add_function(wrap_pyfunction!(_synchronize_at_exit, module)?)?;
     module.add_function(wrap_pyfunction!(where_py, module)?)?;
     module.add_function(wrap_pyfunction!(maximum_py, module)?)?;
     module.add_function(wrap_pyfunction!(minimum_py, module)?)?;

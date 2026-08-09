@@ -105,7 +105,8 @@ fn extract_parameter(value: &Bound<'_, PyAny>, optimizer_name: &str) -> PyResult
             "{optimizer_name} parameters must contain only Parameter objects"
         ))
     })?;
-    let slot = tensor.parameter_slot().ok_or_else(|| {
+    tensor.require_owner_thread()?;
+    let slot = tensor.parameter_slot()?.ok_or_else(|| {
         PyTypeError::new_err(format!(
             "{optimizer_name} parameters must contain only Parameter objects"
         ))

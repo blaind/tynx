@@ -41,6 +41,24 @@ pub fn synchronize(device: &burn::tensor::Device) -> Result<()> {
     synchronized.map_err(|error| TynxError::DeviceSynchronization(error.to_string()))
 }
 
+/// Wait for the process-default GPU only when Tynx initialized it previously.
+///
+/// This is intended for interpreter shutdown. Importing Tynx without using a device must not
+/// initialize WGPU merely because a shutdown callback runs.
+pub fn synchronize_initialized_default_device() -> Result<()> {
+    #[cfg(all(
+        any(feature = "wgpu", feature = "vulkan"),
+        feature = "flex",
+        not(target_family = "wasm")
+    ))]
+    {
+        if probe::default_device_configured() {
+            return synchronize(&burn::tensor::Device::default());
+        }
+    }
+    Ok(())
+}
+
 #[cfg(all(
     any(feature = "wgpu", feature = "vulkan"),
     feature = "flex",
@@ -51,6 +69,7 @@ mod probe {
 
     use super::record_device_error;
 
+    static CONFIGURED: OnceLock<()> = OnceLock::new();
     static DEFAULT_DEVICE_USABLE: OnceLock<bool> = OnceLock::new();
     static DEFAULT_BUFFER_SIZE_LIMIT: OnceLock<u64> = OnceLock::new();
     #[cfg(all(test, feature = "vulkan"))]
@@ -72,7 +91,6 @@ mod probe {
     }
 
     pub(super) fn configure_default_device() {
-        static CONFIGURED: OnceLock<()> = OnceLock::new();
         CONFIGURED.get_or_init(|| {
             let device = burn::backend::wgpu::WgpuDevice::default();
             #[cfg(feature = "vulkan")]
@@ -99,6 +117,10 @@ mod probe {
             #[cfg(all(test, feature = "vulkan"))]
             let _ = CONFIGURED_SETUP.set(setup);
         });
+    }
+
+    pub(super) fn default_device_configured() -> bool {
+        CONFIGURED.get().is_some()
     }
 
     pub(super) fn default_buffer_size_limit() -> Option<u64> {

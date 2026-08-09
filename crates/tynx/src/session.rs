@@ -8,8 +8,10 @@ use std::{
 };
 
 use burn::tensor::Device;
-use onnx_ir::ir::{Argument, Node, OnnxGraph};
-use onnx_ir::{ModelProto, OnnxGraphBuilder};
+use onnx_ir::{
+    ModelProto, OnnxGraphBuilder,
+    ir::{Argument, Node, OnnxGraph},
+};
 use protobuf::Message;
 
 use crate::{
@@ -611,9 +613,8 @@ mod tests {
     };
     use protobuf::{Message, MessageField};
 
-    use crate::{Scalar, TynxError, Value};
-
     use super::*;
+    use crate::{Scalar, TynxError, Value};
 
     fn session_from_graph(graph: OnnxGraph) -> Session {
         Session {

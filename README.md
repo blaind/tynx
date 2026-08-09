@@ -53,6 +53,11 @@ backend, is enabled by default and also works on `wasm32-unknown-unknown`. GPU e
 available behind feature flags: `wgpu` (Vulkan / Metal / DX12) and `vulkan` (wgpu with the
 SPIR-V fast path).
 
+Select placement explicitly with `device=tynx.Device("cpu")`. For authored modules whose
+constructors do not yet accept `device=`, set `BURN_DEVICE=flex` before importing Tynx to change
+the process default. Tensors and modules are bound to their construction backend; cross-backend
+`Tensor.to()` and `Module.to()` migration are not implemented.
+
 ## Conformance
 
 Tynx runs the official ONNX backend test suite (the node tests vendored by Burn-ONNX) as a pinned

@@ -6,6 +6,8 @@ mod state;
 
 use std::{cell::RefCell, rc::Rc};
 
+pub(crate) use adam::{PyAdam, PyAdamW};
+pub(crate) use parameters::collect_parameters;
 use pyo3::{
     exceptions::PyValueError,
     prelude::*,
@@ -19,9 +21,6 @@ use crate::{
     capture::{record_optimizer_step, record_zero_grad},
     to_python_error,
 };
-pub(crate) use parameters::collect_parameters;
-
-pub(crate) use adam::{PyAdam, PyAdamW};
 
 /// Stochastic gradient descent over an explicit, stable parameter list.
 #[pyclass(name = "SGD", unsendable)]

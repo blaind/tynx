@@ -9,6 +9,7 @@ description = "A lightweight neural network runtime for inference and training"
 readme = "README.md"
 requires-python = ">=3.9"
 license = "MIT OR Apache-2.0"
+license-files = ["LICENSE-MIT", "LICENSE-APACHE"]
 keywords = ["onnx", "machine-learning", "neural-network", "inference", "training", "burn"]
 classifiers = [
     "Development Status :: 3 - Alpha",
