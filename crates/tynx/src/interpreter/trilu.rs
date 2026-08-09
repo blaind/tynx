@@ -25,6 +25,9 @@ pub(super) fn trilu(node: &TriluNode, env: &Env, device: &Device) -> Result<Vec<
             dims.len()
         )));
     }
+    if dims.contains(&0) {
+        return Ok(vec![input]);
+    }
     let mask = triangular_mask(&dims, node.config.upper, diagonal, device)?;
     let output = match input {
         Value::Tensor(input) => {
@@ -83,6 +86,11 @@ fn triangular_mask(dims: &[usize], upper: bool, diagonal: i64, device: &Device) 
 
 #[cfg(test)]
 mod tests {
+    use onnx_ir::{
+        DType,
+        node::trilu::{TriluConfig, TriluNodeBuilder},
+    };
+
     use super::*;
 
     #[test]
@@ -97,5 +105,41 @@ mod tests {
             output,
             [false, false, false, true, false, false, true, true, false]
         );
+    }
+
+    #[test]
+    fn preserves_empty_tensor_shapes() {
+        let node = TriluNodeBuilder::new("trilu")
+            .input_tensor("x", 2, DType::F32)
+            .output_tensor("y", 2, DType::F32)
+            .config(TriluConfig {
+                upper: true,
+                diagonal: 0,
+            })
+            .build();
+        let device = Device::default();
+
+        for dims in [[0, 3], [3, 0]] {
+            let mut env = Env::new();
+            env.insert(
+                "x".into(),
+                Value::from_tensor_data(
+                    TensorData::new(Vec::<f32>::new(), dims),
+                    dims.len(),
+                    &device,
+                )
+                .unwrap(),
+            );
+
+            let output = trilu(&node, &env, &device)
+                .unwrap()
+                .pop()
+                .unwrap()
+                .into_tensor()
+                .unwrap();
+
+            assert_eq!(output.dims(), dims);
+            assert_eq!(output.into_data().num_elements(), 0);
+        }
     }
 }
