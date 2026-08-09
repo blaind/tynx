@@ -6,11 +6,13 @@ use std::{
 };
 
 pub use tynx_core::InitializerId;
-use tynx_core::onnx_ir::{
-    DType, Node,
-    ir::{ArgType, Argument, OnnxGraph, ValueSource},
+use tynx_core::{
+    Result, TynxError,
+    onnx_ir::{
+        DType, Node,
+        ir::{ArgType, Argument, OnnxGraph, ValueSource},
+    },
 };
-use tynx_core::{Result, TynxError};
 
 use crate::backward_support::{BackwardCapability, BackwardSupportRegistry};
 

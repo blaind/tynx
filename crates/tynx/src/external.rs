@@ -1,14 +1,16 @@
 //! Binding-neutral contracts for adopting externally owned device tensors.
 //!
-//! This module deliberately stops before backend adoption. The pinned CubeCL storage cannot yet
-//! register an external WGPU allocation, so validation never creates a Tynx tensor and never
-//! stages or copies data. It establishes the capability, ordering, and lifetime types that a
-//! future backend adapter must retain in its storage and autodiff tape.
+//! Validation is backend-neutral and never stages or copies data. Backend adapters consume an
+//! acquired descriptor only after checking its opaque device/queue capability, then retain its
+//! lease through asynchronous work and any autodiff tape that may read the forward activation.
 
 use std::{
     any::Any,
     fmt::{Debug, Formatter},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use crate::{DType, MAX_RANK, Result, TynxError};
@@ -20,20 +22,50 @@ use crate::{DType, MAX_RANK, Result, TynxError};
 /// buffer and submission token associated with that device and queue.
 #[derive(Clone)]
 pub struct DeviceContextCapability {
-    identity: Arc<()>,
+    state: Arc<DeviceContextState>,
+}
+
+struct DeviceContextState {
+    active: AtomicBool,
 }
 
 impl DeviceContextCapability {
     /// Create a fresh opaque context capability.
     pub fn new() -> Self {
         Self {
-            identity: Arc::new(()),
+            state: Arc::new(DeviceContextState {
+                active: AtomicBool::new(true),
+            }),
         }
     }
 
     /// Return whether two capabilities identify the same device and queue context.
     pub fn same_context(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.identity, &other.identity)
+        Arc::ptr_eq(&self.state, &other.state)
+    }
+
+    /// Irreversibly retire this device/queue generation.
+    ///
+    /// Retirement is a logical submission fence for an engine-reported device loss or runtime
+    /// replacement. It rejects later validation and adoption but does not cancel queued work or
+    /// release live tensor/tape leases. The integration must stop executing existing tensors,
+    /// drop them and their tapes, and then reclaim or drop the old backend context.
+    pub fn retire(&self) {
+        self.state.active.store(false, Ordering::Release);
+    }
+
+    /// Return whether this device/queue generation still accepts new external work.
+    pub fn is_active(&self) -> bool {
+        self.state.active.load(Ordering::Acquire)
+    }
+
+    fn ensure_active(&self) -> Result<()> {
+        if self.is_active() {
+            return Ok(());
+        }
+        Err(external_error(
+            "external device/queue context generation is retired",
+        ))
     }
 }
 
@@ -94,6 +126,7 @@ impl ExternalBufferLease {
     where
         R: Any + Send + Sync,
     {
+        context.ensure_active()?;
         if byte_length == 0 {
             return Err(external_error(
                 "external buffer byte length must be positive",
@@ -240,11 +273,28 @@ impl ExternalTensorDescriptor {
         self,
         expected_context: &DeviceContextCapability,
     ) -> Result<ValidatedExternalTensorDescriptor> {
+        self.validate_dense(expected_context, ExternalAccess::ReadOnly)
+    }
+
+    /// Validate a writable dense-contiguous f32 view owned by a trusted engine.
+    pub fn validate_read_write_dense(
+        self,
+        expected_context: &DeviceContextCapability,
+    ) -> Result<ValidatedExternalTensorDescriptor> {
+        self.validate_dense(expected_context, ExternalAccess::ReadWrite)
+    }
+
+    fn validate_dense(
+        self,
+        expected_context: &DeviceContextCapability,
+        expected_access: ExternalAccess,
+    ) -> Result<ValidatedExternalTensorDescriptor> {
         if !self.context.same_context(expected_context) {
             return Err(external_error(
                 "external tensor belongs to a different device/queue context",
             ));
         }
+        self.context.ensure_active()?;
         if !self.buffer.context.same_context(&self.context) {
             return Err(external_error(
                 "external buffer lease belongs to a different device/queue context",
@@ -260,10 +310,11 @@ impl ExternalTensorDescriptor {
                 "external buffer is not declared for device storage use",
             ));
         }
-        if self.access != ExternalAccess::ReadOnly {
-            return Err(external_error(
-                "external tensor adoption currently supports read-only access",
-            ));
+        if self.access != expected_access {
+            return Err(external_error(format!(
+                "external tensor access must be {expected_access:?}, got {:?}",
+                self.access
+            )));
         }
         if self.dtype != DType::F32 {
             return Err(external_error(format!(
@@ -348,6 +399,7 @@ pub struct ValidatedExternalTensorDescriptor {
 impl ValidatedExternalTensorDescriptor {
     /// Apply producer-before-consumer ordering and retain the descriptor for backend adoption.
     pub fn acquire(self) -> Result<AcquiredExternalTensorDescriptor> {
+        self.descriptor.context.ensure_active()?;
         self.descriptor.producer_token.ensure_visible()?;
         Ok(AcquiredExternalTensorDescriptor {
             descriptor: self.descriptor,
@@ -357,15 +409,20 @@ impl ValidatedExternalTensorDescriptor {
 
 /// Validated external tensor metadata after producer ordering has been established.
 ///
-/// This still is not a Tynx tensor. A future CubeCL adapter must retain this object or an
-/// [`ExternalTensorRetention`] clone in the adopted storage and every autodiff tape that may read
-/// the forward activation.
+/// This still is not a Tynx tensor. A backend adapter must retain this object or an
+/// [`ExternalTensorRetention`] clone in the adopted storage and every autodiff tape that may
+/// read the forward activation.
 #[derive(Debug)]
 pub struct AcquiredExternalTensorDescriptor {
     descriptor: ExternalTensorDescriptor,
 }
 
 impl AcquiredExternalTensorDescriptor {
+    #[cfg(all(feature = "external-wgpu", any(feature = "wgpu", feature = "vulkan")))]
+    pub(crate) fn belongs_to(&self, expected_context: &DeviceContextCapability) -> bool {
+        self.descriptor.context.same_context(expected_context)
+    }
+
     /// Return the type-erased external buffer lease.
     pub fn buffer(&self) -> &ExternalBufferLease {
         &self.descriptor.buffer
@@ -597,10 +654,16 @@ mod tests {
         writable.access = ExternalAccess::ReadWrite;
         assert!(
             writable
+                .clone()
+                .validate_read_write_dense(&expected)
+                .is_ok()
+        );
+        assert!(
+            writable
                 .validate_read_only_dense(&expected)
                 .unwrap_err()
                 .to_string()
-                .contains("read-only")
+                .contains("ReadOnly")
         );
 
         let mut integer = descriptor.clone();
@@ -711,5 +774,34 @@ mod tests {
 
         assert!(error.to_string().contains("producer submission failed"));
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn retirement_fences_validation_and_acquisition_without_running_submission() {
+        let (descriptor, calls) = descriptor();
+        let context = descriptor.context.clone();
+        let validated = descriptor
+            .clone()
+            .validate_read_only_dense(&context)
+            .unwrap();
+
+        context.retire();
+
+        assert!(!context.is_active());
+        assert!(
+            descriptor
+                .validate_read_only_dense(&context)
+                .unwrap_err()
+                .to_string()
+                .contains("generation is retired")
+        );
+        assert!(
+            validated
+                .acquire()
+                .unwrap_err()
+                .to_string()
+                .contains("generation is retired")
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
 }

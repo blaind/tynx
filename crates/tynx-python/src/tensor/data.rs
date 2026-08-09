@@ -8,9 +8,8 @@ use pyo3::{
 };
 use tynx_core::{BoolStore, DType, Device, DynBool, DynInt, DynTensor, TensorData, Value};
 
-use crate::to_python_error;
-
 use super::factory::validate_allocation;
+use crate::to_python_error;
 
 #[derive(Debug, Clone)]
 pub(super) enum TensorValue {

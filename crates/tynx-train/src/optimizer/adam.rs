@@ -4,11 +4,10 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use tynx_core::{DynTensor, Result, TynxError};
 
-use crate::{ParamId, ParameterSlot, ParameterStore};
-
 use super::{
     trainable_by_name, validate_parameter_name_match, validate_state_names, validate_state_tensor,
 };
+use crate::{ParamId, ParameterSlot, ParameterStore};
 
 /// Configuration shared by Adam's adaptive-moment update.
 #[derive(Debug, Clone, Copy, PartialEq)]

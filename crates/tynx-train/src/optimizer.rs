@@ -2,12 +2,11 @@
 
 mod adam;
 
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+
 pub use adam::{
     Adam, AdamConfig, AdamParameterState, AdamStateDict, AdamStateKind, AdamW, AdamWConfig,
 };
-
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-
 use tynx_core::{DynTensor, Result, TynxError};
 
 use crate::{ParamId, ParameterSlot, ParameterStore};

@@ -1,7 +1,9 @@
 use burn::tensor::{Device, TensorData};
 use protobuf::{EnumOrUnknown, Message, MessageField};
-use tynx_core::onnx_ir::{GraphProto, ModelProto, TensorProto, TypeProto, ValueInfoProto};
-use tynx_core::{DynTensor, Env, Session, Value};
+use tynx_core::{
+    DynTensor, Env, Session, Value,
+    onnx_ir::{GraphProto, ModelProto, TensorProto, TypeProto, ValueInfoProto},
+};
 
 use super::{ImportedModel, analyze_session_outputs};
 use crate::{

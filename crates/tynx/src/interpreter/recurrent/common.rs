@@ -1,9 +1,8 @@
 use burn::tensor::{DType, Device, Tensor, TensorData};
 use onnx_ir::ir::Argument;
 
-use crate::{DynTensor, Result, Scalar, TynxError, Value};
-
 use super::super::{Env, resolve};
+use crate::{DynTensor, Result, Scalar, TynxError, Value};
 
 pub(super) fn required_rank3(
     env: &Env,

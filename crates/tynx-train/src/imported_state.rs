@@ -3,8 +3,10 @@
 use std::collections::{HashMap, HashSet};
 
 use burn::tensor::{DType, Device, TensorData};
-use tynx_core::onnx_ir::ir::{Argument, OnnxGraph};
-use tynx_core::{DynTensor, Result, TynxError};
+use tynx_core::{
+    DynTensor, Result, TynxError,
+    onnx_ir::ir::{Argument, OnnxGraph},
+};
 
 use crate::{
     InitializerId, InitializerRole, ParamId, ParameterSlot, ParameterStore, TrainabilityOverrides,

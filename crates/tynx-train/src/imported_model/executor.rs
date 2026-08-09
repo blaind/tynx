@@ -1,33 +1,34 @@
 //! Internal graph execution with live parameter-slot resolution.
 
 use burn::tensor::Device;
-use tynx_core::onnx_ir::{
-    Node,
-    ir::{ArgType, Argument, OnnxGraph},
-    node::{
-        batch_norm::{BatchNormConfig, BatchNormalizationNode},
-        conv_transpose1d::ConvTranspose1dNode,
-        conv_transpose2d::ConvTranspose2dNode,
-        conv_transpose3d::ConvTranspose3dNode,
-        conv1d::Conv1dNode,
-        conv2d::Conv2dNode,
-        conv3d::Conv3dNode,
-        gather::GatherNode,
-        gemm::GemmNode,
-        group_norm::GroupNormalizationNode,
-        instance_norm::InstanceNormalizationNode,
-        layer_norm::LayerNormalizationNode,
-        linear::LinearNode,
-        matmul::MatMulNode,
-        prelu::PReluNode,
-    },
-};
 use tynx_core::{
     DynTensor, Env, Result, Session, TynxError, Value, execute, execute_onnx_conv_transpose1d,
     execute_onnx_conv_transpose2d, execute_onnx_conv_transpose3d, execute_onnx_conv1d,
     execute_onnx_conv3d, execute_onnx_gather, execute_onnx_group_normalization,
     execute_onnx_instance_normalization, execute_onnx_layer_normalization, execute_onnx_matmul,
-    execute_onnx_prelu, resolve_onnx_padding2d,
+    execute_onnx_prelu,
+    onnx_ir::{
+        Node,
+        ir::{ArgType, Argument, OnnxGraph},
+        node::{
+            batch_norm::{BatchNormConfig, BatchNormalizationNode},
+            conv_transpose1d::ConvTranspose1dNode,
+            conv_transpose2d::ConvTranspose2dNode,
+            conv_transpose3d::ConvTranspose3dNode,
+            conv1d::Conv1dNode,
+            conv2d::Conv2dNode,
+            conv3d::Conv3dNode,
+            gather::GatherNode,
+            gemm::GemmNode,
+            group_norm::GroupNormalizationNode,
+            instance_norm::InstanceNormalizationNode,
+            layer_norm::LayerNormalizationNode,
+            linear::LinearNode,
+            matmul::MatMulNode,
+            prelu::PReluNode,
+        },
+    },
+    resolve_onnx_padding2d,
 };
 
 use crate::{ImportedState, InitializerId, InitializerRole, TrainabilityReport};

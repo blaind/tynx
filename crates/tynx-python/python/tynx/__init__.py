@@ -146,6 +146,7 @@ def load(
     simplify: _builtins.bool = True,
     initializer_names: _Optional[_Mapping[str, str]] = None,
     outputs: _Optional[list[str]] = None,
+    device: _Optional[Device] = None,
 ) -> ImportedModel: ...
 
 
@@ -157,6 +158,7 @@ def load(
     simplify: _builtins.bool = True,
     initializer_names: None = None,
     outputs: None = None,
+    device: None = None,
 ) -> Session: ...
 
 
@@ -167,11 +169,14 @@ def load(
     simplify: _builtins.bool = True,
     initializer_names: _Optional[_Mapping[str, str]] = None,
     outputs: _Optional[list[str]] = None,
+    device: _Optional[Device] = None,
 ) -> _Union[Session, ImportedModel]:
     """Load an inference Session or a callable slot-backed training model."""
     if trainable is False:
-        if initializer_names is not None or outputs is not None:
-            raise ValueError("initializer_names and outputs are only valid for a trainable model")
+        if initializer_names is not None or outputs is not None or device is not None:
+            raise ValueError(
+                "initializer_names, outputs, and device are only valid for a trainable model"
+            )
         return Session(path, simplify=simplify)
     if trainable is not True and trainable != "auto":
         raise ValueError("trainable must be False, True, or 'auto'")
@@ -180,6 +185,7 @@ def load(
         simplify=simplify,
         initializer_names=None if initializer_names is None else dict(initializer_names),
         outputs=outputs,
+        device=device,
     )
 
 

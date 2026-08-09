@@ -1,17 +1,20 @@
 //! ONNX backend conformance against the official cases vendored by Burn-ONNX.
 
-use std::collections::BTreeMap;
-use std::env;
-use std::fs;
-use std::panic::{self, AssertUnwindSafe};
-use std::path::{Path, PathBuf};
+use std::{
+    collections::BTreeMap,
+    env, fs,
+    panic::{self, AssertUnwindSafe},
+    path::{Path, PathBuf},
+};
 
 use burn::tensor::{BoolStore, DType, Device, TensorData};
 use half::{bf16, f16};
 use protobuf::Message;
 use serde::{Deserialize, Serialize};
-use tynx::onnx_ir::{Node, TensorProto};
-use tynx::{Env, Session, Value};
+use tynx::{
+    Env, Session, Value,
+    onnx_ir::{Node, TensorProto},
+};
 
 const REGISTRY_JSON: &str = include_str!("conformance.json");
 

@@ -3,8 +3,10 @@
 mod executor;
 
 use burn::tensor::Device;
-use tynx_core::onnx_ir::ir::{ArgType, Argument, TensorType};
-use tynx_core::{Env, Result, Session, TynxError, Value};
+use tynx_core::{
+    Env, Result, Session, TynxError, Value,
+    onnx_ir::ir::{ArgType, Argument, TensorType},
+};
 
 use crate::{
     ImportedState, InitializerNameOverrides, ParameterStore, TrainabilityOverrides,

@@ -1,0 +1,221 @@
+From 790f2d04a06af514854b6f024326190cb61464ac Mon Sep 17 00:00:00 2001
+Date: Thu, 23 Jul 2026 10:16:11 +0000
+Subject: [PATCH 2/3] Retain external WGPU leases
+
+---
+ crates/cubecl-wgpu/Cargo.toml             |   1 -
+ crates/cubecl-wgpu/src/compute/storage.rs | 126 +++++++++++++++++++++-
+ crates/cubecl-wgpu/src/lib.rs             |   3 -
+ 3 files changed, 121 insertions(+), 9 deletions(-)
+
+diff --git a/crates/cubecl-wgpu/Cargo.toml b/crates/cubecl-wgpu/Cargo.toml
+index 1fd0dd85..8fdae433 100644
+--- a/crates/cubecl-wgpu/Cargo.toml
++++ b/crates/cubecl-wgpu/Cargo.toml
+@@ -84,7 +84,6 @@ wgpu-hal = { workspace = true, optional = true }
+ bytemuck = { workspace = true }
+
+ async-channel = { workspace = true }
+-derive-new = { workspace = true }
+ hashbrown = { workspace = true }
+
+ cfg-if = { workspace = true }
+diff --git a/crates/cubecl-wgpu/src/compute/storage.rs b/crates/cubecl-wgpu/src/compute/storage.rs
+index 3841fb2b..fcfc7c1e 100644
+--- a/crates/cubecl-wgpu/src/compute/storage.rs
++++ b/crates/cubecl-wgpu/src/compute/storage.rs
+@@ -1,7 +1,7 @@
+ use cubecl_core::server::IoError;
+ use cubecl_runtime::storage::{ComputeStorage, StorageHandle, StorageId, StorageUtilization};
+ use hashbrown::HashMap;
+-use std::num::NonZeroU64;
++use std::{num::NonZeroU64, sync::Arc};
+ use wgpu::BufferUsages;
+
+ /// Minimum buffer size in bytes. The WebGPU spec requires buffer sizes > 0, and shaders
+@@ -26,7 +26,6 @@ impl core::fmt::Debug for WgpuStorage {
+ }
+
+ /// The memory resource that can be allocated for wgpu.
+-#[derive(new, Debug)]
+ pub struct WgpuResource {
+     /// The wgpu buffer.
+     pub buffer: wgpu::Buffer,
+@@ -40,18 +39,72 @@ pub struct WgpuResource {
+     ///
+     /// The result considers the offset.
+     pub size: u64,
++    retention: Option<Arc<dyn WgpuResourceRetention>>,
+ }
+
+ /// The memory that can be allocated for wgpu.
+-#[derive(new, Debug)]
+ pub struct WgpuMemory {
+     /// The wgpu buffer.
+     pub buffer: wgpu::Buffer,
+     /// The buffer device address, if supported
+     pub address: Option<NonZeroU64>,
++    retention: Option<Arc<dyn WgpuResourceRetention>>,
++}
++
++/// Type-erased owner retained alongside an externally registered wgpu buffer.
++///
++/// Engine integrations can use this to keep a logical slot lease alive even though cloning the
++/// underlying [`wgpu::Buffer`] would otherwise allow that slot to be recycled.
++pub trait WgpuResourceRetention: Send + Sync {}
++
++impl<T> WgpuResourceRetention for T where T: Send + Sync {}
++
++impl core::fmt::Debug for WgpuResource {
++    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
++        formatter
++            .debug_struct("WgpuResource")
++            .field("buffer", &self.buffer)
++            .field("address", &self.address)
++            .field("offset", &self.offset)
++            .field("size", &self.size)
++            .field("retained", &self.retention.is_some())
++            .finish()
++    }
++}
++
++impl core::fmt::Debug for WgpuMemory {
++    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
++        formatter
++            .debug_struct("WgpuMemory")
++            .field("buffer", &self.buffer)
++            .field("address", &self.address)
++            .field("retained", &self.retention.is_some())
++            .finish()
++    }
++}
++
++impl WgpuMemory {
++    fn new(buffer: wgpu::Buffer, address: Option<NonZeroU64>) -> Self {
++        Self {
++            buffer,
++            address,
++            retention: None,
++        }
++    }
+ }
+
+ impl WgpuResource {
++    /// Creates a resource view without an external lifetime sidecar.
++    pub fn new(buffer: wgpu::Buffer, address: Option<NonZeroU64>, offset: u64, size: u64) -> Self {
++        Self {
++            buffer,
++            address,
++            offset,
++            size,
++            retention: None,
++        }
++    }
++
+     /// Creates a view over an externally allocated wgpu buffer.
+     ///
+     /// The buffer must belong to the same device as the `CubeCL` client that registers it.
+@@ -59,6 +112,33 @@ impl WgpuResource {
+         Self::new(buffer, None, offset, size)
+     }
+
++    /// Creates an external buffer view that retains its logical owner.
++    ///
++    /// The retention value remains alive while a managed handle or queued wgpu binding can access
++    /// the buffer.
++    pub fn from_external_buffer_with_retention<T>(
++        buffer: wgpu::Buffer,
++        offset: u64,
++        size: u64,
++        retention: Arc<T>,
++    ) -> Self
++    where
++        T: Send + Sync + 'static,
++    {
++        Self {
++            buffer,
++            address: None,
++            offset,
++            size,
++            retention: Some(retention),
++        }
++    }
++
++    fn with_retention(mut self, retention: Option<Arc<dyn WgpuResourceRetention>>) -> Self {
++        self.retention = retention;
++        self
++    }
++
+     /// Return the binding view of the buffer.
+     pub fn as_wgpu_bind_resource(&self) -> wgpu::BindingResource<'_> {
+         // wgpu enforces 4-byte alignment for buffer binding sizes per the WebGPU spec.
+@@ -115,6 +195,7 @@ impl ComputeStorage for WgpuStorage {
+             handle.offset(),
+             handle.size(),
+         )
++        .with_retention(memory.retention.clone())
+     }
+
+     #[cfg_attr(
+@@ -206,8 +287,14 @@ impl ComputeStorage for WgpuStorage {
+             offset: resource.offset,
+             size: resource.size,
+         };
+-        self.memory
+-            .insert(id, WgpuMemory::new(resource.buffer, resource.address));
++        self.memory.insert(
++            id,
++            WgpuMemory {
++                buffer: resource.buffer,
++                address: resource.address,
++                retention: resource.retention,
++            },
++        );
+         Ok(StorageHandle::new(id, utilization))
+     }
+
+@@ -330,4 +417,33 @@ mod tests {
+             Err(IoError::InvalidResource { .. })
+         ));
+     }
++
++    #[test]
++    fn external_retention_outlives_storage_while_a_binding_resource_exists() {
++        #[derive(Debug)]
++        struct Retention;
++
++        let device = noop_device();
++        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
++            label: None,
++            size: 256,
++            usage: BufferUsages::STORAGE,
++            mapped_at_creation: false,
++        });
++        let retention = Arc::new(Retention);
++        let retained = Arc::downgrade(&retention);
++        let mut storage = WgpuStorage::new(256, device, BufferUsages::STORAGE, false);
++        let handle = storage
++            .register_external(WgpuResource::from_external_buffer_with_retention(
++                buffer, 0, 256, retention,
++            ))
++            .unwrap();
++        let queued_resource = storage.get(&handle);
++
++        storage.dealloc(handle.id);
++        assert!(retained.upgrade().is_some());
++
++        drop(queued_resource);
++        assert!(retained.upgrade().is_none());
++    }
+ }
+diff --git a/crates/cubecl-wgpu/src/lib.rs b/crates/cubecl-wgpu/src/lib.rs
+index 21453395..3ef6d059 100644
+--- a/crates/cubecl-wgpu/src/lib.rs
++++ b/crates/cubecl-wgpu/src/lib.rs
+@@ -1,6 +1,3 @@
+-#[macro_use]
+-extern crate derive_new;
+-
+ extern crate alloc;
+
+ mod backend;

@@ -19,12 +19,22 @@ use std::{
     thread::{self, ThreadId},
 };
 
+pub(crate) use combine::{cat_py, chunk_py, split_py, stack_py};
+use comparison::{Comparison, MaskOperation};
+pub(crate) use data::IntBounds;
+use data::TensorValue;
+use extrema::Extremum;
+pub(crate) use factory::{
+    arange_py, empty_like_py, empty_py, full_like_py, full_py, ones_like_py, ones_py, rand_like_py,
+    rand_py, randint_py, randn_like_py, randn_py, zeros_like_py, zeros_py,
+};
 use fragile::Fragile;
 use pyo3::{
     exceptions::{PyIndexError, PyNotImplementedError, PyRuntimeError, PyTypeError, PyValueError},
     prelude::*,
     types::{PyAny, PyBool, PyList, PyTuple},
 };
+use reduction::ReductionSpec;
 use tynx_capture::{BinaryOp, UnaryOp};
 use tynx_core::{Device, DynInt, DynTensor, Gradients, Slice, TensorData, Value};
 use tynx_train::ParameterSlot;
@@ -38,16 +48,6 @@ use crate::{
     grad_mode::is_grad_enabled,
     to_python_error,
 };
-pub(crate) use combine::{cat_py, chunk_py, split_py, stack_py};
-use comparison::{Comparison, MaskOperation};
-pub(crate) use data::IntBounds;
-use data::TensorValue;
-use extrema::Extremum;
-pub(crate) use factory::{
-    arange_py, empty_like_py, empty_py, full_like_py, full_py, ones_like_py, ones_py, rand_like_py,
-    rand_py, randint_py, randn_like_py, randn_py, zeros_like_py, zeros_py,
-};
-use reduction::ReductionSpec;
 
 /// Eager device tensor with optional floating-point autodiff state.
 ///

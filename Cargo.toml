@@ -29,3 +29,24 @@ unsafe_code = "forbid"
 dbg_macro = "deny"
 todo = "deny"
 unimplemented = "deny"
+
+# Burn currently pins the upstream CubeCL source, so every CubeCL package in its graph must be
+# redirected together. This fork is the reviewed external-buffer series plus the released WGPU
+# 29 compatibility needed to share Bevy's exact device, queue, and buffer types.
+[patch."https://github.com/tracel-ai/cubecl"]
+cubecl = { git = "https://github.com/blaind/cubecl", rev = "74718177ac8357a70241dba74159700f955b1c7c" }
+cubecl-common = { git = "https://github.com/blaind/cubecl", rev = "74718177ac8357a70241dba74159700f955b1c7c" }
+cubecl-core = { git = "https://github.com/blaind/cubecl", rev = "74718177ac8357a70241dba74159700f955b1c7c" }
+cubecl-cpp = { git = "https://github.com/blaind/cubecl", rev = "74718177ac8357a70241dba74159700f955b1c7c" }
+cubecl-cpu = { git = "https://github.com/blaind/cubecl", rev = "74718177ac8357a70241dba74159700f955b1c7c" }
+cubecl-cuda = { git = "https://github.com/blaind/cubecl", rev = "74718177ac8357a70241dba74159700f955b1c7c" }
+cubecl-hip = { git = "https://github.com/blaind/cubecl", rev = "74718177ac8357a70241dba74159700f955b1c7c" }
+cubecl-ir = { git = "https://github.com/blaind/cubecl", rev = "74718177ac8357a70241dba74159700f955b1c7c" }
+cubecl-macros = { git = "https://github.com/blaind/cubecl", rev = "74718177ac8357a70241dba74159700f955b1c7c" }
+cubecl-macros-internal = { git = "https://github.com/blaind/cubecl", rev = "74718177ac8357a70241dba74159700f955b1c7c" }
+cubecl-opt = { git = "https://github.com/blaind/cubecl", rev = "74718177ac8357a70241dba74159700f955b1c7c" }
+cubecl-runtime = { git = "https://github.com/blaind/cubecl", rev = "74718177ac8357a70241dba74159700f955b1c7c" }
+cubecl-spirv = { git = "https://github.com/blaind/cubecl", rev = "74718177ac8357a70241dba74159700f955b1c7c" }
+cubecl-std = { git = "https://github.com/blaind/cubecl", rev = "74718177ac8357a70241dba74159700f955b1c7c" }
+cubecl-wgpu = { git = "https://github.com/blaind/cubecl", rev = "74718177ac8357a70241dba74159700f955b1c7c" }
+cubecl-zspace = { git = "https://github.com/blaind/cubecl", rev = "74718177ac8357a70241dba74159700f955b1c7c" }

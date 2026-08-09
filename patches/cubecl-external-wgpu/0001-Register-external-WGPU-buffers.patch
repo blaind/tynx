@@ -1,0 +1,665 @@
+From b486a95f34b711bb65caf733aae8f489065893b0 Mon Sep 17 00:00:00 2001
+Date: Thu, 23 Jul 2026 10:12:08 +0000
+Subject: [PATCH 1/3] Register external WGPU buffers
+
+---
+ crates/cubecl-runtime/src/client.rs           |  17 ++
+ .../src/memory_management/memory_manage.rs    |  48 ++++-
+ .../memory_pool/external_pool.rs              | 164 +++++++++++++++++
+ .../src/memory_management/memory_pool/mod.rs  |   2 +
+ crates/cubecl-runtime/src/server/base.rs      |  24 +++
+ crates/cubecl-runtime/src/storage/base.rs     |  11 ++
+ crates/cubecl-wgpu/Cargo.toml                 |   1 +
+ crates/cubecl-wgpu/src/compute/mem_manager.rs |   7 +
+ crates/cubecl-wgpu/src/compute/server.rs      |  15 +-
+ crates/cubecl-wgpu/src/compute/storage.rs     | 167 ++++++++++++++++++
+ 10 files changed, 450 insertions(+), 6 deletions(-)
+ create mode 100644 crates/cubecl-runtime/src/memory_management/memory_pool/external_pool.rs
+
+diff --git a/crates/cubecl-runtime/src/client.rs b/crates/cubecl-runtime/src/client.rs
+index e5a3d964..46253bd9 100644
+--- a/crates/cubecl-runtime/src/client.rs
++++ b/crates/cubecl-runtime/src/client.rs
+@@ -209,6 +209,23 @@ impl<R: Runtime> ComputeClient<R> {
+             .unwrap()
+     }
+
++    /// Registers a resource allocated outside this runtime.
++    ///
++    /// The resource must belong to the same underlying device as this client. Supporting
++    /// runtimes retain it until the returned handle and all derived bindings are released.
++    pub fn register_external(
++        &self,
++        resource: <<R::Server as ComputeServer>::Storage as ComputeStorage>::Resource,
++    ) -> Result<Handle, ServerError>
++    where
++        <<R::Server as ComputeServer>::Storage as ComputeStorage>::Resource: 'static,
++    {
++        let stream_id = self.stream_id();
++        self.device
++            .submit_blocking(move |server| server.register_external(resource, stream_id))
++            .unwrap()
++    }
++
+     fn do_create_from_slices(
+         &self,
+         descriptors: Vec<MemoryLayoutDescriptor>,
+diff --git a/crates/cubecl-runtime/src/memory_management/memory_manage.rs b/crates/cubecl-runtime/src/memory_management/memory_manage.rs
+index cc4e9e5e..87a0e267 100644
+--- a/crates/cubecl-runtime/src/memory_management/memory_manage.rs
++++ b/crates/cubecl-runtime/src/memory_management/memory_manage.rs
+@@ -1,6 +1,9 @@
+ use super::{
+     MemoryConfiguration, MemoryPoolOptions, MemoryUsage, PoolType,
+-    memory_pool::{ExclusiveMemoryPool, MemoryPool, PersistentPool, SlicedPool},
++    memory_pool::{
++        EXTERNAL_POOL_INDEX, ExclusiveMemoryPool, ExternalMemoryPool, MemoryPool, PersistentPool,
++        SlicedPool,
++    },
+ };
+ use crate::{
+     config::{
+@@ -116,6 +119,7 @@ pub enum MemoryAllocationMode {
+ /// Reserves and keeps track of chunks of memory in the storage, and slices upon these chunks.
+ pub struct MemoryManagement<Storage> {
+     name: String,
++    external: ExternalMemoryPool,
+     persistent: PersistentPool,
+     pools: Vec<DynamicPool>,
+     storage: Storage,
+@@ -342,6 +346,7 @@ impl<Storage: ComputeStorage> MemoryManagement<Storage> {
+
+         Self {
+             name: options.name,
++            external: ExternalMemoryPool::new(),
+             persistent: PersistentPool::new(
+                 properties.max_page_size,
+                 properties.alignment,
+@@ -383,6 +388,7 @@ impl<Storage: ComputeStorage> MemoryManagement<Storage> {
+             || "Manual memory cleanup ...".to_string(),
+         );
+
++        self.external.cleanup(&mut self.storage);
+         self.persistent
+             .cleanup(&mut self.storage, self.alloc_reserve_count, explicit);
+
+@@ -401,7 +407,11 @@ impl<Storage: ComputeStorage> MemoryManagement<Storage> {
+     fn find(&self, binding: ManagedMemoryBinding) -> Result<&Slice, IoError> {
+         let id = binding.descriptor();
+
+-        if id.location().pool >= self.pools.len() as u8 {
++        if id.location().pool == EXTERNAL_POOL_INDEX {
++            return self.external.find(&binding);
++        }
++
++        if id.location().pool == self.pools.len() as u8 {
+             return self.persistent.find(&binding);
+         }
+
+@@ -521,6 +531,24 @@ impl<Storage: ComputeStorage> MemoryManagement<Storage> {
+         allocated
+     }
+
++    /// Registers a storage resource allocated outside this memory manager.
++    ///
++    /// External resources are tracked for binding lifetime, but are never reused to satisfy
++    /// ordinary [`Self::reserve`] calls.
++    pub fn register_external(
++        &mut self,
++        resource: Storage::Resource,
++    ) -> Result<ManagedMemoryHandle, IoError> {
++        let storage = self.storage.register_external(resource)?;
++        match self.external.register(storage.clone()) {
++            Ok(handle) => Ok(handle),
++            Err(error) => {
++                self.storage.dealloc(storage.id);
++                Err(error)
++            }
++        }
++    }
++
+     /// Fetch the storage used by the memory manager.
+     ///
+     /// # Notes
+@@ -546,7 +574,9 @@ impl<Storage: ComputeStorage> MemoryManagement<Storage> {
+             },
+             |m1, m2| m1.combine(m2),
+         );
+-        memory_usage.combine(self.persistent.get_memory_usage())
++        memory_usage
++            .combine(self.persistent.get_memory_usage())
++            .combine(self.external.get_memory_usage())
+     }
+
+     /// Print out a report of the current memory usage.
+@@ -572,7 +602,13 @@ impl<Storage: ComputeStorage> MemoryManagement<Storage> {
+         }
+
+         let pool_index = descriptor.location().pool as usize;
+-        if pool_index >= self.pools.len() {
++        if descriptor.location().pool == EXTERNAL_POOL_INDEX {
++            return Err(IoError::InvalidResource {
++                backtrace: BackTrace::capture(),
++                reason: "external memory cannot be rebound".into(),
++            });
++        }
++        if pool_index == self.pools.len() {
+             return self.persistent.bind(reserved, assigned, cursor);
+         }
+
+@@ -591,6 +627,10 @@ impl<Storage: ComputeStorage> core::fmt::Display for MemoryManagement<Storage> {
+         f.write_str("\n# MemoryManagement\n\n")?;
+         f.write_fmt(format_args!(" - name: {:?}\n", self.name))?;
+         f.write_fmt(format_args!("\n## Persistent\n\n{}", self.persistent))?;
++        f.write_fmt(format_args!(
++            "\n## External\n\n{}\n",
++            self.external.get_memory_usage()
++        ))?;
+         f.write_str("\n## Dynamic\n\n")?;
+
+         for pool in self.pools.iter() {
+diff --git a/crates/cubecl-runtime/src/memory_management/memory_pool/external_pool.rs b/crates/cubecl-runtime/src/memory_management/memory_pool/external_pool.rs
+new file mode 100644
+index 00000000..3cb6013d
+--- /dev/null
++++ b/crates/cubecl-runtime/src/memory_management/memory_pool/external_pool.rs
+@@ -0,0 +1,164 @@
++use alloc::vec::Vec;
++use cubecl_common::backtrace::BackTrace;
++
++use super::{ManagedMemoryBinding, ManagedMemoryHandle, Slice};
++use crate::{
++    memory_management::{MemoryLocation, MemoryUsage},
++    server::IoError,
++    storage::{ComputeStorage, StorageHandle},
++};
++
++pub(crate) const EXTERNAL_POOL_INDEX: u8 = u8::MAX;
++
++/// Tracks externally allocated storage without making it available for ordinary reservations.
++pub(crate) struct ExternalMemoryPool {
++    slices: Vec<Slice>,
++}
++
++impl ExternalMemoryPool {
++    pub(crate) fn new() -> Self {
++        Self { slices: Vec::new() }
++    }
++
++    pub(crate) fn register(
++        &mut self,
++        storage: StorageHandle,
++    ) -> Result<ManagedMemoryHandle, IoError> {
++        let slice_index =
++            u32::try_from(self.slices.len()).map_err(|_| IoError::InvalidResource {
++                reason: "external memory registry exhausted".into(),
++                backtrace: BackTrace::capture(),
++            })?;
++        let slice = Slice::new(storage, 0);
++        slice.descriptor().update_location(MemoryLocation::new(
++            EXTERNAL_POOL_INDEX,
++            0,
++            slice_index,
++        ));
++        let handle = slice.handle.clone();
++        self.slices.push(slice);
++        Ok(handle)
++    }
++
++    pub(crate) fn find(&self, binding: &ManagedMemoryBinding) -> Result<&Slice, IoError> {
++        let slice_index = binding.descriptor().slice();
++        let slice = self
++            .slices
++            .get(slice_index)
++            .ok_or_else(|| IoError::NotFound {
++                backtrace: BackTrace::capture(),
++                reason: alloc::format!("External memory slice {slice_index} doesn't exist").into(),
++            })?;
++
++        if slice.handle.descriptor() != binding.descriptor() {
++            return Err(IoError::NotFound {
++                backtrace: BackTrace::capture(),
++                reason: "external memory binding no longer identifies that slice".into(),
++            });
++        }
++
++        Ok(slice)
++    }
++
++    pub(crate) fn cleanup<Storage: ComputeStorage>(&mut self, storage: &mut Storage) {
++        let mut retained = Vec::with_capacity(self.slices.len());
++        for slice in self.slices.drain(..) {
++            if slice.is_free() {
++                storage.dealloc(slice.storage.id);
++            } else {
++                let slice_index = retained.len() as u32;
++                slice.descriptor().update_slice(slice_index);
++                retained.push(slice);
++            }
++        }
++        self.slices = retained;
++        storage.flush();
++    }
++
++    pub(crate) fn get_memory_usage(&self) -> MemoryUsage {
++        let used_slices: Vec<_> = self
++            .slices
++            .iter()
++            .filter(|slice| !slice.is_free())
++            .collect();
++
++        MemoryUsage {
++            number_allocs: used_slices.len() as u64,
++            bytes_in_use: used_slices.iter().map(|slice| slice.storage.size()).sum(),
++            bytes_padding: 0,
++            bytes_reserved: self.slices.iter().map(|slice| slice.storage.size()).sum(),
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::storage::{StorageId, StorageUtilization};
++    use alloc::vec;
++
++    #[derive(Debug, Default)]
++    struct TestStorage {
++        deallocated: Vec<StorageId>,
++    }
++
++    impl ComputeStorage for TestStorage {
++        type Resource = ();
++
++        fn alignment(&self) -> usize {
++            1
++        }
++
++        fn get(&mut self, _handle: &StorageHandle) -> Self::Resource {}
++
++        fn alloc(&mut self, _size: u64) -> Result<StorageHandle, IoError> {
++            unreachable!("external-pool tests do not allocate storage")
++        }
++
++        fn dealloc(&mut self, id: StorageId) {
++            self.deallocated.push(id);
++        }
++
++        fn flush(&mut self) {}
++    }
++
++    fn storage_handle(size: u64) -> StorageHandle {
++        StorageHandle::new(StorageId::new(), StorageUtilization { offset: 0, size })
++    }
++
++    #[test]
++    fn external_slices_are_never_reused_as_reservations() {
++        let mut pool = ExternalMemoryPool::new();
++        let first = pool.register(storage_handle(64)).unwrap();
++        let first_id = pool.find(&first.clone().binding()).unwrap().storage.id;
++        drop(first);
++
++        let second = pool.register(storage_handle(64)).unwrap();
++        let second_id = pool.find(&second.clone().binding()).unwrap().storage.id;
++
++        assert_ne!(first_id, second_id);
++        assert_eq!(pool.slices.len(), 2);
++    }
++
++    #[test]
++    fn cleanup_drops_free_storage_and_updates_retained_locations() {
++        let mut pool = ExternalMemoryPool::new();
++        let released = pool.register(storage_handle(64)).unwrap();
++        let released_id = pool.find(&released.clone().binding()).unwrap().storage.id;
++        let retained = pool.register(storage_handle(128)).unwrap();
++        drop(released);
++
++        let mut storage = TestStorage::default();
++        pool.cleanup(&mut storage);
++
++        assert_eq!(storage.deallocated, vec![released_id]);
++        assert_eq!(
++            pool.find(&retained.clone().binding())
++                .unwrap()
++                .storage
++                .size(),
++            128
++        );
++        assert_eq!(retained.descriptor().slice(), 0);
++    }
++}
+diff --git a/crates/cubecl-runtime/src/memory_management/memory_pool/mod.rs b/crates/cubecl-runtime/src/memory_management/memory_pool/mod.rs
+index b9bf1dcb..543e9bb9 100644
+--- a/crates/cubecl-runtime/src/memory_management/memory_pool/mod.rs
++++ b/crates/cubecl-runtime/src/memory_management/memory_pool/mod.rs
+@@ -1,5 +1,6 @@
+ mod base;
+ mod exclusive_pool;
++mod external_pool;
+ pub(crate) mod handle;
+ mod memory_page;
+ mod persistent_pool;
+@@ -7,6 +8,7 @@ mod sliced_pool;
+
+ pub(crate) use base::*;
+ pub(crate) use exclusive_pool::*;
++pub(crate) use external_pool::*;
+ pub(crate) use memory_page::*;
+ pub(crate) use persistent_pool::*;
+ pub(crate) use sliced_pool::*;
+diff --git a/crates/cubecl-runtime/src/server/base.rs b/crates/cubecl-runtime/src/server/base.rs
+index 4c218296..f26ca9e2 100644
+--- a/crates/cubecl-runtime/src/server/base.rs
++++ b/crates/cubecl-runtime/src/server/base.rs
+@@ -386,6 +386,20 @@ where
+         stream_id: StreamId,
+     ) -> Result<ManagedResource<<Self::Storage as ComputeStorage>::Resource>, ServerError>;
+
++    /// Registers a resource allocated outside this server and returns a managed handle for it.
++    ///
++    /// Backends that do not support external resources reject this operation.
++    fn register_external(
++        &mut self,
++        _resource: <Self::Storage as ComputeStorage>::Resource,
++        _stream_id: StreamId,
++    ) -> Result<Handle, ServerError> {
++        Err(IoError::UnsupportedIoOperation {
++            backtrace: BackTrace::capture(),
++        }
++        .into())
++    }
++
+     /// Executes the `kernel` over the given memory `handles`.
+     ///
+     /// Kernels have mutable access to every resource they are given
+@@ -735,6 +749,16 @@ pub enum IoError {
+         backtrace: BackTrace,
+     },
+
++    /// An externally supplied resource does not satisfy this runtime's requirements.
++    #[error("the provided resource is invalid: {reason}\n{backtrace}")]
++    InvalidResource {
++        /// Why the resource cannot be registered.
++        reason: Reason,
++        /// The captured backtrace.
++        #[cfg_attr(std_io, serde(skip))]
++        backtrace: BackTrace,
++    },
++
+     /// Memory wasn't found in the memory pool
+     #[error("couldn't find resource for that handle: {reason}\n{backtrace}")]
+     NotFound {
+diff --git a/crates/cubecl-runtime/src/storage/base.rs b/crates/cubecl-runtime/src/storage/base.rs
+index a99ea373..958f25df 100644
+--- a/crates/cubecl-runtime/src/storage/base.rs
++++ b/crates/cubecl-runtime/src/storage/base.rs
+@@ -85,6 +85,17 @@ pub trait ComputeStorage: Send {
+     /// Allocates `size` units of memory and returns a handle to it
+     fn alloc(&mut self, size: u64) -> Result<StorageHandle, IoError>;
+
++    /// Registers a resource allocated outside this storage.
++    ///
++    /// Implementations that support external resources must retain the resource until
++    /// [`Self::dealloc`] is called for the returned handle. The default implementation rejects
++    /// registration.
++    fn register_external(&mut self, _resource: Self::Resource) -> Result<StorageHandle, IoError> {
++        Err(IoError::UnsupportedIoOperation {
++            backtrace: cubecl_common::backtrace::BackTrace::capture(),
++        })
++    }
++
+     /// Deallocates the memory pointed by the given storage id.
+     ///
+     /// These deallocations might need to be flushed with [`Self::flush`].
+diff --git a/crates/cubecl-wgpu/Cargo.toml b/crates/cubecl-wgpu/Cargo.toml
+index f3e9456c..1fd0dd85 100644
+--- a/crates/cubecl-wgpu/Cargo.toml
++++ b/crates/cubecl-wgpu/Cargo.toml
+@@ -124,6 +124,7 @@ half = { workspace = true }
+ paste = { workspace = true }
+ pretty_assertions = { workspace = true }
+ test-log = { workspace = true, features = ["trace"] }
++wgpu = { workspace = true, features = ["noop"] }
+
+ [build-dependencies]
+ cfg_aliases = "0.2.1"
+diff --git a/crates/cubecl-wgpu/src/compute/mem_manager.rs b/crates/cubecl-wgpu/src/compute/mem_manager.rs
+index 797523fc..22e271b4 100644
+--- a/crates/cubecl-wgpu/src/compute/mem_manager.rs
++++ b/crates/cubecl-wgpu/src/compute/mem_manager.rs
+@@ -99,6 +99,13 @@ impl WgpuMemManager {
+         }
+     }
+
++    pub(crate) fn register_external(
++        &mut self,
++        resource: WgpuResource,
++    ) -> Result<ManagedMemoryHandle, IoError> {
++        self.memory_pool.register_external(resource)
++    }
++
+     pub(crate) fn reserve_staging(
+         &mut self,
+         size: u64,
+diff --git a/crates/cubecl-wgpu/src/compute/server.rs b/crates/cubecl-wgpu/src/compute/server.rs
+index 73b1be20..72a23c19 100644
+--- a/crates/cubecl-wgpu/src/compute/server.rs
++++ b/crates/cubecl-wgpu/src/compute/server.rs
+@@ -17,8 +17,8 @@ use cubecl_core::{
+     future::DynFut,
+     prelude::*,
+     server::{
+-        CopyDescriptor, IoError, KernelArguments, LaunchError, ProfileError, ProfilingToken,
+-        ServerCommunication, ServerError, ServerUtilities,
++        CopyDescriptor, Handle, IoError, KernelArguments, LaunchError, ProfileError,
++        ProfilingToken, ServerCommunication, ServerError, ServerUtilities,
+     },
+     zspace::{Strides, strides},
+ };
+@@ -362,6 +362,17 @@ impl<C: WgpuCompiler> ComputeServer for WgpuServer<C> {
+         Ok(ManagedResource::new(memory, resource))
+     }
+
++    fn register_external(
++        &mut self,
++        resource: WgpuResource,
++        stream_id: StreamId,
++    ) -> Result<Handle, ServerError> {
++        let size = resource.size;
++        let stream = self.scheduler.stream(&stream_id);
++        let memory = stream.mem_manage.register_external(resource)?;
++        Ok(Handle::from_memory(memory, stream_id, size))
++    }
++
+     unsafe fn launch(
+         &mut self,
+         kernel: Self::Kernel,
+diff --git a/crates/cubecl-wgpu/src/compute/storage.rs b/crates/cubecl-wgpu/src/compute/storage.rs
+index 790139d0..3841fb2b 100644
+--- a/crates/cubecl-wgpu/src/compute/storage.rs
++++ b/crates/cubecl-wgpu/src/compute/storage.rs
+@@ -52,6 +52,13 @@ pub struct WgpuMemory {
+ }
+
+ impl WgpuResource {
++    /// Creates a view over an externally allocated wgpu buffer.
++    ///
++    /// The buffer must belong to the same device as the `CubeCL` client that registers it.
++    pub fn from_external_buffer(buffer: wgpu::Buffer, offset: u64, size: u64) -> Self {
++        Self::new(buffer, None, offset, size)
++    }
++
+     /// Return the binding view of the buffer.
+     pub fn as_wgpu_bind_resource(&self) -> wgpu::BindingResource<'_> {
+         // wgpu enforces 4-byte alignment for buffer binding sizes per the WebGPU spec.
+@@ -133,6 +140,77 @@ impl ComputeStorage for WgpuStorage {
+         ))
+     }
+
++    fn register_external(&mut self, resource: Self::Resource) -> Result<StorageHandle, IoError> {
++        if resource.size == 0 {
++            return Err(IoError::InvalidResource {
++                reason: "external wgpu resources must have a positive logical size".into(),
++                backtrace: cubecl_common::backtrace::BackTrace::capture(),
++            });
++        }
++        if self.mem_alignment != 0 && !resource.offset.is_multiple_of(self.mem_alignment as u64) {
++            return Err(IoError::InvalidResource {
++                reason: format!(
++                    "external wgpu buffer offset {} is not aligned to {} bytes",
++                    resource.offset, self.mem_alignment
++                )
++                .into(),
++                backtrace: cubecl_common::backtrace::BackTrace::capture(),
++            });
++        }
++        if !resource.buffer.usage().contains(BufferUsages::STORAGE) {
++            return Err(IoError::InvalidResource {
++                reason: "external wgpu buffers require STORAGE usage".into(),
++                backtrace: cubecl_common::backtrace::BackTrace::capture(),
++            });
++        }
++        let binding_size = resource
++            .size
++            .checked_add(3)
++            .map(|size| size / 4 * 4)
++            .ok_or_else(|| IoError::InvalidResource {
++                reason: "external wgpu resource size overflows binding alignment".into(),
++                backtrace: cubecl_common::backtrace::BackTrace::capture(),
++            })?;
++        let binding_limit = self.device.limits().max_storage_buffer_binding_size;
++        if binding_size > binding_limit {
++            return Err(IoError::InvalidResource {
++                reason: format!(
++                    "external wgpu resource binding requires {binding_size} bytes, exceeding \
++                     the device limit of {binding_limit} bytes"
++                )
++                .into(),
++                backtrace: cubecl_common::backtrace::BackTrace::capture(),
++            });
++        }
++        let range_end =
++            resource
++                .offset
++                .checked_add(binding_size)
++                .ok_or_else(|| IoError::InvalidResource {
++                    reason: "external wgpu resource range overflows".into(),
++                    backtrace: cubecl_common::backtrace::BackTrace::capture(),
++                })?;
++        if range_end > resource.buffer.size() {
++            return Err(IoError::InvalidResource {
++                reason: format!(
++                    "external wgpu resource range ends at {range_end}, beyond buffer size {}",
++                    resource.buffer.size()
++                )
++                .into(),
++                backtrace: cubecl_common::backtrace::BackTrace::capture(),
++            });
++        }
++
++        let id = StorageId::new();
++        let utilization = StorageUtilization {
++            offset: resource.offset,
++            size: resource.size,
++        };
++        self.memory
++            .insert(id, WgpuMemory::new(resource.buffer, resource.address));
++        Ok(StorageHandle::new(id, utilization))
++    }
++
+     #[cfg_attr(feature = "tracing", tracing::instrument(level = "trace", skip(self)))]
+     fn dealloc(&mut self, id: StorageId) {
+         self.memory.remove(&id);
+@@ -164,3 +242,92 @@ impl WgpuStorage {
+         Ok(WgpuMemory::new(self.device.create_buffer(desc), None))
+     }
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    fn noop_device() -> wgpu::Device {
++        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
++            backends: wgpu::Backends::NOOP,
++            backend_options: wgpu::BackendOptions {
++                noop: wgpu::NoopBackendOptions {
++                    enable: true,
++                    ..Default::default()
++                },
++                ..Default::default()
++            },
++            ..wgpu::InstanceDescriptor::new_without_display_handle()
++        });
++        let adapter = cubecl_common::future::block_on(
++            instance.request_adapter(&wgpu::RequestAdapterOptions::default()),
++        )
++        .unwrap();
++        let (device, _queue) = cubecl_common::future::block_on(
++            adapter.request_device(&wgpu::DeviceDescriptor::default()),
++        )
++        .unwrap();
++        device
++    }
++
++    #[test]
++    fn external_registration_retains_the_original_buffer() {
++        let device = noop_device();
++        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
++            label: Some("cubecl external registration test"),
++            size: 512,
++            usage: BufferUsages::STORAGE | BufferUsages::COPY_DST,
++            mapped_at_creation: false,
++        });
++        let mut storage = WgpuStorage::new(
++            256,
++            device,
++            BufferUsages::STORAGE | BufferUsages::COPY_DST,
++            false,
++        );
++
++        let handle = storage
++            .register_external(WgpuResource::from_external_buffer(buffer.clone(), 256, 128))
++            .unwrap();
++        let resource = storage.get(&handle);
++
++        assert_eq!(resource.buffer, buffer);
++        assert_eq!(resource.offset, 256);
++        assert_eq!(resource.size, 128);
++    }
++
++    #[test]
++    fn external_registration_rejects_invalid_bindings() {
++        let device = noop_device();
++        let missing_usage = device.create_buffer(&wgpu::BufferDescriptor {
++            label: None,
++            size: 512,
++            usage: BufferUsages::COPY_DST,
++            mapped_at_creation: false,
++        });
++        let storage_buffer = device.create_buffer(&wgpu::BufferDescriptor {
++            label: None,
++            size: 512,
++            usage: BufferUsages::STORAGE,
++            mapped_at_creation: false,
++        });
++        let mut storage = WgpuStorage::new(256, device, BufferUsages::STORAGE, false);
++
++        assert!(matches!(
++            storage.register_external(WgpuResource::from_external_buffer(missing_usage, 0, 128)),
++            Err(IoError::InvalidResource { .. })
++        ));
++        assert!(matches!(
++            storage.register_external(WgpuResource::from_external_buffer(
++                storage_buffer.clone(),
++                4,
++                128
++            )),
++            Err(IoError::InvalidResource { .. })
++        ));
++        assert!(matches!(
++            storage.register_external(WgpuResource::from_external_buffer(storage_buffer, 256, 512)),
++            Err(IoError::InvalidResource { .. })
++        ));
++    }
++}
