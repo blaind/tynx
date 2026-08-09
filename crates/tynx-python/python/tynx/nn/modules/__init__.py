@@ -1,6 +1,6 @@
 """Authored eager neural-network layers."""
 
-from .activation import ReLU
+from .activation import ReLU, SiLU
 from .container import Sequential
 from .convolution import Conv2d
 from .dropout import Dropout
@@ -26,4 +26,5 @@ __all__ = [
     "Module",
     "ReLU",
     "Sequential",
+    "SiLU",
 ]

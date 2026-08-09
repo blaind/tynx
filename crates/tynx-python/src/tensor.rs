@@ -1554,6 +1554,16 @@ impl PyTensor {
         self.unary_captured(UnaryOp::Sigmoid, |input| Ok(input.sigmoid()))
     }
 
+    /// Apply sine element-wise.
+    fn sin(&self) -> PyResult<Self> {
+        self.unary_captured(UnaryOp::Sin, |input| Ok(input.sin()))
+    }
+
+    /// Apply cosine element-wise.
+    fn cos(&self) -> PyResult<Self> {
+        self.unary_captured(UnaryOp::Cos, |input| Ok(input.cos()))
+    }
+
     /// Apply hyperbolic tangent element-wise.
     fn tanh(&self) -> PyResult<Self> {
         self.unary_captured(UnaryOp::Tanh, |input| Ok(input.tanh()))

@@ -129,6 +129,10 @@ pub enum UnaryOp {
     Relu,
     /// Logistic activation.
     Sigmoid,
+    /// Elementwise sine.
+    Sin,
+    /// Elementwise cosine.
+    Cos,
     /// Hyperbolic tangent activation.
     Tanh,
     /// Natural exponential.
@@ -1062,6 +1066,8 @@ fn execute_unary(op: &UnaryOp, input: Value) -> Result<Value> {
         UnaryOp::Negate => Ok(input.negated()),
         UnaryOp::Relu => Ok(input.relu()),
         UnaryOp::Sigmoid => Ok(input.sigmoid()),
+        UnaryOp::Sin => Ok(input.sin()),
+        UnaryOp::Cos => Ok(input.cos()),
         UnaryOp::Tanh => Ok(input.tanh()),
         UnaryOp::Exp => Ok(input.exp()),
         UnaryOp::Log => Ok(input.log()),

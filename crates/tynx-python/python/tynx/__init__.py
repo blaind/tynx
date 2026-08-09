@@ -13,7 +13,7 @@ from typing import Optional as _Optional
 from typing import Union as _Union
 from typing import overload as _overload
 
-from . import distributions, nn, optim
+from . import distributions, experimental, nn, optim
 from ._tynx import (
     Buffer,
     Device,
@@ -209,6 +209,7 @@ __all__ = [
     "distributions",
     "empty",
     "empty_like",
+    "experimental",
     "float32",
     "full",
     "full_like",
