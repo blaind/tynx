@@ -1,5 +1,4 @@
 From bdfcab4c071f7408c43af8cd5a347c10df88b5a1 Mon Sep 17 00:00:00 2001
-From: PyBevy contributors <hello@pybevy.org>
 Date: Thu, 23 Jul 2026 00:00:00 +0000
 Subject: [PATCH 6/6] Use released WGPU passthrough descriptors
 

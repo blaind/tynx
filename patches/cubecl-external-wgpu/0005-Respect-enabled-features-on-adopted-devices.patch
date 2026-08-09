@@ -1,5 +1,4 @@
 From b7bf8d107fb8ddd6aeff4787095118b8d97702c4 Mon Sep 17 00:00:00 2001
-From: PyBevy contributors <hello@pybevy.org>
 Date: Thu, 23 Jul 2026 00:00:00 +0000
 Subject: [PATCH 5/5] Respect enabled features on adopted devices
 

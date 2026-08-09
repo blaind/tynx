@@ -1,5 +1,4 @@
 From 54c98df715c3f11de4c4853d2a6432e758912b75 Mon Sep 17 00:00:00 2001
-From: PyBevy contributors <hello@pybevy.org>
 Date: Thu, 23 Jul 2026 00:00:00 +0000
 Subject: [PATCH 4/4] Use released WGPU 29 for Bevy compatibility
 
