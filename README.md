@@ -42,7 +42,11 @@ import tynx as tx
 
 tx.manual_seed(0)
 
-model = tx.nn.Sequential(tx.nn.Linear(1, 16), tx.nn.ReLU(), tx.nn.Linear(16, 1))
+model = tx.nn.Sequential(
+    tx.nn.Linear(1, 16),
+    tx.nn.ReLU(),
+    tx.nn.Linear(16, 1),
+)
 optimizer = tx.optim.Adam(model.parameters(), lr=0.03)
 
 x = tx.Tensor([[-2.0], [-1.0], [0.0], [1.0], [2.0]])
