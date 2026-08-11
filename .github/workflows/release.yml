@@ -52,9 +52,11 @@ jobs:
         with:
           python-version: "3.11"
       - uses: PyO3/maturin-action@v1
+        env:
+          NODE_USE_SYSTEM_CA: "1"
         with:
           command: build
-          args: --profile dist --features wgpu -m crates/tynx-python/Cargo.toml --out dist
+          args: --release --features wgpu -m crates/tynx-python/Cargo.toml --out dist
           manylinux: ${{ matrix.manylinux || 'auto' }}
       - name: Verify wheel artifacts
         shell: bash

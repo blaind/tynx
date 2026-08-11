@@ -18,7 +18,7 @@ maturin supplies it to the wheel, and the tag must be `v<version>`.
    git push origin v0.1.2
    ```
 
-CI builds `--profile dist --features wgpu` wheels for Linux x86_64/aarch64, macOS arm64, and
+CI builds `--release --features wgpu` wheels for Linux x86_64/aarch64, macOS arm64, and
 Windows x86_64. Each must pass the 20 MiB limit, build-path scan, installation, and CPU smoke
 test. Tag builds then publish through PyPI trusted publishing and create a GitHub release.
 
