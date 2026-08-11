@@ -35,6 +35,28 @@ Rust, Python, and the browser.
   and fine-tuning behind the firewall, with training and inference on the same weights in the
   same process.
 
+Models you author in Python train the same way. This one runs as-is:
+
+```python
+import tynx as tx
+
+tx.manual_seed(0)
+
+model = tx.nn.Sequential(tx.nn.Linear(1, 16), tx.nn.ReLU(), tx.nn.Linear(16, 1))
+optimizer = tx.optim.Adam(model.parameters(), lr=0.03)
+
+x = tx.Tensor([[-2.0], [-1.0], [0.0], [1.0], [2.0]])
+y = tx.Tensor([[-5.0], [-2.0], [1.0], [4.0], [7.0]])
+
+for _ in range(200):
+    optimizer.zero_grad()
+    loss = tx.nn.functional.mse_loss(model(x), y)
+    loss.backward()
+    optimizer.step()
+
+print(loss.item())  # 6.28e-06
+```
+
 ## Install
 
 ```sh
