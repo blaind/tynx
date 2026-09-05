@@ -38,6 +38,7 @@ pub use interpreter::{
     },
     execute,
     gather::gather_values as execute_onnx_gather,
+    grid_sample::{GridSampleMode, GridSamplePaddingMode, grid_sample_values},
     matrix::matmul_values as execute_onnx_matmul,
     normalization::{
         group_normalization_values as execute_onnx_group_normalization,

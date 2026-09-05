@@ -20,7 +20,9 @@ pub use embedding::{external_copy_source, wrap_external_tensor};
 use grad_mode::{PyNoGrad, PyNoGradFunction, is_grad_enabled_py, no_grad};
 use gradient::{clip_grad_norm_py, clip_grad_value_py};
 use imported_model::{PyImportedModel, PyTrainabilityReport};
-use nn::{adaptive_avg_pool2d_py, avg_pool2d_py, conv2d_py, embedding_py, max_pool2d_py};
+use nn::{
+    adaptive_avg_pool2d_py, avg_pool2d_py, conv2d_py, embedding_py, grid_sample_py, max_pool2d_py,
+};
 use optimizer::{PyAdam, PyAdamW, PySgd};
 use parameter::{PyBuffer, PyParameter};
 use pyo3::{
@@ -310,6 +312,7 @@ pub fn init_module(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(max_pool2d_py, module)?)?;
     module.add_function(wrap_pyfunction!(avg_pool2d_py, module)?)?;
     module.add_function(wrap_pyfunction!(adaptive_avg_pool2d_py, module)?)?;
+    module.add_function(wrap_pyfunction!(grid_sample_py, module)?)?;
     module.add_function(wrap_pyfunction!(embedding_py, module)?)?;
     module.add_function(wrap_pyfunction!(empty_py, module)?)?;
     module.add_function(wrap_pyfunction!(full_py, module)?)?;

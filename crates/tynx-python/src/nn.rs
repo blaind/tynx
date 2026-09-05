@@ -1,8 +1,11 @@
 //! Native differentiable neural-network operations used by Python layers and functionals.
 
-use pyo3::{exceptions::PyTypeError, prelude::*};
+use pyo3::{
+    exceptions::{PyNotImplementedError, PyTypeError, PyValueError},
+    prelude::*,
+};
 use tynx_capture::UnaryOp;
-use tynx_core::Value;
+use tynx_core::{GridSampleMode, GridSamplePaddingMode, Value, grid_sample_values};
 
 use crate::{
     capture::{record_conv2d, record_embedding},
@@ -162,6 +165,65 @@ pub(crate) fn adaptive_avg_pool2d_py(
             output_size: [output_size.0, output_size.1],
         },
     )
+}
+
+#[pyfunction(name = "_grid_sample")]
+pub(crate) fn grid_sample_py(
+    input: PyRef<'_, PyTensor>,
+    grid: PyRef<'_, PyTensor>,
+    mode: &str,
+    padding_mode: &str,
+    align_corners: bool,
+) -> PyResult<PyTensor> {
+    input.capture_unsupported("grid_sample")?;
+    grid.capture_unsupported("grid_sample")?;
+
+    let mode = match mode {
+        "bilinear" => GridSampleMode::Bilinear,
+        "nearest" => GridSampleMode::Nearest,
+        "bicubic" => GridSampleMode::Bicubic,
+        value => {
+            return Err(PyValueError::new_err(format!(
+                "grid_sample mode must be 'bilinear', 'nearest', or 'bicubic', got {value:?}"
+            )));
+        }
+    };
+    let padding_mode = match padding_mode {
+        "zeros" => GridSamplePaddingMode::Zeros,
+        "border" => GridSamplePaddingMode::Border,
+        "reflection" => GridSamplePaddingMode::Reflection,
+        value => {
+            return Err(PyValueError::new_err(format!(
+                "grid_sample padding_mode must be 'zeros', 'border', or 'reflection', got {value:?}"
+            )));
+        }
+    };
+
+    let tracking = is_grad_enabled();
+    let mut input_value = input.operation_float_value(tracking, "grid_sample")?;
+    let mut grid_value = grid.operation_float_value(tracking, "grid_sample")?;
+    let rank = input_value.rank();
+    let inference_only = rank == 5 || !matches!(mode, GridSampleMode::Bilinear);
+    if tracking && (input.tracks_gradients()? || grid.tracks_gradients()?) && inference_only {
+        return Err(PyNotImplementedError::new_err(
+            "grid_sample autograd currently supports only rank-4 bilinear mode; use tynx.no_grad() for nearest, bicubic, or rank-5 sampling",
+        ));
+    }
+    if inference_only {
+        input_value = input_value.inner();
+        grid_value = grid_value.inner();
+    }
+
+    let mut output = grid_sample_values(input_value, grid_value, mode, padding_mode, align_corners)
+        .map_err(to_python_error)?;
+    if inference_only {
+        output = output.to_autodiff();
+    }
+    Ok(if tracking {
+        PyTensor::from_operation(output, &[&input, &grid])
+    } else {
+        PyTensor::from_inner(output)
+    })
 }
 
 #[pyfunction(name = "_embedding")]

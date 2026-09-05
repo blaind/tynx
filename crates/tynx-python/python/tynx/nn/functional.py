@@ -9,12 +9,15 @@ from .._tynx import (
     _avg_pool2d,
     _conv2d,
     _embedding,
+    _grid_sample,
     _max_pool2d,
     maximum,
 )
 from ._utils import _bool, _IntOrPair, _pair
 
 _Reduction = _Literal["none", "mean", "sum"]
+_GridSampleMode = _Literal["bilinear", "nearest", "bicubic"]
+_GridSamplePaddingMode = _Literal["zeros", "border", "reflection"]
 
 
 def conv2d(
@@ -86,6 +89,50 @@ def avg_pool2d(
 def adaptive_avg_pool2d(input: Tensor, output_size: _IntOrPair) -> Tensor:
     """Pool an NCHW input to an explicit spatial size."""
     return _adaptive_avg_pool2d(input, _pair(output_size, "output_size", positive=True))
+
+
+def grid_sample(
+    input: Tensor,
+    grid: Tensor,
+    mode: _GridSampleMode = "bilinear",
+    padding_mode: _GridSamplePaddingMode = "zeros",
+    align_corners: _Optional[bool] = None,
+) -> Tensor:
+    """Sample an image or volume at normalized grid coordinates."""
+    if input.dtype != "float32" or grid.dtype != "float32":
+        raise TypeError(
+            "grid_sample input and grid must be float32 Tensors, "
+            f"got {input.dtype} and {grid.dtype}"
+        )
+    if input.ndim not in (4, 5) or grid.ndim != input.ndim:
+        raise ValueError(
+            "grid_sample input and grid must have the same rank, either 4 or 5, "
+            f"got {input.ndim} and {grid.ndim}"
+        )
+    coordinate_size = 2 if input.ndim == 4 else 3
+    if grid.shape[-1] != coordinate_size:
+        raise ValueError(
+            f"grid_sample rank-{input.ndim} grid must end in {coordinate_size}, "
+            f"got shape {grid.shape}"
+        )
+    if input.shape[0] != grid.shape[0]:
+        raise ValueError(
+            "grid_sample input and grid batch dimensions must match, "
+            f"got {input.shape[0]} and {grid.shape[0]}"
+        )
+    if mode not in ("bilinear", "nearest", "bicubic"):
+        raise ValueError(
+            f"grid_sample mode must be 'bilinear', 'nearest', or 'bicubic', got {mode!r}"
+        )
+    if padding_mode not in ("zeros", "border", "reflection"):
+        raise ValueError(
+            "grid_sample padding_mode must be 'zeros', 'border', or 'reflection', "
+            f"got {padding_mode!r}"
+        )
+    if mode == "bicubic" and input.ndim != 4:
+        raise ValueError("grid_sample bicubic mode requires a rank-4 input")
+    align = False if align_corners is None else _bool(align_corners, "align_corners")
+    return _grid_sample(input, grid, mode, padding_mode, align)
 
 
 def embedding(
@@ -191,6 +238,7 @@ __all__ = [
     "conv2d",
     "cross_entropy",
     "embedding",
+    "grid_sample",
     "max_pool2d",
     "mse_loss",
     "relu",
