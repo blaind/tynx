@@ -5,7 +5,7 @@ use pyo3::{
     prelude::*,
     types::{PyAny, PyBool, PyList, PyTuple},
 };
-use tynx_core::{DynBool, DynInt, DynTensor};
+use tynx_core::{DynBool, DynInt, DynTensor, MAX_RANK};
 
 use super::{PyTensor, data::TensorValue, shape};
 use crate::{
@@ -134,6 +134,90 @@ pub(crate) fn cat_py(tensors: &Bound<'_, PyAny>, dim: isize) -> PyResult<PyTenso
 #[pyo3(signature = (tensors, dim=0))]
 pub(crate) fn stack_py(tensors: &Bound<'_, PyAny>, dim: isize) -> PyResult<PyTensor> {
     combine(tensors, dim, true)
+}
+
+#[pyfunction(name = "meshgrid")]
+#[pyo3(signature = (*tensors, indexing=None))]
+pub(crate) fn meshgrid_py(
+    py: Python<'_>,
+    tensors: &Bound<'_, PyTuple>,
+    indexing: Option<&str>,
+) -> PyResult<Py<PyTuple>> {
+    let inputs = if tensors.len() == 1 {
+        let candidate = tensors.get_item(0)?;
+        if candidate.is_instance_of::<PyTuple>() || candidate.is_instance_of::<PyList>() {
+            tensor_refs(&candidate, "meshgrid inputs")?
+        } else {
+            tensor_refs(tensors.as_any(), "meshgrid inputs")?
+        }
+    } else {
+        tensor_refs(tensors.as_any(), "meshgrid inputs")?
+    };
+    if inputs.len() > MAX_RANK {
+        return Err(PyValueError::new_err(format!(
+            "meshgrid input count {} exceeds the maximum rank {MAX_RANK}",
+            inputs.len()
+        )));
+    }
+    if inputs.iter().any(|input| input.source.value().rank() != 1) {
+        return Err(PyValueError::new_err(
+            "meshgrid expects every input Tensor to be rank-1",
+        ));
+    }
+
+    let first = inputs[0].source.value();
+    if inputs
+        .iter()
+        .skip(1)
+        .any(|input| input.source.value().dtype_name() != first.dtype_name())
+    {
+        return Err(PyTypeError::new_err(
+            "meshgrid expects all inputs to have the same dtype",
+        ));
+    }
+    if inputs
+        .iter()
+        .skip(1)
+        .any(|input| input.source.value().device() != first.device())
+    {
+        return Err(PyValueError::new_err(
+            "meshgrid expects all inputs to be on the same device",
+        ));
+    }
+
+    let indexing = indexing.unwrap_or("ij");
+    if !matches!(indexing, "ij" | "xy") {
+        return Err(PyValueError::new_err(format!(
+            "meshgrid indexing must be 'ij' or 'xy', got {indexing:?}"
+        )));
+    }
+
+    let rank = inputs.len();
+    let mut output_shape = inputs
+        .iter()
+        .map(|input| input.source.value().dims()[0])
+        .collect::<Vec<_>>();
+    if indexing == "xy" && rank >= 2 {
+        output_shape.swap(0, 1);
+    }
+
+    let outputs = inputs
+        .iter()
+        .enumerate()
+        .map(|(index, input)| {
+            let axis = if indexing == "xy" && index < 2 {
+                1 - index
+            } else {
+                index
+            };
+            let mut view_shape = vec![1; rank];
+            view_shape[axis] = input.source.value().dims()[0];
+            input
+                .reshape_value(view_shape)?
+                .expand_value(output_shape.clone())
+        })
+        .collect::<PyResult<Vec<_>>>()?;
+    Ok(PyTuple::new(py, outputs)?.unbind())
 }
 
 fn split_sizes(spec: &Bound<'_, PyAny>, extent: usize) -> PyResult<Vec<usize>> {

@@ -19,7 +19,7 @@ use std::{
     thread::{self, ThreadId},
 };
 
-pub(crate) use combine::{cat_py, chunk_py, split_py, stack_py};
+pub(crate) use combine::{cat_py, chunk_py, meshgrid_py, split_py, stack_py};
 use comparison::{Comparison, MaskOperation};
 pub(crate) use data::IntBounds;
 use data::TensorValue;
@@ -1626,32 +1626,7 @@ impl PyTensor {
     #[pyo3(signature = (*shape))]
     fn expand(&self, shape: &Bound<'_, PyTuple>) -> PyResult<Self> {
         let output = shape::expand(shape, &self.source.value().dims())?;
-        match self.source.value() {
-            TensorValue::Float(_) => self
-                .unary_captured(UnaryOp::Expand(output.clone()), move |input| {
-                    input.to_rank(output.len())?.expand(&output)
-                }),
-            value => {
-                let expanded = match value.detach() {
-                    TensorValue::Int(input) => TensorValue::Int(
-                        input
-                            .to_rank(output.len())
-                            .and_then(|input| input.expand(&output))
-                            .map_err(to_python_error)?,
-                    ),
-                    TensorValue::Bool(input) => TensorValue::Bool(
-                        input
-                            .to_rank(output.len())
-                            .and_then(|input| input.expand(&output))
-                            .map_err(to_python_error)?,
-                    ),
-                    TensorValue::Float(_) => unreachable!("float expansion handled above"),
-                };
-                let mut result = Self::from_value(expanded).with_inherited_int_bounds(self);
-                result.trace = record_unary(self, UnaryOp::Expand(output))?;
-                Ok(result)
-            }
-        }
+        self.expand_value(output)
     }
 
     /// Materialize repetitions along each dimension.
@@ -2162,6 +2137,35 @@ impl PyTensor {
                 let mut result = Self::from_value(value.reshape(output.clone())?)
                     .with_inherited_int_bounds(self);
                 result.trace = record_unary(self, UnaryOp::Reshape(output))?;
+                Ok(result)
+            }
+        }
+    }
+
+    fn expand_value(&self, output: Vec<usize>) -> PyResult<Self> {
+        match self.source.value() {
+            TensorValue::Float(_) => self
+                .unary_captured(UnaryOp::Expand(output.clone()), move |input| {
+                    input.to_rank(output.len())?.expand(&output)
+                }),
+            value => {
+                let expanded = match value.detach() {
+                    TensorValue::Int(input) => TensorValue::Int(
+                        input
+                            .to_rank(output.len())
+                            .and_then(|input| input.expand(&output))
+                            .map_err(to_python_error)?,
+                    ),
+                    TensorValue::Bool(input) => TensorValue::Bool(
+                        input
+                            .to_rank(output.len())
+                            .and_then(|input| input.expand(&output))
+                            .map_err(to_python_error)?,
+                    ),
+                    TensorValue::Float(_) => unreachable!("float expansion handled above"),
+                };
+                let mut result = Self::from_value(expanded).with_inherited_int_bounds(self);
+                result.trace = record_unary(self, UnaryOp::Expand(output))?;
                 Ok(result)
             }
         }

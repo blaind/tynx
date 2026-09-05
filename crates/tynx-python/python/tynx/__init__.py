@@ -11,7 +11,6 @@ from typing import Any as _Any
 from typing import Literal as _Literal
 from typing import Optional as _Optional
 from typing import Union as _Union
-from typing import cast as _cast
 from typing import overload as _overload
 
 from . import distributions, nn, optim
@@ -38,6 +37,7 @@ from ._tynx import (
     index_select,
     is_grad_enabled,
     maximum,
+    meshgrid,
     minimum,
     no_grad,
     nonzero,
@@ -80,47 +80,6 @@ _atexit.register(_quiesce_device_at_exit)
 def manual_seed(seed: int) -> None:
     """Seed device sampling and authored-module parameter initialization."""
     _manual_seed(seed)
-
-
-def meshgrid(
-    *tensors: _Union[Tensor, tuple[Tensor, ...], list[Tensor]],
-    indexing: _Optional[_Literal["ij", "xy"]] = None,
-) -> tuple[Tensor, ...]:
-    """Create coordinate grids from one-dimensional input tensors."""
-    candidates: tuple[_Any, ...]
-    if len(tensors) == 1 and isinstance(tensors[0], (tuple, list)):
-        candidates = tuple(tensors[0])
-    else:
-        candidates = tensors
-    if not candidates:
-        raise ValueError("meshgrid expects a non-empty sequence of Tensors")
-    if any(not isinstance(value, Tensor) for value in candidates):
-        raise TypeError("meshgrid inputs must be Tensors")
-    inputs = _cast(tuple[Tensor, ...], candidates)
-    if any(value.ndim != 1 for value in inputs):
-        raise ValueError("meshgrid expects every input Tensor to be rank-1")
-    first = inputs[0]
-    if any(value.dtype != first.dtype for value in inputs[1:]):
-        raise TypeError("meshgrid expects all inputs to have the same dtype")
-    if any(value.device != first.device for value in inputs[1:]):
-        raise ValueError("meshgrid expects all inputs to be on the same device")
-    if indexing is None:
-        indexing = "ij"
-    if indexing not in ("ij", "xy"):
-        raise ValueError(f"meshgrid indexing must be 'ij' or 'xy', got {indexing!r}")
-
-    rank = len(inputs)
-    output_shape = [value.shape[0] for value in inputs]
-    if indexing == "xy" and rank >= 2:
-        output_shape[0], output_shape[1] = output_shape[1], output_shape[0]
-
-    outputs: list[Tensor] = []
-    for index, value in enumerate(inputs):
-        axis = 1 - index if indexing == "xy" and index < 2 else index
-        view_shape = [1] * rank
-        view_shape[axis] = value.shape[0]
-        outputs.append(value.reshape(view_shape).expand(output_shape))
-    return tuple(outputs)
 
 
 def _inferred_tensor_dtype(data: _Any) -> _Optional[_Literal["float32", "int64", "bool"]]:
