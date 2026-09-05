@@ -82,6 +82,58 @@ def manual_seed(seed: int) -> None:
     _manual_seed(seed)
 
 
+def roll(
+    input: Tensor,
+    shifts: _Union[_builtins.int, tuple[int, ...], list[int]],
+    dims: _Optional[_Union[_builtins.int, tuple[int, ...], list[int]]] = None,
+) -> Tensor:
+    """Roll tensor values along one or more dimensions."""
+    normalized_shifts = _roll_arguments(shifts, "shifts")
+    original_shape = input.shape
+    normalized_dims: tuple[int, ...]
+    if dims is None:
+        if len(normalized_shifts) != 1:
+            raise ValueError("roll shifts and dimensions must align")
+        result = input.flatten()
+        normalized_dims = (0,)
+    else:
+        normalized_dims = _roll_arguments(dims, "dims")
+        if len(normalized_shifts) != len(normalized_dims):
+            raise ValueError("roll shifts and dimensions must align")
+        result = input
+    flattened = dims is None
+
+    for shift, dim in zip(normalized_shifts, normalized_dims):
+        if not -result.ndim <= dim < result.ndim:
+            raise IndexError(f"roll dimension {dim} out of range for rank {result.ndim}")
+        dim %= result.ndim
+        size = result.shape[dim]
+        if size == 0:
+            continue
+        shift %= size
+        if shift == 0:
+            continue
+        trailing = [slice(None)] * result.ndim
+        leading = trailing.copy()
+        trailing[dim] = slice(-shift, None)
+        leading[dim] = slice(None, -shift)
+        result = cat((result[tuple(trailing)], result[tuple(leading)]), dim=dim)
+
+    return result.reshape(original_shape) if flattened else result
+
+
+def _roll_arguments(
+    value: _Union[_builtins.int, tuple[int, ...], list[int]], name: str
+) -> tuple[int, ...]:
+    if type(value) is _builtins.int:
+        return (value,)
+    if not isinstance(value, (tuple, list)) or any(
+        type(item) is not _builtins.int for item in value
+    ):
+        raise TypeError(f"roll {name} must be an int or a sequence of ints")
+    return tuple(value)
+
+
 def _inferred_tensor_dtype(data: _Any) -> _Optional[_Literal["float32", "int64", "bool"]]:
     if isinstance(data, Tensor) or hasattr(data, "__array_interface__"):
         return None
@@ -240,6 +292,7 @@ __all__ = [
     "randint",
     "randn",
     "randn_like",
+    "roll",
     "save_checkpoint",
     "sort",
     "split",
