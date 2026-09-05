@@ -204,19 +204,20 @@ pub(crate) fn grid_sample_py(
     let mut grid_value = grid.operation_float_value(tracking, "grid_sample")?;
     let rank = input_value.rank();
     let inference_only = rank == 5 || !matches!(mode, GridSampleMode::Bilinear);
-    if tracking && (input.tracks_gradients()? || grid.tracks_gradients()?) && inference_only {
+    let differentiable = tracking && (input.tracks_gradients()? || grid.tracks_gradients()?);
+    if differentiable && inference_only {
         return Err(PyNotImplementedError::new_err(
             "grid_sample autograd currently supports only rank-4 bilinear mode; use tynx.no_grad() for nearest, bicubic, or rank-5 sampling",
         ));
     }
-    if inference_only {
+    if !differentiable {
         input_value = input_value.inner();
         grid_value = grid_value.inner();
     }
 
     let mut output = grid_sample_values(input_value, grid_value, mode, padding_mode, align_corners)
         .map_err(to_python_error)?;
-    if inference_only {
+    if !differentiable {
         output = output.to_autodiff();
     }
     Ok(if tracking {
