@@ -1,11 +1,11 @@
 //! Sequence-based eager tensor combination operations.
 
 use pyo3::{
-    exceptions::{PyTypeError, PyValueError},
+    exceptions::{PyIndexError, PyTypeError, PyValueError},
     prelude::*,
     types::{PyAny, PyBool, PyList, PyTuple},
 };
-use tynx_core::{DynBool, DynInt, DynTensor, MAX_RANK};
+use tynx_core::{DynBool, DynInt, DynTensor, MAX_RANK, Slice};
 
 use super::{PyTensor, data::TensorValue, shape};
 use crate::{
@@ -47,6 +47,7 @@ fn tensor_refs<'py>(
 fn combine(values: &Bound<'_, PyAny>, dim: isize, stack: bool) -> PyResult<PyTensor> {
     let operation = if stack { "stack" } else { "cat" };
     let tensors = tensor_refs(values, operation)?;
+    let tensors = tensors.iter().map(|tensor| &**tensor).collect::<Vec<_>>();
     let first = tensors[0].source.value();
     if tensors
         .iter()
@@ -58,8 +59,17 @@ fn combine(values: &Bound<'_, PyAny>, dim: isize, stack: bool) -> PyResult<PyTen
         )));
     }
     let axis = shape::axis_value(dim, first.rank(), stack, operation)?;
+    combine_tensors(&tensors, axis, stack, operation)
+}
+
+fn combine_tensors(
+    tensors: &[&PyTensor],
+    axis: usize,
+    stack: bool,
+    operation: &str,
+) -> PyResult<PyTensor> {
+    let first = tensors[0].source.value();
     let tracking = is_grad_enabled();
-    let sources = tensors.iter().map(|tensor| &**tensor).collect::<Vec<_>>();
     let result = match first {
         TensorValue::Float(_) => {
             let inputs = tensors
@@ -73,7 +83,7 @@ fn combine(values: &Bound<'_, PyAny>, dim: isize, stack: bool) -> PyResult<PyTen
             }
             .map_err(to_python_error)?;
             if tracking {
-                PyTensor::from_operation(output, &sources)
+                PyTensor::from_operation(output, tensors)
             } else {
                 PyTensor::from_inner(output)
             }
@@ -117,7 +127,7 @@ fn combine(values: &Bound<'_, PyAny>, dim: isize, stack: bool) -> PyResult<PyTen
             PyTensor::from_value(TensorValue::Bool(output))
         }
     };
-    let trace = record_combine(&sources, axis, stack)?;
+    let trace = record_combine(tensors, axis, stack)?;
     match trace {
         Some(trace) => result.with_trace(trace),
         None => Ok(result),
@@ -218,6 +228,127 @@ pub(crate) fn meshgrid_py(
         })
         .collect::<PyResult<Vec<_>>>()?;
     Ok(PyTuple::new(py, outputs)?.unbind())
+}
+
+fn roll_arguments(value: &Bound<'_, PyAny>, name: &str) -> PyResult<Vec<i64>> {
+    if !value.is_instance_of::<PyBool>()
+        && let Ok(value) = value.extract::<i64>()
+    {
+        return Ok(vec![value]);
+    }
+    let items = if let Ok(tuple) = value.cast::<PyTuple>() {
+        tuple.iter().collect::<Vec<_>>()
+    } else if let Ok(list) = value.cast::<PyList>() {
+        list.iter().collect::<Vec<_>>()
+    } else {
+        return Err(PyTypeError::new_err(format!(
+            "roll {name} must be an int or a sequence of ints"
+        )));
+    };
+    items
+        .into_iter()
+        .map(|item| {
+            if item.is_instance_of::<PyBool>() {
+                return Err(PyTypeError::new_err(format!(
+                    "roll {name} must be an int or a sequence of ints"
+                )));
+            }
+            item.extract::<i64>().map_err(|_| {
+                PyTypeError::new_err(format!("roll {name} must be an int or a sequence of ints"))
+            })
+        })
+        .collect()
+}
+
+#[pyfunction(name = "roll")]
+#[pyo3(signature = (input, shifts, dims=None))]
+pub(crate) fn roll_py(
+    py: Python<'_>,
+    input: Py<PyTensor>,
+    shifts: &Bound<'_, PyAny>,
+    dims: Option<&Bound<'_, PyAny>>,
+) -> PyResult<Py<PyTensor>> {
+    let shifts = roll_arguments(shifts, "shifts")?;
+    let dims = dims.map(|dims| roll_arguments(dims, "dims")).transpose()?;
+    if dims.as_ref().is_none_or(|dims| dims.len() != shifts.len())
+        && (dims.is_some() || shifts.len() != 1)
+    {
+        return Err(PyValueError::new_err(
+            "roll shifts and dimensions must align",
+        ));
+    }
+
+    let input_ref = input.borrow(py);
+    input_ref.require_owner_thread()?;
+    let original_shape = input_ref.source.value().dims();
+    let flattened = dims.is_none();
+    let dims = dims.unwrap_or_else(|| vec![0]);
+    let mut result = if flattened {
+        Some(input_ref.reshape_value(vec![original_shape.iter().product()])?)
+    } else {
+        None
+    };
+
+    for (shift, dim) in shifts.into_iter().zip(dims) {
+        let current = result.as_ref().unwrap_or(&input_ref);
+        let shape = current.source.value().dims();
+        let rank = i64::try_from(shape.len()).expect("tensor rank fits i64");
+        if !(-rank..rank).contains(&dim) {
+            return Err(PyIndexError::new_err(format!(
+                "roll dimension {dim} out of range for rank {rank}"
+            )));
+        }
+        let axis = usize::try_from(if dim < 0 { rank + dim } else { dim })
+            .expect("normalized roll dimension is non-negative");
+        let size = shape[axis];
+        if size == 0 {
+            continue;
+        }
+        let size_i64 = i64::try_from(size)
+            .map_err(|_| PyValueError::new_err("roll dimension exceeds integer limits"))?;
+        let shift = usize::try_from(shift.rem_euclid(size_i64))
+            .expect("normalized roll shift is non-negative");
+        if shift == 0 {
+            continue;
+        }
+
+        let split = size - shift;
+        let split_isize = isize::try_from(split)
+            .map_err(|_| PyValueError::new_err("roll dimension exceeds index limits"))?;
+        let size_isize = isize::try_from(size)
+            .map_err(|_| PyValueError::new_err("roll dimension exceeds index limits"))?;
+        let mut trailing_slices = vec![Slice::full(); shape.len()];
+        trailing_slices[axis] = Slice::new(split_isize, Some(size_isize), 1);
+        let mut trailing_shape = shape.clone();
+        trailing_shape[axis] = shift;
+        let trailing = current.slice_value(trailing_slices, trailing_shape)?;
+
+        let mut leading_slices = vec![Slice::full(); shape.len()];
+        leading_slices[axis] = Slice::new(0, Some(split_isize), 1);
+        let mut leading_shape = shape;
+        leading_shape[axis] = split;
+        let leading = current.slice_value(leading_slices, leading_shape)?;
+        result = Some(combine_tensors(
+            &[&trailing, &leading],
+            axis,
+            false,
+            "roll",
+        )?);
+    }
+
+    if flattened {
+        result = Some(
+            result
+                .as_ref()
+                .expect("flattened roll always owns an intermediate")
+                .reshape_value(original_shape)?,
+        );
+    }
+    drop(input_ref);
+    match result {
+        Some(result) => Py::new(py, result),
+        None => Ok(input),
+    }
 }
 
 fn split_sizes(spec: &Bound<'_, PyAny>, extent: usize) -> PyResult<Vec<usize>> {

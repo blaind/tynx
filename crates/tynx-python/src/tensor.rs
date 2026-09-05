@@ -19,7 +19,7 @@ use std::{
     thread::{self, ThreadId},
 };
 
-pub(crate) use combine::{cat_py, chunk_py, meshgrid_py, split_py, stack_py};
+pub(crate) use combine::{cat_py, chunk_py, meshgrid_py, roll_py, split_py, stack_py};
 use comparison::{Comparison, MaskOperation};
 pub(crate) use data::IntBounds;
 use data::TensorValue;
@@ -1066,37 +1066,7 @@ impl PyTensor {
         }
         let value = self.source.value();
         let spec = indexing::basic_index(key, &value.dims())?;
-        let capture_op = UnaryOp::Slice {
-            slices: spec.slices.clone(),
-            output_shape: spec.output_shape.clone(),
-        };
-        let tracking = is_grad_enabled();
-        let mut output = match value {
-            TensorValue::Float(_) => {
-                let output = self
-                    .operation_input(tracking, "Tensor.__getitem__")?
-                    .slice(&spec.slices)
-                    .reshape(spec.output_shape.clone())
-                    .map_err(to_python_error)?;
-                if tracking {
-                    Self::from_operation(output, &[self])
-                } else {
-                    Self::from_inner(output)
-                }
-            }
-            TensorValue::Int(value) => value
-                .slice(&spec.slices)
-                .reshape(spec.output_shape.clone())
-                .map(Self::from_int_inner)
-                .map_err(to_python_error)?,
-            TensorValue::Bool(value) => value
-                .slice(&spec.slices)
-                .reshape(spec.output_shape)
-                .map(|value| Self::from_value(TensorValue::Bool(value)))
-                .map_err(to_python_error)?,
-        };
-        output.trace = record_unary(self, capture_op)?;
-        Ok(output)
+        self.slice_value(spec.slices, spec.output_shape)
     }
 
     /// Split into ordinary tensor results along one dimension.
@@ -2002,6 +1972,41 @@ impl PyTensor {
 }
 
 impl PyTensor {
+    fn slice_value(&self, slices: Vec<Slice>, output_shape: Vec<usize>) -> PyResult<Self> {
+        let value = self.source.value();
+        let capture_op = UnaryOp::Slice {
+            slices: slices.clone(),
+            output_shape: output_shape.clone(),
+        };
+        let tracking = is_grad_enabled();
+        let mut output = match value {
+            TensorValue::Float(_) => {
+                let output = self
+                    .operation_input(tracking, "Tensor.__getitem__")?
+                    .slice(&slices)
+                    .reshape(output_shape.clone())
+                    .map_err(to_python_error)?;
+                if tracking {
+                    Self::from_operation(output, &[self])
+                } else {
+                    Self::from_inner(output)
+                }
+            }
+            TensorValue::Int(value) => value
+                .slice(&slices)
+                .reshape(output_shape.clone())
+                .map(Self::from_int_inner)
+                .map_err(to_python_error)?,
+            TensorValue::Bool(value) => value
+                .slice(&slices)
+                .reshape(output_shape)
+                .map(|value| Self::from_value(TensorValue::Bool(value)))
+                .map_err(to_python_error)?,
+        };
+        output.trace = record_unary(self, capture_op)?;
+        Ok(output)
+    }
+
     fn advanced_getitem(&self, index_tensor: &Self) -> PyResult<Self> {
         let input = self.source.value();
         let size = input.dims()[0];
