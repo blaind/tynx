@@ -383,8 +383,10 @@ fn load_tensor(path: &Path) -> Result<Reference, String> {
     match tensor.data_type {
         1 => Ok(Reference::F32(
             if tensor.float_data.is_empty() {
-                raw.chunks_exact(4)
-                    .map(|bytes| f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+                raw.as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|bytes| f32::from_le_bytes(*bytes))
                     .collect()
             } else {
                 tensor.float_data.clone()
@@ -393,8 +395,10 @@ fn load_tensor(path: &Path) -> Result<Reference, String> {
         )),
         11 => Ok(Reference::F64(
             if tensor.double_data.is_empty() {
-                raw.chunks_exact(8)
-                    .map(|bytes| f64::from_le_bytes(bytes.try_into().expect("eight-byte chunk")))
+                raw.as_chunks::<8>()
+                    .0
+                    .iter()
+                    .map(|bytes| f64::from_le_bytes(*bytes))
                     .collect()
             } else {
                 tensor.double_data.clone()
@@ -403,8 +407,10 @@ fn load_tensor(path: &Path) -> Result<Reference, String> {
         )),
         6 => Ok(Reference::I32(
             if tensor.int32_data.is_empty() {
-                raw.chunks_exact(4)
-                    .map(|bytes| i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+                raw.as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|bytes| i32::from_le_bytes(*bytes))
                     .collect()
             } else {
                 tensor.int32_data.clone()
@@ -413,8 +419,10 @@ fn load_tensor(path: &Path) -> Result<Reference, String> {
         )),
         7 => Ok(Reference::I64(
             if tensor.int64_data.is_empty() {
-                raw.chunks_exact(8)
-                    .map(|bytes| i64::from_le_bytes(bytes.try_into().expect("eight-byte chunk")))
+                raw.as_chunks::<8>()
+                    .0
+                    .iter()
+                    .map(|bytes| i64::from_le_bytes(*bytes))
                     .collect()
             } else {
                 tensor.int64_data.clone()
@@ -479,8 +487,10 @@ fn load_tensor(path: &Path) -> Result<Reference, String> {
         )),
         12 => Ok(Reference::U32(
             if tensor.uint64_data.is_empty() {
-                raw.chunks_exact(4)
-                    .map(|bytes| u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+                raw.as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|bytes| u32::from_le_bytes(*bytes))
                     .collect()
             } else {
                 tensor
@@ -493,8 +503,10 @@ fn load_tensor(path: &Path) -> Result<Reference, String> {
         )),
         13 => Ok(Reference::U64(
             if tensor.uint64_data.is_empty() {
-                raw.chunks_exact(8)
-                    .map(|bytes| u64::from_le_bytes(bytes.try_into().expect("eight-byte chunk")))
+                raw.as_chunks::<8>()
+                    .0
+                    .iter()
+                    .map(|bytes| u64::from_le_bytes(*bytes))
                     .collect()
             } else {
                 tensor.uint64_data.clone()
@@ -534,8 +546,10 @@ fn half_values<T>(raw: &[u8], typed: &[i32], from_bits: impl Fn(u16) -> T) -> Ve
     if raw.is_empty() {
         typed.iter().map(|&value| from_bits(value as u16)).collect()
     } else {
-        raw.chunks_exact(2)
-            .map(|bytes| from_bits(u16::from_le_bytes([bytes[0], bytes[1]])))
+        raw.as_chunks::<2>()
+            .0
+            .iter()
+            .map(|bytes| from_bits(u16::from_le_bytes(*bytes)))
             .collect()
     }
 }
