@@ -923,6 +923,11 @@ impl PyTensor {
         self.require_owner_thread()?;
         record_unsupported(self, reason)
     }
+
+    pub(crate) fn tracks_gradients(&self) -> PyResult<bool> {
+        self.require_owner_thread()?;
+        Ok(!self.targets.is_empty())
+    }
 }
 
 #[pymethods]

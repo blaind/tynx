@@ -1,139 +1,213 @@
-//! ONNX GridSample execution.
+//! Shared eager and ONNX GridSample execution.
 
 use burn::tensor::{
     Device, Slice, Tensor, TensorData,
     ops::{GridSampleOptions, GridSamplePaddingMode as BurnPaddingMode, InterpolateMode},
 };
 use onnx_ir::node::grid_sample::{
-    GridSampleMode, GridSampleNode, GridSamplePaddingMode as OnnxPaddingMode,
+    GridSampleMode as OnnxGridSampleMode, GridSampleNode, GridSamplePaddingMode as OnnxPaddingMode,
 };
 
 use super::{Env, resolve};
 use crate::{DynTensor, Result, TynxError, Value};
 
-pub(super) fn grid_sample(node: &GridSampleNode, env: &Env, device: &Device) -> Result<Vec<Value>> {
+/// Interpolation algorithm used by [`grid_sample_values`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GridSampleMode {
+    /// Bilinear interpolation for rank-4 input and trilinear interpolation for rank-5 input.
+    Bilinear,
+    /// Select the nearest input value, rounding halfway coordinates to even.
+    Nearest,
+    /// Bicubic interpolation for rank-4 input.
+    Bicubic,
+}
+
+/// Behavior for sampling coordinates outside the input extent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GridSamplePaddingMode {
+    /// Return zero outside the input extent.
+    Zeros,
+    /// Clamp coordinates to the closest border value.
+    Border,
+    /// Reflect coordinates at the input boundaries.
+    Reflection,
+}
+
+pub(super) fn execute_node(
+    node: &GridSampleNode,
+    env: &Env,
+    device: &Device,
+) -> Result<Vec<Value>> {
     let input = resolve::at(env, &node.name, &node.inputs, 0, device)?.into_tensor()?;
     let grid = resolve::at(env, &node.name, &node.inputs, 1, device)?.into_tensor()?;
+    let mode = match node.config.mode {
+        OnnxGridSampleMode::Bilinear => GridSampleMode::Bilinear,
+        OnnxGridSampleMode::Nearest => GridSampleMode::Nearest,
+        OnnxGridSampleMode::Bicubic => GridSampleMode::Bicubic,
+    };
+    let padding_mode = match node.config.padding_mode {
+        OnnxPaddingMode::Zeros => GridSamplePaddingMode::Zeros,
+        OnnxPaddingMode::Border => GridSamplePaddingMode::Border,
+        OnnxPaddingMode::Reflection => GridSamplePaddingMode::Reflection,
+    };
+
+    Ok(vec![Value::Tensor(grid_sample_values(
+        input,
+        grid,
+        mode,
+        padding_mode,
+        node.config.align_corners,
+    )?)])
+}
+
+/// Sample rank-4 images or rank-5 volumes at normalized grid coordinates.
+///
+/// Input layouts are `(N, C, H, W)` and `(N, C, D, H, W)`; grid layouts are
+/// `(N, H, W, 2)` and `(N, D, H, W, 3)` respectively.
+pub fn grid_sample_values(
+    input: DynTensor,
+    grid: DynTensor,
+    mode: GridSampleMode,
+    padding_mode: GridSamplePaddingMode,
+    align_corners: bool,
+) -> Result<DynTensor> {
+    let input_device = input.device();
+    let grid_device = grid.device();
+    if input_device.clone().inner() != grid_device.clone().inner() {
+        return Err(TynxError::TensorDeviceMismatch {
+            operation: "grid_sample".to_string(),
+            left: format!("{input_device:?}"),
+            right: format!("{grid_device:?}"),
+        });
+    }
     let grid = grid.cast(input.dtype());
 
     match (input, grid) {
-        (DynTensor::R4(input), DynTensor::R4(grid)) => grid_sample_2d(node, input, grid, device),
-        (DynTensor::R5(input), DynTensor::R5(grid)) => grid_sample_3d(node, input, grid, device),
+        (DynTensor::R4(input), DynTensor::R4(grid)) => grid_sample_2d(
+            input,
+            grid,
+            mode,
+            padding_mode,
+            align_corners,
+            &input_device,
+        ),
+        (DynTensor::R5(input), DynTensor::R5(grid)) => grid_sample_3d(
+            input,
+            grid,
+            mode,
+            padding_mode,
+            align_corners,
+            &input_device,
+        ),
         (input, grid) if input.rank() != grid.rank() => Err(TynxError::Shape(format!(
-            "GridSample input and grid ranks differ: {} and {}",
+            "grid_sample input and grid ranks differ: {} and {}",
             input.rank(),
             grid.rank()
         ))),
         (input, _) => Err(TynxError::UnsupportedOp(format!(
-            "GridSample rank {} (only 2D and 3D spatial sampling are supported)",
+            "grid_sample rank {} (only 2D and 3D spatial sampling are supported)",
             input.rank()
         ))),
     }
 }
 
 fn grid_sample_2d(
-    node: &GridSampleNode,
     input: Tensor<4>,
     grid: Tensor<4>,
+    mode: GridSampleMode,
+    padding_mode: GridSamplePaddingMode,
+    align_corners: bool,
     device: &Device,
-) -> Result<Vec<Value>> {
+) -> Result<DynTensor> {
     let input_dims = input.dims();
     let grid_dims = grid.dims();
     if grid_dims[3] != 2 {
         return Err(TynxError::Shape(format!(
-            "GridSample 2D grid last dimension must be 2, got {}",
+            "grid_sample 2D grid last dimension must be 2, got {}",
             grid_dims[3]
         )));
     }
     if input_dims[0] != grid_dims[0] {
         return Err(TynxError::Shape(format!(
-            "GridSample batch dimensions differ: {} and {}",
+            "grid_sample batch dimensions differ: {} and {}",
             input_dims[0], grid_dims[0]
         )));
     }
 
-    if matches!(node.config.mode, GridSampleMode::Bicubic) {
-        return Ok(vec![Value::Tensor(bicubic_grid_sample(
-            input,
-            grid,
-            &node.config.padding_mode,
-            node.config.align_corners,
-            device,
-        )?)]);
+    if input_dims[2] == 0 || input_dims[3] == 0 {
+        return Err(TynxError::Shape(
+            "grid_sample input spatial dimensions must be positive".into(),
+        ));
     }
 
-    let (mode, grid) = match node.config.mode {
+    if matches!(mode, GridSampleMode::Bicubic) {
+        return bicubic_grid_sample(input, grid, &padding_mode, align_corners, device);
+    }
+    let (mode, grid) = match mode {
         GridSampleMode::Bilinear => (InterpolateMode::Bilinear, grid),
         GridSampleMode::Nearest => (
             InterpolateMode::Nearest,
-            nearest_ties_to_even_grid(
-                grid,
-                input_dims[2],
-                input_dims[3],
-                node.config.align_corners,
-            ),
+            nearest_ties_to_even_grid(grid, input_dims[2], input_dims[3], align_corners),
         ),
         GridSampleMode::Bicubic => {
             return Err(TynxError::UnsupportedOp(
-                "GridSample bicubic dispatch invariant".to_string(),
+                "grid_sample bicubic dispatch invariant".to_string(),
             ));
         }
     };
-    let padding_mode = match node.config.padding_mode {
-        OnnxPaddingMode::Zeros => BurnPaddingMode::Zeros,
-        OnnxPaddingMode::Border => BurnPaddingMode::Border,
-        OnnxPaddingMode::Reflection => BurnPaddingMode::Reflection,
+    let padding_mode = match padding_mode {
+        GridSamplePaddingMode::Zeros => BurnPaddingMode::Zeros,
+        GridSamplePaddingMode::Border => BurnPaddingMode::Border,
+        GridSamplePaddingMode::Reflection => BurnPaddingMode::Reflection,
     };
     let options = GridSampleOptions::new(mode)
         .with_padding_mode(padding_mode)
-        .with_align_corners(node.config.align_corners);
+        .with_align_corners(align_corners);
 
-    Ok(vec![Value::Tensor(DynTensor::R4(
-        input.grid_sample_2d(grid, options),
-    ))])
+    Ok(DynTensor::R4(input.grid_sample_2d(grid, options)))
 }
 
 fn grid_sample_3d(
-    node: &GridSampleNode,
     input: Tensor<5>,
     grid: Tensor<5>,
+    mode: GridSampleMode,
+    padding_mode: GridSamplePaddingMode,
+    align_corners: bool,
     device: &Device,
-) -> Result<Vec<Value>> {
+) -> Result<DynTensor> {
     let input_dims = input.dims();
     let grid_dims = grid.dims();
     if grid_dims[4] != 3 {
         return Err(TynxError::Shape(format!(
-            "GridSample 3D grid last dimension must be 3, got {}",
+            "grid_sample 3D grid last dimension must be 3, got {}",
             grid_dims[4]
         )));
     }
     if input_dims[0] != grid_dims[0] {
         return Err(TynxError::Shape(format!(
-            "GridSample batch dimensions differ: {} and {}",
+            "grid_sample batch dimensions differ: {} and {}",
             input_dims[0], grid_dims[0]
         )));
     }
-    if matches!(node.config.mode, GridSampleMode::Bicubic) {
+    if input_dims[2] == 0 || input_dims[3] == 0 || input_dims[4] == 0 {
+        return Err(TynxError::Shape(
+            "grid_sample input spatial dimensions must be positive".into(),
+        ));
+    }
+    if matches!(mode, GridSampleMode::Bicubic) {
         return Err(TynxError::UnsupportedOp(
             "GridSample bicubic mode requires a rank-4 input".to_string(),
         ));
     }
 
-    Ok(vec![Value::Tensor(volumetric_grid_sample(
-        input,
-        grid,
-        &node.config.mode,
-        &node.config.padding_mode,
-        node.config.align_corners,
-        device,
-    )?)])
+    volumetric_grid_sample(input, grid, &mode, &padding_mode, align_corners, device)
 }
 
 fn volumetric_grid_sample(
     input: Tensor<5>,
     grid: Tensor<5>,
     mode: &GridSampleMode,
-    padding: &OnnxPaddingMode,
+    padding: &GridSamplePaddingMode,
     align_corners: bool,
     device: &Device,
 ) -> Result<DynTensor> {
@@ -217,7 +291,7 @@ fn sample_trilinear(
     channel: usize,
     coordinates: [f64; 3],
     dims: [usize; 4],
-    padding: &OnnxPaddingMode,
+    padding: &GridSamplePaddingMode,
     align_corners: bool,
 ) -> f64 {
     let [z, y, x] = coordinates;
@@ -275,7 +349,7 @@ fn sample_value_3d(
     y: i64,
     x: i64,
     dims: [usize; 4],
-    padding: &OnnxPaddingMode,
+    padding: &GridSamplePaddingMode,
     align_corners: bool,
 ) -> f64 {
     let [channels, depth, height, width] = dims;
@@ -294,7 +368,7 @@ fn sample_value_3d(
 fn bicubic_grid_sample(
     input: Tensor<4>,
     grid: Tensor<4>,
-    padding: &OnnxPaddingMode,
+    padding: &GridSamplePaddingMode,
     align_corners: bool,
     device: &Device,
 ) -> Result<DynTensor> {
@@ -371,7 +445,7 @@ fn sample_value(
     y: i64,
     x: i64,
     dims: [usize; 3],
-    padding: &OnnxPaddingMode,
+    padding: &GridSamplePaddingMode,
     align_corners: bool,
 ) -> f64 {
     let [channels, height, width] = dims;
@@ -387,13 +461,13 @@ fn sample_value(
 fn padded_index(
     index: i64,
     size: usize,
-    padding: &OnnxPaddingMode,
+    padding: &GridSamplePaddingMode,
     align_corners: bool,
 ) -> Option<usize> {
     match padding {
-        OnnxPaddingMode::Zeros => usize::try_from(index).ok().filter(|index| *index < size),
-        OnnxPaddingMode::Border => Some(index.clamp(0, size as i64 - 1) as usize),
-        OnnxPaddingMode::Reflection => {
+        GridSamplePaddingMode::Zeros => usize::try_from(index).ok().filter(|index| *index < size),
+        GridSamplePaddingMode::Border => Some(index.clamp(0, size as i64 - 1) as usize),
+        GridSamplePaddingMode::Reflection => {
             let (low, high) = if align_corners {
                 (0.0, size.saturating_sub(1) as f64)
             } else {
@@ -483,7 +557,9 @@ mod tests {
     use burn::tensor::TensorData;
     use onnx_ir::{
         DType,
-        node::grid_sample::{GridSampleConfig, GridSampleNodeBuilder},
+        node::grid_sample::{
+            GridSampleConfig, GridSampleMode as OnnxGridSampleMode, GridSampleNodeBuilder,
+        },
     };
 
     use super::*;
@@ -495,7 +571,7 @@ mod tests {
             .input_tensor("grid", 4, DType::F32)
             .output_tensor("y", 4, DType::F32)
             .config(GridSampleConfig {
-                mode: GridSampleMode::Bilinear,
+                mode: OnnxGridSampleMode::Bilinear,
                 padding_mode: OnnxPaddingMode::Border,
                 align_corners: true,
             })
@@ -521,7 +597,7 @@ mod tests {
             .unwrap(),
         );
 
-        let output = grid_sample(&node, &env, &device)
+        let output = execute_node(&node, &env, &device)
             .unwrap()
             .pop()
             .unwrap()
@@ -541,7 +617,7 @@ mod tests {
             .input_tensor("grid", 4, DType::F32)
             .output_tensor("y", 4, DType::F32)
             .config(GridSampleConfig {
-                mode: GridSampleMode::Nearest,
+                mode: OnnxGridSampleMode::Nearest,
                 align_corners: true,
                 ..Default::default()
             })
@@ -567,7 +643,7 @@ mod tests {
             .unwrap(),
         );
 
-        let output = grid_sample(&node, &env, &device)
+        let output = execute_node(&node, &env, &device)
             .unwrap()
             .pop()
             .unwrap()
@@ -587,7 +663,7 @@ mod tests {
             .input_tensor("grid", 4, DType::F32)
             .output_tensor("y", 4, DType::F32)
             .config(GridSampleConfig {
-                mode: GridSampleMode::Bicubic,
+                mode: OnnxGridSampleMode::Bicubic,
                 padding_mode: OnnxPaddingMode::Border,
                 align_corners: true,
             })
@@ -605,7 +681,7 @@ mod tests {
                 .unwrap(),
         );
 
-        let output = grid_sample(&node, &env, &device)
+        let output = execute_node(&node, &env, &device)
             .unwrap()
             .pop()
             .unwrap()
@@ -625,7 +701,7 @@ mod tests {
             .input_tensor("grid", 5, DType::F32)
             .output_tensor("y", 5, DType::F32)
             .config(GridSampleConfig {
-                mode: GridSampleMode::Bilinear,
+                mode: OnnxGridSampleMode::Bilinear,
                 padding_mode: OnnxPaddingMode::Border,
                 align_corners: true,
             })
@@ -654,7 +730,7 @@ mod tests {
             .unwrap(),
         );
 
-        let output = grid_sample(&node, &env, &device)
+        let output = execute_node(&node, &env, &device)
             .unwrap()
             .pop()
             .unwrap()
@@ -674,7 +750,7 @@ mod tests {
             .input_tensor("grid", 5, DType::F32)
             .output_tensor("y", 5, DType::F32)
             .config(GridSampleConfig {
-                mode: GridSampleMode::Nearest,
+                mode: OnnxGridSampleMode::Nearest,
                 align_corners: true,
                 ..Default::default()
             })
@@ -703,7 +779,7 @@ mod tests {
             .unwrap(),
         );
 
-        let output = grid_sample(&node, &env, &device)
+        let output = execute_node(&node, &env, &device)
             .unwrap()
             .pop()
             .unwrap()

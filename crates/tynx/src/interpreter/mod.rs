@@ -19,7 +19,7 @@ mod einsum;
 mod extrema;
 mod eye_like;
 pub(crate) mod gather;
-mod grid_sample;
+pub(crate) mod grid_sample;
 mod hardmax;
 mod imputer;
 mod integer;
@@ -169,7 +169,7 @@ pub fn execute(node: &Node, env: &Env, device: &Device) -> Result<Vec<Value>> {
         Node::GroupNormalization(node) => normalization::group_normalization(node, env, device),
         Node::Greater(node) => comparison::greater(node, env, device),
         Node::GreaterOrEqual(node) => comparison::greater_or_equal(node, env, device),
-        Node::GridSample(node) => grid_sample::grid_sample(node, env, device),
+        Node::GridSample(node) => grid_sample::execute_node(node, env, device),
         Node::Gru(node) => recurrent::gru(node, env, device),
         Node::HardSigmoid(node) => unary::hard_sigmoid(node, env, device),
         Node::Hardmax(node) => hardmax::hardmax(node, env, device),
