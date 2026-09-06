@@ -195,6 +195,10 @@ def arange(
     device: Device | None = None,
     requires_grad: bool = False,
 ) -> Tensor: ...
+def meshgrid(
+    *tensors: Tensor | tuple[Tensor, ...] | list[Tensor],
+    indexing: Literal["ij", "xy"] | None = None,
+) -> tuple[Tensor, ...]: ...
 def empty_like(
     input: Tensor,
     *,
