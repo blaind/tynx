@@ -206,6 +206,11 @@ def meshgrid(
     *tensors: Tensor | tuple[Tensor, ...] | list[Tensor],
     indexing: Literal["ij", "xy"] | None = None,
 ) -> tuple[Tensor, ...]: ...
+def roll(
+    input: Tensor,
+    shifts: int | tuple[int, ...] | list[int],
+    dims: int | tuple[int, ...] | list[int] | None = None,
+) -> Tensor: ...
 def empty_like(
     input: Tensor,
     *,
