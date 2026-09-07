@@ -18,6 +18,7 @@ from .modules import (
     Module,
     ReLU,
     Sequential,
+    SiLU,
 )
 
 __all__ = [
@@ -37,6 +38,7 @@ __all__ = [
     "Module",
     "ReLU",
     "Sequential",
+    "SiLU",
     "functional",
     "init",
     "state",

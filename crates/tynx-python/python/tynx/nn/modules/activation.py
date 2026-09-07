@@ -11,4 +11,11 @@ class ReLU(Module):
         return input.relu()
 
 
-__all__ = ["ReLU"]
+class SiLU(Module):
+    """Apply the sigmoid linear unit activation elementwise."""
+
+    def forward(self, input: Tensor) -> Tensor:
+        return input * input.sigmoid()
+
+
+__all__ = ["ReLU", "SiLU"]
